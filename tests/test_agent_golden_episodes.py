@@ -79,4 +79,36 @@ def test_random_opponent_robustness_not_an_exact_number():
         our_result, opponent_result = _run_episode("random", seed)
         assert our_result.status == "DONE"
         assert opponent_result.status == "DONE"
-        assert our_result.reward > 3000  # starting money - the wheat loop must still profit
+        assert our_result.reward > 3000  # starting money - the policy must still profit
+        # T3.6's ad-hoc 20-seed sweep found random_agent reliably bankrupts
+        # itself (margin never under +4886 across 20 runs) - beating it
+        # outright, not just being profitable, is the real bar.
+        assert our_result.reward > opponent_result.reward
+
+
+def test_beats_starter_and_random_across_additional_seeds():
+    """T3.6's ad-hoc baseline sanity check (tasks/plan.md) - not yet the
+    rigorous >=60% win rate SPEC.md's success criteria call for (that
+    needs Phase 4's paired-seed harness), but broader than the exact-match
+    golden table above: a handful of seeds distinct from _GOLDEN's,
+    checking "wins outright" rather than a specific number.
+
+    Full one-off 20-seed sweep (tasks/plan.md T3.6, recorded in that
+    commit, not re-run on every test pass - 40 real episodes take ~1
+    minute): 20/20 wins vs both starter and random, average margin +1720
+    vs starter (min +1336) and +5301 vs random (min +4886). Only 5 seeds
+    are re-checked here on every run to keep the suite fast.
+
+    Theoretical flakiness note: random_agent's unseeded RNG means this
+    could in principle fail on a given run even at a fixed seed, unlike
+    the exact-match golden table above - accepted given how large the
+    margin against it was across all 20 sampled seeds (never under
+    +4886), consistent with this test's own "ad-hoc, not final-harness
+    rigor" framing.
+    """
+    for seed in (11, 12, 13, 14, 15):
+        for opponent in ("starter", "random"):
+            our_result, opponent_result = _run_episode(opponent, seed)
+            assert our_result.status == "DONE", (opponent, seed)
+            assert opponent_result.status == "DONE", (opponent, seed)
+            assert our_result.reward > opponent_result.reward, (opponent, seed)

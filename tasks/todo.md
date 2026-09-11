@@ -40,8 +40,10 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 - [x] T3.4 — `params/policy.json` schema + loader (with safe fallback on missing/malformed file)
 - [x] T3.5 — Replace Phase 0's wheat loop with T3.1–T3.3 in `agent_main.py`
       (found+fixed a real bug during measurement: season-end crop-maturity check)
-- [ ] T3.6 — Ad-hoc baseline: ~20 seeds vs `starter`/`random` (pre-harness sanity check)
-- [ ] **Checkpoint 3** — Commit; note T3.6 numbers in the commit message.
+- [x] T3.6 — Ad-hoc baseline: ~20 seeds vs `starter`/`random` (pre-harness sanity check)
+      (measured: 20/20 wins vs both; avg margin +1719.7 vs starter [min +1336.0, max
+      +1848.0], +5301.4 vs random [min +4886.0, max +5726.0]; 0 crashes/timeouts)
+- [x] **Checkpoint 3** — Commit; note T3.6 numbers in the commit message (114/114 full suite).
 
 ## Phase 4 — `harness`
 
