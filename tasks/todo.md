@@ -25,7 +25,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 ## Phase 2 — `agent` hardening
 
 - [x] T2.1 — Time-budget guard (400ms ceiling, cached-plan fallback)
-- [ ] T2.2 — Fault-tolerance fuzzing (malformed observations never raise)
+- [x] T2.2 — Fault-tolerance fuzzing (malformed observations never raise)
 - [ ] T2.3 — Full-episode timing test (p100 < 400ms, cumulative overage < 10s target)
 - [ ] T2.4 — Golden-episode fixture (fixed seeds vs `starter`/`random`, recorded final money)
 - [ ] **Checkpoint 2** — `agent` matches `SPEC-agent.md` fully. Commit.
