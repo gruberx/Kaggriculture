@@ -48,7 +48,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 ## Phase 4 — `harness`
 
 - [x] T4.1 — `run_paired()` (+ pass-vs-pass tie test)
-- [ ] T4.2 — `run_block()` + Wilson interval (+ closed-form check, seat-invariance test)
+- [x] T4.2 — `run_block()` + Wilson interval (+ closed-form check, seat-invariance test)
 - [ ] T4.3 — `detect_shop_reroll()` (+ fixture test)
 - [ ] T4.4 — `params/seed_blocks.json` (`tuning_seeds` / `holdout_seeds`, disjoint, committed)
 - [ ] T4.5 — `tools/arena.py` CLI (`--opponent`, `--seeds`, `--jobs auto`, gated `--holdout`)

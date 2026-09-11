@@ -14,11 +14,17 @@ and the seed-blocks config land in later tasks.
 
 from __future__ import annotations
 
+import math
+import multiprocessing
+import os
 from dataclasses import dataclass
 
 from kaggle_environments import make
 
 _DEFAULT_EPISODE_STEPS = 720
+_WILSON_Z_95 = 1.96
+_JOBS_RESERVE = 2
+_CGROUP_CPU_MAX_PATH = "/sys/fs/cgroup/cpu.max"
 
 
 @dataclass(frozen=True)
@@ -73,4 +79,113 @@ def run_paired(agent_a, agent_b, seed: int, episode_steps: int = _DEFAULT_EPISOD
         a_total_money=a_total,
         b_total_money=b_total,
         episodes=(episode_1, episode_2),
+    )
+
+
+def _run_paired_star(args) -> PairedResult:
+    # multiprocessing.Pool.map needs a top-level, picklable callable - a
+    # closure or lambda over run_paired's args can't be pickled.
+    agent_a, agent_b, seed, episode_steps = args
+    return run_paired(agent_a, agent_b, seed, episode_steps)
+
+
+def _effective_cpu_count() -> int:
+    """The number of CPUs actually available to this process, not the
+    host's total core count.
+
+    os.cpu_count() reports the *host's* cores even inside a cgroup-limited
+    container - verified empirically in this project's own dev container:
+    os.cpu_count() reports 32 while /sys/fs/cgroup/cpu.max's quota/period
+    caps this process at far fewer effective cores. Spawning jobs sized to
+    the host's count would massively over-subscribe the real CPU budget.
+    Same class of bug as __file__ under kaggle_environments' loader
+    (SPEC-agent.md) and the params/ bundling path (SPEC-ops.md): a value
+    that's only correct outside the sandbox it actually runs in.
+
+    Falls back to os.cpu_count() when cgroup v2's cpu.max isn't present
+    (e.g. cgroup v1, non-Linux, or an unlimited "max" quota) - there is no
+    better signal available in that case.
+    """
+    try:
+        with open(_CGROUP_CPU_MAX_PATH) as f:
+            quota_str, period_str = f.read().split()
+        if quota_str == "max":
+            raise ValueError("no quota set")
+        quota, period = int(quota_str), int(period_str)
+        return max(1, quota // period)
+    except (OSError, ValueError):
+        return os.cpu_count() or 1
+
+
+def _default_jobs() -> int:
+    """SPEC-harness.md: 'jobs=auto defaulting to os.cpu_count() - 2... never
+    hardcode a job count or assume a specific core count.' Corrected here
+    to read the effective (cgroup-aware) CPU count rather than
+    os.cpu_count() directly - see _effective_cpu_count()'s docstring."""
+    return max(1, _effective_cpu_count() - _JOBS_RESERVE)
+
+
+@dataclass(frozen=True)
+class BlockResult:
+    """Aggregate outcome of run_paired across a block of seeds, per
+    SPEC-harness.md requirement 2 (a held-out seed block needs a real
+    interval, not just a point estimate, to be trusted)."""
+
+    n: int
+    wins_a: int
+    wins_b: int
+    ties: int
+    win_rate_a: float
+    wilson_interval_a: tuple[float, float]
+    paired_results: tuple[PairedResult, ...]
+
+
+def wilson_interval(k: int, n: int, z: float = _WILSON_Z_95) -> tuple[float, float]:
+    """Wilson score interval for k successes out of n trials. Closed-form
+    (Wilson 1927) - see SPEC-harness.md Testing: checked against an
+    independently-derived closed-form example, not just "runs without
+    error"."""
+    phat = k / n
+    z2 = z * z
+    denom = 1 + z2 / n
+    center = phat + z2 / (2 * n)
+    adj = z * math.sqrt(phat * (1 - phat) / n + z2 / (4 * n * n))
+    return ((center - adj) / denom, (center + adj) / denom)
+
+
+def run_block(
+    agent_a,
+    agent_b,
+    seeds: list[int],
+    jobs: int | None = None,
+    episode_steps: int = _DEFAULT_EPISODE_STEPS,
+) -> BlockResult:
+    """run_paired for every seed, parallelized across `jobs` worker
+    processes (default: _default_jobs(), never a hardcoded core count -
+    see SPEC-harness.md "Performance"). Returns win/loss/tie counts and a
+    Wilson score interval on agent_a's win rate."""
+    if jobs is None:
+        jobs = _default_jobs()
+
+    tasks = [(agent_a, agent_b, seed, episode_steps) for seed in seeds]
+    if jobs == 1:
+        results = [_run_paired_star(t) for t in tasks]
+    else:
+        with multiprocessing.Pool(processes=jobs) as pool:
+            results = pool.map(_run_paired_star, tasks)
+
+    n = len(results)
+    wins_a = sum(1 for r in results if r.winner == "a")
+    wins_b = sum(1 for r in results if r.winner == "b")
+    ties = n - wins_a - wins_b
+    win_rate_a = wins_a / n
+
+    return BlockResult(
+        n=n,
+        wins_a=wins_a,
+        wins_b=wins_b,
+        ties=ties,
+        win_rate_a=win_rate_a,
+        wilson_interval_a=wilson_interval(wins_a, n),
+        paired_results=tuple(results),
     )

@@ -45,9 +45,10 @@ def run_paired(agent_a, agent_b, seed: int, episode_steps: int = 720) -> PairedR
 
 def run_block(agent_a, agent_b, seeds: list[int], jobs: int | None = None) -> BlockResult:
     """run_paired for every seed, parallelized across `jobs` worker processes
-    (default: os.cpu_count() - reserve, see SPEC.md Environment — never a
-    hardcoded core count). Returns win/loss/tie counts and a Wilson score
-    interval on the win rate, not just a point estimate."""
+    (default: the effective cgroup-aware CPU count minus a small reserve,
+    never a hardcoded core count — see "Performance" below for why
+    os.cpu_count() alone is wrong here). Returns win/loss/tie counts and a
+    Wilson score interval on the win rate, not just a point estimate."""
 
 def detect_shop_reroll(replay_path: str, live_town_log: list[str]) -> bool:
     """Compare the recorded episode's town shop unlock sequence against the
@@ -64,9 +65,19 @@ that "which seeds are held out" is itself version-controlled, not tribal knowled
 Stock `kaggle_environments.make("kaggriculture").run(...)` measured at ~1.3–1.4s per 720-turn
 episode on this machine (see `SPEC.md` "Why `fastsim` isn't built"). `run_block` parallelizes
 across processes (the environment interpreter is not thread-safe / releases no GIL benefit worth
-counting on); with `jobs=auto` defaulting to `os.cpu_count() - 2`, a 100-seed paired block (200
-episodes) costs well under 2 minutes at 4 CPUs and proportionally less once the container's CPU
-quota is raised. Never hardcode a job count or assume a specific core count — read it at runtime.
+counting on); with `jobs=auto` defaulting to the effective CPU count minus a reserve of 2, a
+100-seed paired block (200 episodes) costs well under 2 minutes at 4 CPUs and proportionally less
+once the container's CPU quota is raised. Never hardcode a job count or assume a specific core
+count — read it at runtime.
+
+Found while implementing T4.1/T4.2, not anticipated in the original spec text: `os.cpu_count()`
+reports the *host's* total cores, not this container's actual cgroup CPU quota — verified
+empirically (`os.cpu_count()` returns 32 here while `/sys/fs/cgroup/cpu.max`'s quota/period caps
+this process at far fewer effective cores). `run_block`'s default therefore reads
+`/sys/fs/cgroup/cpu.max` directly (falling back to `os.cpu_count()` only when that file is absent
+or reports `"max"`, e.g. cgroup v1 or an unlimited quota) rather than trusting `os.cpu_count()`
+alone — the same class of "correct outside the sandbox, wrong inside it" bug as `__file__` under
+`kaggle_environments`' loader (`SPEC-agent.md`) and the `params/` bundling path (`SPEC-ops.md`).
 
 ## Testing
 
