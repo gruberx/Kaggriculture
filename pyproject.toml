@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kagg"
+version = "0.0.1"
+description = "Kaggriculture agent (gamelib/agent/policy) - see SPEC.md"
+requires-python = ">=3.12"
+
+# No runtime dependencies here on purpose: gamelib/agent/policy are
+# stdlib-only (SPEC.md "Code style" / Official Rules SS2.11 - see
+# "Rule compliance"). Dev tooling (harness/tuning/ops) depends on
+# kaggle_environments etc. via requirements-dev.txt instead, not via
+# this package's own dependency list.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

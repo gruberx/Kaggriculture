@@ -5,7 +5,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 
 ## Phase 0 — Walking skeleton
 
-- [ ] T0.1 — `gamelib/constants.py` + `gamelib/market.py`: `price()`, `shape()`
+- [x] T0.1 — `gamelib/constants.py` + `gamelib/market.py`: `price()`, `shape()`
 - [ ] T0.2 — `agent_main.py` skeleton: `agent(obs)` with top-level try/except → safe default
 - [ ] T0.3 — Wheat-loop policy wired into `agent_main.py`, using `gamelib.market.price()`
 - [ ] **Checkpoint 0** — 720-turn local episode vs `"pass"` completes, our side ends with >$3000. Commit.
