@@ -1,7 +1,7 @@
 # SPEC: `ops`
 
-Part of the [capability map](SPEC.md#capability-map). Depends on: `agent` (packages its output).
-Dev-only, does not ship.
+Part of the [capability map](SPEC.md#capability-map). Depends on: `agent` (packages its output),
+`diskguard` (guards every download below). Dev-only, does not ship.
 
 ## Objective
 
@@ -55,13 +55,16 @@ build_submission.py  ->  submit_to_competition (MCP) or `kaggle competitions sub
                       ->  poll get_competition_submission / `kaggle competitions submissions`
                       ->  once scored episodes exist: list_submission_episodes
                       ->  get_episode_replay + get_episode_agent_logs for any loss worth
-                          understanding
+                          understanding, saved to data/replays/ through
+                          diskguard.ensure_budget() like any other replay pull
 ```
 
 Every submission is logged (message, timestamp, git commit of `policy` at build time, arena
 win-rate that justified it) to `data/arena/submissions.jsonl` (outside the repo — see `SPEC.md`)
 before the actual API call, so "why did we submit this" is answerable later even if the day's
-5-submission budget runs out from an unrelated mistake.
+5-submission budget runs out from an unrelated mistake. This particular write is exempt from the
+`ensure_budget()` call — it's a small append-only log, kilobytes over the whole competition, not
+one of the disk-hungry operations `diskguard` exists for (see `SPEC-diskguard.md`).
 
 **5/day limit, only the latest 2 scored** (`kaggriculture` competition metadata:
 `maxDailySubmissions: 5`, `numScoredSubmissions: 2`) — per `SPEC.md` Boundaries, spending a
@@ -71,11 +74,14 @@ submission is an ask-first action, not something automated tooling triggers on i
 
 - **Daily top-episodes dataset** — Kaggle publishes up to 20 GB/day of the highest-rated episodes'
   replays: [`kaggle/kaggriculture-episodes-index`](https://www.kaggle.com/datasets/kaggle/kaggriculture-episodes-index).
-  Pulled via `download_competition_data_file`/CLI into `data/episodes/` (outside the repo). Used
-  for: (a) refreshing `tuning`'s opponent panel with genuinely current strong play rather than a
-  frozen baseline, (b) sanity-checking `gamelib`'s forecasts against what top agents actually
-  achieve. Given disk is finite even at 1.1 TB free and this accumulates for ~19 more days, pull
-  selectively (e.g. top-N by rating, not the full daily drop) rather than mirroring everything.
+  Pulled via `download_competition_data_file`/CLI into `data/episodes/` (outside the repo), calling
+  `diskguard.ensure_budget(need_bytes=<listed size>)` first — see `SPEC-diskguard.md` for the
+  2.5 TB project-wide cap and its oldest-first eviction policy. Used for: (a) refreshing `tuning`'s
+  opponent panel with genuinely current strong play rather than a frozen baseline, (b)
+  sanity-checking `gamelib`'s forecasts against what top agents actually achieve. Even with
+  `diskguard` enforcing the cap, pull selectively (e.g. top-N by rating, not the full daily drop)
+  rather than mirroring everything — the guard is a backstop against exceeding the budget, not a
+  reason to stop being deliberate about what's worth keeping.
 - **Public strong baseline** — the `yhay81/shop-router-0909` notebook, referenced on the forum as
   a benchmark opponent; add it to `tuning`'s opponent panel once downloaded.
 - **Forum monitoring** — `list_competition_topics`/`list_topic_messages` via MCP. The forum has

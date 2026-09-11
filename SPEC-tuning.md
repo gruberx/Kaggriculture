@@ -1,7 +1,8 @@
 # SPEC: `tuning`
 
-Part of the [capability map](SPEC.md#capability-map). Depends on: `harness`, `policy`. Dev-only,
-does not ship (its *output* — a `params/*.json` file — ships as part of `policy`'s data).
+Part of the [capability map](SPEC.md#capability-map). Depends on: `harness`, `policy`, `diskguard`
+(guards the run-history write below). Dev-only, does not ship (its *output* — a `params/*.json`
+file — ships as part of `policy`'s data).
 
 ## Objective
 
@@ -53,6 +54,9 @@ Before any `params/policy.json` update is accepted:
 4. Record the accepted run's full configuration (seed blocks used, opponent panel, resulting win
    rates, git commit of `policy` at the time) in `data/arena/` (outside the repo — this is
    Competition-Data-adjacent tuning history, not source code) so a regression can be traced later.
+   Call `diskguard.ensure_budget()` first — this write is small individually but accumulates over
+   the full tuning run and is itself `PROTECTED` from eviction (see `SPEC-diskguard.md`), so it's
+   worth catching a runaway budget here rather than only at the larger download sites in `ops`.
 
 ## Evaluation context (Official Rules / Evaluation page)
 

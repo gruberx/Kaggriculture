@@ -1,6 +1,7 @@
 # SPEC: `harness`
 
-Part of the [capability map](SPEC.md#capability-map). Depends on: nothing. Dev-only, does not ship.
+Part of the [capability map](SPEC.md#capability-map). Depends on: `diskguard` (guards the
+held-out-invocation log below). Dev-only, does not ship.
 
 ## Objective
 
@@ -83,4 +84,5 @@ quota is raised. Never hardcode a job count or assume a specific core count — 
 - Dev-only: may depend on `kaggle_environments`, `multiprocessing`, `pytest`.
 - Never let a `tuning` decision read the held-out block's result before the decision is made —
   enforce this with a CLI flag (`--holdout`) that is off by default and requires an explicit,
-  logged invocation, so "did we peek" is answerable from `data/arena/` logs later.
+  logged invocation (via `diskguard.ensure_budget()` before the write, like every `data/arena/`
+  write — see `SPEC-diskguard.md`), so "did we peek" is answerable from `data/arena/` logs later.

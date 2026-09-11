@@ -49,14 +49,15 @@ the outcomes. This needs no GPU and no RL loop — see `SPEC-tuning.md`.
 
 | id | Responsibility | Depends on | Ships in submission |
 |---|---|---|---|
-| `harness` | Run episodes against `kaggle_environments` directly (no rewritten simulator — see below), the paired-seed evaluation protocol, seed blocks incl. a held-out block, town-shop-reroll detection, Wilson-interval win rates, per-turn timing profiler | — | no |
+| `harness` | Run episodes against `kaggle_environments` directly (no rewritten simulator — see below), the paired-seed evaluation protocol, seed blocks incl. a held-out block, town-shop-reroll detection, Wilson-interval win rates, per-turn timing profiler | `diskguard` | no |
 | `gamelib` | Pure economic model used by the agent at runtime: price curve, harvest/schedule forecasting, tile-value estimation, distances, shed accounting. Verified by property tests against the real `kaggriculture.py` | — | **yes** |
 | `agent` | Submission contract: `main.py` exposing `agent(obs)`, observation parsing, action assembly/validation, a time-budget guard, a blanket `try/except` fallback | `gamelib` | **yes** |
 | `policy` | Decision logic: daily strategic layer (portfolio, land, hiring), per-turn task layer (task list + greedy unit assignment), per-turn market layer (sell thresholds, ≤10 orders/turn) | `agent` | **yes** |
-| `tuning` | Parameter vector, coordinate-ascent search, opponent league, regression gate; stage 2 is search-generated value targets | `harness`, `policy` | no |
-| `ops` | Kaggle MCP + CLI: bundle `main.py` into `submission.tar.gz`, submit, poll status, pull episodes/replays/logs, pull the daily top-episodes dataset, monitor the competition forum | `agent` | no |
+| `tuning` | Parameter vector, coordinate-ascent search, opponent league, regression gate; stage 2 is search-generated value targets | `harness`, `policy`, `diskguard` | no |
+| `ops` | Kaggle MCP + CLI: bundle `main.py` into `submission.tar.gz`, submit, poll status, pull episodes/replays/logs, pull the daily top-episodes dataset, monitor the competition forum | `agent`, `diskguard` | no |
+| `diskguard` | Application-level disk budget (2.5 TB cap on this project's total footprint, since the shared volume offers no filesystem quota inside this container): usage accounting, oldest-first eviction of re-downloadable data, hard refusal rather than silent overrun — see `SPEC-diskguard.md` | — | no |
 
-Build order: `harness` ∥ `gamelib` → `agent` → `policy` → (`tuning` ∥ `ops`).
+Build order: `harness` ∥ `gamelib` ∥ `diskguard` → `agent` → `policy` → (`tuning` ∥ `ops`).
 
 **Note on `fastsim`:** the capability map originally reserved an id for a from-scratch rewrite of
 the rules, in case the stock `kaggle_environments` episode was too slow to drive a coordinate-ascent
@@ -68,19 +69,28 @@ directly. Revisit only if profiling during `tuning` shows the arena is actually 
 
 **Boundary that's easy to violate:** `gamelib`, `agent`, and `policy` ship inside the submission
 bundle, so they depend on the standard library only — never `kaggle_environments`, never a network
-call, never a file outside the bundle (see "Rule compliance" below). `harness`, `tuning`, and `ops`
-are dev-only tooling and are free to depend on `kaggle_environments`, `kaggle`, `pytest`, etc.
+call, never a file outside the bundle (see "Rule compliance" below). `harness`, `tuning`, `ops`, and
+`diskguard` are dev-only tooling and are free to depend on `kaggle_environments`, `kaggle`,
+`pytest`, etc.
 
 ## Environment
 
-- Container: 4 CPUs / 16 GB today; a `docker-compose.yml` change to 12 CPUs / 32 GB is pending
-  (applied from the host, not by us) — code must not assume either number, read core count at
-  runtime for parallelism (`os.cpu_count()`), never hardcode `4` or `12`.
+- Container: 12 CPUs / 32 GB (raised from an initial 4 CPUs / 16 GB via `docker-compose.yml`,
+  applied from the host) — code must not hardcode either number, read core count at runtime for
+  parallelism (`os.cpu_count()`).
 - No GPU on the host. This directly informs "Why not RL" above.
 - Python 3.12, `venv` at `/root/kaggriculture/.venv` (outside this repo — see "Project structure").
 - Competition Data (downloaded replays, the daily top-episodes dataset, arena logs) lives at
   `/root/kaggriculture/data/`, outside this repo, path configurable via `KAGG_DATA_DIR` (default
   `../data` relative to the repo root) — see "Rule compliance".
+- **Disk budget: 2.5 TB cap on this project's total footprint.** The underlying volume is shared
+  across other, unrelated projects on the same host and offers no filesystem-level quota mechanism
+  reachable from inside this container (checked: `ext4` without `prjquota`, no `xfs_quota`/
+  `setquota`/`repquota`, no loop devices). Enforced instead by `diskguard` (`tools/diskguard.py`,
+  see `SPEC-diskguard.md`): every write in `ops`/`harness`/`tuning` that could grow disk usage
+  calls `ensure_budget()` first, which evicts the oldest downloaded replays/episodes (always
+  re-fetchable from Kaggle) before ever refusing a write outright — it never touches `data/arena/`
+  (tuning history) or this repo.
 
 ## Commands
 
@@ -175,12 +185,17 @@ kaggle competitions submit kaggriculture -f build/submission.tar.gz -m "<message
    `requests` imports, no `open()` calls outside the bundle directory. Enforces Official Rules
    §2.11 (no ingress/egress) mechanically rather than by promise. Runs as part of
    `tools/build_submission.py`, not just as a test.
+7. **Disk budget** — `tests/test_diskguard.py` (implemented, 7 tests): eviction order, the
+   never-touch-`data/arena`-or-`repo` invariant, and the hard-refuse-rather-than-overrun behavior
+   of `ensure_budget()`. See `SPEC-diskguard.md`.
 
 ## Boundaries
 
 **Always:**
 - Run the arena regression (layer 3 above) before every submission, not just before merging code.
 - Keep `gamelib`/`agent`/`policy` to the standard library only.
+- Call `diskguard.ensure_budget()` before any write in `ops`/`harness`/`tuning` that could grow
+  disk usage (dataset/replay downloads, arena logs) — see `SPEC-diskguard.md`.
 - `agent()` never raises and never touches the network or a path outside its own bundle directory
   during an episode (Official Rules §2.11 — see "Rule compliance").
 - Comments and identifiers in English, regardless of conversation language.
