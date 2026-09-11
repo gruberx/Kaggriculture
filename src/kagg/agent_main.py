@@ -40,7 +40,15 @@ from __future__ import annotations
 import copy
 import time
 
-from kagg.policy.wheat_loop import wheat_loop_action
+from kagg.policy.decide import decide
+from kagg.policy.params import load_params
+
+# Loaded once here, at module top level, not inside _decide() - both
+# because it must happen while the loader's auto-appended sys.path entry
+# is still active (see this module's own point 2 above) and because
+# SPEC-policy.md requires it: params/policy.json is "loaded once at agent
+# construction, not per turn."
+_PARAMS = load_params()
 
 # Returned on any failure. A module-level dict would be a shared mutable
 # object every caller could accidentally corrupt - see _safe_default().
@@ -67,13 +75,12 @@ def _safe_default() -> dict:
 
 
 def _decide(obs: dict) -> dict:
-    """Decision logic - currently the Phase 0 single-crop wheat loop
-    (tasks/plan.md T0.3). Phase 3 replaces this with the full three-layer
-    policy (SPEC-policy.md). Kept as its own function so agent()'s
+    """Decision logic - the full three-layer policy (SPEC-policy.md),
+    wired in at T3.5. Kept as its own function so agent()'s
     fault-tolerance wrapper never has to change shape as the real logic
     grows.
     """
-    return wheat_loop_action(obs)
+    return decide(obs, _PARAMS)
 
 
 def agent(obs: dict) -> dict:

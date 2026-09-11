@@ -38,7 +38,8 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 - [x] T3.2 — Task layer (prioritized list + greedy assignment via `tile_distance`)
 - [x] T3.3 — Market layer (sell thresholds, drip-selling, ≤10 orders/turn, `BUY_PRODUCT` restricted)
 - [x] T3.4 — `params/policy.json` schema + loader (with safe fallback on missing/malformed file)
-- [ ] T3.5 — Replace Phase 0's wheat loop with T3.1–T3.3 in `agent_main.py`
+- [x] T3.5 — Replace Phase 0's wheat loop with T3.1–T3.3 in `agent_main.py`
+      (found+fixed a real bug during measurement: season-end crop-maturity check)
 - [ ] T3.6 — Ad-hoc baseline: ~20 seeds vs `starter`/`random` (pre-harness sanity check)
 - [ ] **Checkpoint 3** — Commit; note T3.6 numbers in the commit message.
 

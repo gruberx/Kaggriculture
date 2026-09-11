@@ -8,7 +8,7 @@ pathological cases, not a budget to spend routinely."
 """
 
 from kagg import agent_main
-from kagg.policy.wheat_loop import wheat_loop_action
+from kagg.policy.decide import decide
 
 _OBS = {
     "player": 0,
@@ -32,13 +32,13 @@ _OBS = {
 
 def test_fast_decisions_pass_through_unaffected(monkeypatch):
     monkeypatch.setattr(agent_main, "_last_good_action", agent_main._safe_default())
-    assert agent_main.agent(_OBS) == wheat_loop_action(_OBS)
+    assert agent_main.agent(_OBS) == decide(_OBS, agent_main._PARAMS)
 
 
 def test_fast_decision_updates_the_cache(monkeypatch):
     monkeypatch.setattr(agent_main, "_last_good_action", agent_main._safe_default())
     agent_main.agent(_OBS)
-    assert agent_main._last_good_action == wheat_loop_action(_OBS)
+    assert agent_main._last_good_action == decide(_OBS, agent_main._PARAMS)
 
 
 def test_slow_decision_falls_back_to_the_cached_action(monkeypatch):
