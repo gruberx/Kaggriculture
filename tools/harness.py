@@ -27,6 +27,17 @@ _WILSON_Z_95 = 1.96
 _JOBS_RESERVE = 2
 _CGROUP_CPU_MAX_PATH = "/sys/fs/cgroup/cpu.max"
 
+# Repo-root params/, not src/kagg/params/ - the two are deliberately
+# distinct (see SPEC.md "Project structure"): src/kagg/params/ ships
+# inside the submission bundle (agent-tuning parameters the agent reads
+# at runtime); this repo-root params/ is dev-only config that must never
+# ship (which seeds are tuning vs. held-out has nothing to do with agent
+# behavior) - resolved relative to this file, not the caller's cwd, same
+# reasoning as kagg.policy.params.load_params.
+_DEFAULT_SEED_BLOCKS_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "params", "seed_blocks.json"
+)
+
 
 @dataclass(frozen=True)
 class PairedResult:
@@ -189,6 +200,30 @@ def run_block(
         win_rate_a=win_rate_a,
         wilson_interval_a=wilson_interval(wins_a, n),
         paired_results=tuple(results),
+    )
+
+
+@dataclass(frozen=True)
+class SeedBlocks:
+    """SPEC-harness.md requirement 2: a held-out seed block no tuning
+    decision may ever look at, disjoint from the working (tuning) block
+    it's compared against."""
+
+    tuning_seeds: tuple[int, ...]
+    holdout_seeds: tuple[int, ...]
+
+
+def load_seed_blocks(path: str | None = None) -> SeedBlocks:
+    """Load params/seed_blocks.json (checked into the repo, not
+    gitignored - SPEC-harness.md: reproducibility needs the exact seeds on
+    record, not tribal knowledge)."""
+    if path is None:
+        path = _DEFAULT_SEED_BLOCKS_PATH
+    with open(path) as f:
+        data = json.load(f)
+    return SeedBlocks(
+        tuning_seeds=tuple(data["tuning_seeds"]),
+        holdout_seeds=tuple(data["holdout_seeds"]),
     )
 
 

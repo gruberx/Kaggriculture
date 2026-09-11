@@ -132,6 +132,11 @@ the intended invocations — filled in for real once each script exists:
     ├── SPEC.md                this file
     ├── SPEC-{harness,gamelib,agent,policy,tuning,ops}.md
     ├── requirements-dev.txt
+    ├── params/                dev-only config, never ships (e.g. seed_blocks.json's
+    │                          tuning/holdout seed lists) — distinct from src/kagg/params/
+    │                          below, which does ship; conflating the two would risk a
+    │                          future build_submission.py accidentally bundling dev
+    │                          config into the submission
     ├── src/kagg/
     │   ├── gamelib/           ships in submission
     │   ├── policy/            ships in submission
