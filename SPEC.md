@@ -110,8 +110,9 @@ the intended invocations — filled in for real once each script exists:
 # Build the submission bundle (main.py + gamelib + policy + params -> tar.gz)
 /root/kaggriculture/.venv/bin/python repo/tools/build_submission.py --out build/submission.tar.gz
 
-# Submit (5/day limit — see Boundaries): agent-mediated via the kaggle-mcp MCP
-# server's start_competition_submission_upload -> submit_to_competition, not a
+# Submit (5/day limit, resets 00:00 UTC calendar day — see Boundaries and
+# SPEC-ops.md): agent-mediated via the kaggle-mcp MCP server's
+# start_competition_submission_upload -> submit_to_competition, not a
 # standalone CLI invocation — see SPEC-ops.md "Submission workflow".
 ```
 

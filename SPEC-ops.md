@@ -87,7 +87,11 @@ one of the disk-hungry operations `diskguard` exists for (see `SPEC-diskguard.md
 
 **5/day limit, only the latest 2 scored** (`kaggriculture` competition metadata:
 `maxDailySubmissions: 5`, `numScoredSubmissions: 2`) — per `SPEC.md` Boundaries, spending a
-submission is an ask-first action, not something automated tooling triggers on its own.
+submission is an ask-first action, not something automated tooling triggers on its own. The limit
+resets at **00:00 UTC on the calendar day**, not a rolling 24h window from the last submission —
+confirmed by matching the Kaggle UI's "resets in N hours" countdown against wall-clock time to
+the next UTC midnight. Relevant if timing a submission near the boundary: up to 10 submissions are
+available across a short window straddling midnight UTC, not just 5 per any 24h period.
 
 ## Competition intelligence
 
