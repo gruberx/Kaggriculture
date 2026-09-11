@@ -1,10 +1,13 @@
-# Dev-only dependencies: harness, tuning, ops, and the test suite's property-test
+# Dev-only dependencies: harness, tuning, and the test suite's property-test
 # oracle (kaggle_environments) all need these. gamelib/agent/policy — the code
 # that ships in the submission bundle — must NOT depend on anything here; see
 # SPEC.md "Code style" and Official Rules §2.11 in "Rule compliance".
 #
+# No `kaggle` CLI/API package here: ops talks to Kaggle exclusively through the
+# kaggle-mcp MCP server, which needs no separate Python dependency or API token
+# in this project — see SPEC-ops.md "Objective" for why that's sufficient.
+#
 # Installed into /root/kaggriculture/.venv (one level above this repo, see
 # SPEC.md "Project structure") - not into a venv inside the repo itself.
 kaggle-environments==1.32.7
-kaggle==2.2.4
 pytest==9.1.1

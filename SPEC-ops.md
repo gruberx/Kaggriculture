@@ -7,27 +7,40 @@ Part of the [capability map](SPEC.md#capability-map). Depends on: `agent` (packa
 
 Everything needed to get a built agent onto Kaggle and get information back: bundling, submitting,
 polling, pulling replays/logs for post-mortem, pulling competition intelligence (daily top-episode
-dataset, forum). Two tools cover this, both authenticated against the same Kaggle account/token:
-the official **Kaggle MCP server** (`https://www.kaggle.com/mcp`, streamable HTTP, verified
-reachable — `initialize` and `tools/list` both responded during spec research) for interactive work
-in this session, and the **`kaggle` CLI** for batch/scripted operations that don't need a live
-Claude session (e.g. a nightly cron-style pull of the top-episodes dataset).
+dataset, forum). All of it goes through the official **Kaggle MCP server**
+(`https://www.kaggle.com/mcp`, connected in this project as `kaggle-mcp`, streamable HTTP,
+authenticated as the project owner's Kaggle account — verified: `get_competition("kaggriculture")`
+returns the account-specific field `user_has_entered: true`, not just public metadata).
 
-## Kaggle access setup (blocking, user-side)
+**No separate `kaggle` CLI/API token is needed.** An earlier revision of this spec assumed one
+would be, for "batch/scripted operations" — that assumption didn't survive checking the actual
+tool surface. Every operation this module needs has an MCP equivalent, verified directly rather
+than inferred from the tool list:
+- `search_competitions(group="Entered")` — confirmed to return kaggriculture with
+  `user_has_entered: true`, the exact equivalent of `kaggle competitions list --group entered`.
+- `start_competition_submission_upload` + `submit_to_competition` — the full submit flow (see
+  "Submission workflow" below), equivalent to `kaggle competitions submit`.
+- `get_competition_submission`, `list_submission_episodes`, `get_episode_replay`,
+  `get_episode_agent_logs`, `get_competition_leaderboard` — equivalents of
+  `kaggle competitions submissions|episodes|replay|logs|leaderboard`.
+- `download_competition_data_file`/`download_competition_data_files` and `download_dataset` (for
+  the daily top-episodes dataset, which is a Kaggle *Dataset*, not a competition data file) —
+  equivalents of `kaggle competitions download`/`kaggle datasets download`.
+
+The one real difference is *who* can invoke a call, not *what* can be done: an MCP tool is
+invoked by an agent (this Claude Code session) acting on the user's behalf, not by a standalone
+script running unattended with no agent in the loop. That distinction doesn't cost us anything
+here — every operation this module performs (submitting, downloading enough data to matter) is
+already specified as an "ask first" action in `SPEC.md` Boundaries, i.e. deliberately
+agent-mediated rather than run by an unattended cron job. If a genuine need for headless,
+agent-free scripting ever appears (none identified so far), that is the concrete trigger for
+revisiting a CLI token — not "batch operations" in the abstract.
+
+## Kaggle access setup
 
 1. **User action, before September 23, 2026**: complete identity verification and click "Join
-   Competition" at the competition page. Submissions are impossible before this, and this cannot
-   be done from here.
-2. MCP: `claude mcp add --transport http kaggle https://www.kaggle.com/mcp`, then `/mcp` to
-   authorize. Confirmed available tools relevant here (of 71 total): `submit_to_competition`,
-   `get_competition_submission`, `search_competition_submissions`,
-   `start_competition_submission_upload`, `list_submission_episodes`, `get_episode_replay`,
-   `get_episode_agent_logs`, `get_competition_leaderboard`, `download_competition_leaderboard`,
-   `list_competition_topics`, `get_forum_topic`, `list_topic_messages`, `get_competition`,
-   `list_competition_pages`, `download_competition_data_file`, `download_competition_data_files`.
-3. CLI: token at `~/.kaggle/access_token` (outside this repo — see `SPEC.md` "Rule compliance" and
-   `.gitignore`), `chmod 600`. Used for scripted/batch operations per `AGENTS.md`'s documented
-   command set (`kaggle competitions submit|submissions|episodes|replay|logs|leaderboard`).
+   Competition" at the competition page. **Done** — confirmed via `user_has_entered: true`.
+2. MCP: connected as `kaggle-mcp`, authorized. **Done.**
 
 ## Submission bundling
 
@@ -51,12 +64,18 @@ Claude session (e.g. a nightly cron-style pull of the top-episodes dataset).
 ## Submission workflow
 
 ```
-build_submission.py  ->  submit_to_competition (MCP) or `kaggle competitions submit` (CLI)
-                      ->  poll get_competition_submission / `kaggle competitions submissions`
-                      ->  once scored episodes exist: list_submission_episodes
-                      ->  get_episode_replay + get_episode_agent_logs for any loss worth
-                          understanding, saved to data/replays/ through
-                          diskguard.ensure_budget() like any other replay pull
+build_submission.py
+  -> start_competition_submission_upload(competitionName, fileName, contentLength,
+                                          lastModifiedEpochSeconds)
+       returns an upload URL + a blob file token
+  -> PUT the built submission.tar.gz's bytes to that URL directly (plain HTTP, not
+       an MCP tool call — this is why the upload step is split from the submit
+       step: MCP tool calls aren't meant to carry multi-GB binary payloads)
+  -> submit_to_competition(competitionName, blobFileTokens, submissionDescription)
+  -> poll get_competition_submission(ref)
+  -> once scored episodes exist: list_submission_episodes(submissionId)
+  -> get_episode_replay + get_episode_agent_logs for any loss worth understanding,
+       saved to data/replays/ through diskguard.ensure_budget() like any other pull
 ```
 
 Every submission is logged (message, timestamp, git commit of `policy` at build time, arena
@@ -74,10 +93,11 @@ submission is an ask-first action, not something automated tooling triggers on i
 
 - **Daily top-episodes dataset** — Kaggle publishes up to 20 GB/day of the highest-rated episodes'
   replays: [`kaggle/kaggriculture-episodes-index`](https://www.kaggle.com/datasets/kaggle/kaggriculture-episodes-index).
-  Pulled via `download_competition_data_file`/CLI into `data/episodes/` (outside the repo), calling
-  `diskguard.ensure_budget(need_bytes=<listed size>)` first — see `SPEC-diskguard.md` for the
-  2.5 TB project-wide cap and its oldest-first eviction policy. Used for: (a) refreshing `tuning`'s
-  opponent panel with genuinely current strong play rather than a frozen baseline, (b)
+  Pulled via `download_dataset` (owner `kaggle`, slug `kaggriculture-episodes-index`) into
+  `data/episodes/` (outside the repo), calling `diskguard.ensure_budget(need_bytes=<listed size>)`
+  first — see `SPEC-diskguard.md` for the 2.5 TB project-wide cap and its oldest-first eviction
+  policy. Used for: (a) refreshing `tuning`'s opponent panel with genuinely current strong play
+  rather than a frozen baseline, (b)
   sanity-checking `gamelib`'s forecasts against what top agents actually achieve. Even with
   `diskguard` enforcing the cap, pull selectively (e.g. top-N by rating, not the full daily drop)
   rather than mirroring everything — the guard is a backstop against exceeding the budget, not a
@@ -94,16 +114,18 @@ submission is an ask-first action, not something automated tooling triggers on i
 - `build_submission.py`'s bundle audit and smoke test (described above) are the tests for this
   module — a bundle that fails either must not be a candidate for submission, enforced by the
   script's own exit code, not by a separate test file.
-- A dry-run mode (`--no-submit`) that does everything except call `submit_to_competition`/`kaggle
-  competitions submit`, for exercising the pipeline without spending a submission slot.
+- A dry-run mode (`--no-submit`) that does everything up to and including the upload step but
+  skips `submit_to_competition`, for exercising the pipeline without spending a submission slot.
 
 ## Boundaries specific to this module
 
 - *Ask first* (from `SPEC.md`, restated here since this is the module that actually executes it):
   every real submission, every download of the top-episodes dataset large enough to matter for
   disk space, every forum post.
-- *Never*: let this module's automation call `submit_to_competition`/`kaggle competitions submit`
-  without a human-approved step immediately before it — no cron job auto-submits.
+- *Never*: let this module's automation call `submit_to_competition` without a human-approved step
+  immediately before it — no cron job auto-submits. This falls out naturally from MCP tools being
+  agent-invoked rather than callable by an unattended script, but the boundary holds regardless of
+  mechanism.
 - Competition Data pulled here goes to `data/`, never to `repo/` — this module is the primary place
   that boundary could be violated by a careless path, so `build_submission.py` and the download
   helpers hardcode `KAGG_DATA_DIR`-relative destinations rather than accepting an arbitrary

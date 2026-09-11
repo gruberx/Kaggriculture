@@ -12,7 +12,7 @@ boundaries, and competition rule compliance). Module specs, in build order:
 4. [`SPEC-agent.md`](SPEC-agent.md) — submission contract, time budget, fault tolerance
 5. [`SPEC-policy.md`](SPEC-policy.md) — the actual decision-making logic
 6. [`SPEC-tuning.md`](SPEC-tuning.md) — parameter search and the regression gate
-7. [`SPEC-ops.md`](SPEC-ops.md) — Kaggle MCP/CLI, bundling, submission, forum monitoring
+7. [`SPEC-ops.md`](SPEC-ops.md) — Kaggle MCP, bundling, submission, forum monitoring
 
 ## Status
 

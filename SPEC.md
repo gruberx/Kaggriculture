@@ -54,7 +54,7 @@ the outcomes. This needs no GPU and no RL loop — see `SPEC-tuning.md`.
 | `agent` | Submission contract: `main.py` exposing `agent(obs)`, observation parsing, action assembly/validation, a time-budget guard, a blanket `try/except` fallback | `gamelib` | **yes** |
 | `policy` | Decision logic: daily strategic layer (portfolio, land, hiring), per-turn task layer (task list + greedy unit assignment), per-turn market layer (sell thresholds, ≤10 orders/turn) | `agent` | **yes** |
 | `tuning` | Parameter vector, coordinate-ascent search, opponent league, regression gate; stage 2 is search-generated value targets | `harness`, `policy`, `diskguard` | no |
-| `ops` | Kaggle MCP + CLI: bundle `main.py` into `submission.tar.gz`, submit, poll status, pull episodes/replays/logs, pull the daily top-episodes dataset, monitor the competition forum | `agent`, `diskguard` | no |
+| `ops` | Kaggle MCP: bundle `main.py` into `submission.tar.gz`, submit, poll status, pull episodes/replays/logs, pull the daily top-episodes dataset, monitor the competition forum | `agent`, `diskguard` | no |
 | `diskguard` | Application-level disk budget (2.5 TB cap on this project's total footprint, since the shared volume offers no filesystem quota inside this container): usage accounting, oldest-first eviction of re-downloadable data, hard refusal rather than silent overrun — see `SPEC-diskguard.md` | — | no |
 
 Build order: `harness` ∥ `gamelib` ∥ `diskguard` → `agent` → `policy` → (`tuning` ∥ `ops`).
@@ -110,8 +110,9 @@ the intended invocations — filled in for real once each script exists:
 # Build the submission bundle (main.py + gamelib + policy + params -> tar.gz)
 /root/kaggriculture/.venv/bin/python repo/tools/build_submission.py --out build/submission.tar.gz
 
-# Submit via Kaggle CLI (5/day limit — see Boundaries)
-kaggle competitions submit kaggriculture -f build/submission.tar.gz -m "<message>"
+# Submit (5/day limit — see Boundaries): agent-mediated via the kaggle-mcp MCP
+# server's start_competition_submission_upload -> submit_to_competition, not a
+# standalone CLI invocation — see SPEC-ops.md "Submission workflow".
 ```
 
 ## Project structure
