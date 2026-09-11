@@ -27,8 +27,10 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 - [x] T2.1 — Time-budget guard (400ms ceiling, cached-plan fallback)
 - [x] T2.2 — Fault-tolerance fuzzing (malformed observations never raise)
 - [x] T2.3 — Full-episode timing test (measured: p100 0.87ms, cumulative overage 0.0s)
-- [ ] T2.4 — Golden-episode fixture (fixed seeds vs `starter`/`random`, recorded final money)
-- [ ] **Checkpoint 2** — `agent` matches `SPEC-agent.md` fully. Commit.
+- [x] T2.4 — Golden-episode fixture vs `starter`/`pass` (exact); `random` gets a
+      robustness check instead of an exact number (its RNG is unseeded - not
+      reproducible even at a fixed episode seed, verified empirically)
+- [x] **Checkpoint 2** — `agent` matches `SPEC-agent.md` fully (51/51 full suite). Commit.
 
 ## Phase 3 — `policy` complete
 
