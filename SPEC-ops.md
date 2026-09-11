@@ -47,13 +47,19 @@ revisiting a CLI token — not "batch operations" in the abstract.
 `tools/build_submission.py`:
 1. Copies `src/kagg/agent_main.py` → `build/main.py`.
 2. Copies `src/kagg/gamelib/`, `src/kagg/policy/` → `build/kagg/gamelib/`, `build/kagg/policy/`.
-3. Copies the currently-accepted `params/policy.json` (and `params/seed_blocks.json` only if
-   `policy` actually reads it at runtime — otherwise leave tuning-only files out of the bundle
-   entirely, since Official Rules §2.11 permits *using* only what's in the bundle, and a smaller
-   bundle is a smaller audit surface) into `build/kagg/params/`.
-4. Fixes up `sys.path` inside `build/main.py`'s header so `import kagg.gamelib...` resolves when
-   Kaggle unpacks the bundle at `/kaggle_simulations/agent/` (per `AGENTS.md`: "Your files will be
-   located in `/kaggle_simulations/agent/`. Ensure all your file imports are set appropriately").
+3. Copies `src/kagg/params/policy.json` (and `params/seed_blocks.json` only if `policy` actually
+   reads it at runtime — otherwise leave tuning-only files out of the bundle entirely, since
+   Official Rules §2.11 permits *using* only what's in the bundle, and a smaller bundle is a
+   smaller audit surface) → `build/kagg/params/policy.json`. `params/` lives inside `src/kagg/` in
+   the repo specifically so this step is a plain verbatim copy, not a reorganizing one — see
+   `SPEC.md`'s "Project structure" correction (found during T3.4): a path relationship that only
+   holds after bundling is exactly the kind of thing that goes untested in dev.
+4. No `sys.path` fixup needed in `build/main.py` — corrected during T0.3 (see `SPEC-agent.md`):
+   `kaggle_environments`'s own file-path agent loader already appends the executing file's
+   directory to `sys.path` before running it, and `__file__` isn't available in `main.py` to
+   compute a fixup with anyway (that loader execs raw source into a fresh globals dict, not a real
+   module import). `import kagg.gamelib...`/`import kagg.policy...` at `main.py`'s top level
+   resolve against that auto-appended directory with no manual intervention.
 5. Runs the bundle audit from `SPEC.md`'s testing strategy (static scan for network/file-outside-
    bundle access) — **build fails, does not warn, if the audit finds a violation.**
 6. Runs a smoke-test local episode (`kaggle_environments.make(...).run(["build/main.py", "random"])`)

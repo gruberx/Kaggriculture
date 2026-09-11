@@ -135,12 +135,24 @@ the intended invocations — filled in for real once each script exists:
     ├── src/kagg/
     │   ├── gamelib/           ships in submission
     │   ├── policy/            ships in submission
+    │   ├── params/            tuned parameter files (JSON), ships in submission —
+    │   │                      lives *inside* kagg/ on purpose (see "Correction" below):
+    │   │                      dev and bundle layouts must be identical, not related by
+    │   │                      a reorganizing copy step that only "works" after bundling
     │   └── agent_main.py      ships in submission, becomes main.py in the bundle
-    ├── params/                tuned parameter files (JSON), ship in submission
     ├── tools/                 harness, tuning, ops scripts — dev only
     ├── tests/
     └── build/                 generated submission.tar.gz (gitignored)
 ```
+
+**Correction (found during T3.4, before any loader code was written):** an earlier revision put
+`params/` at the repo root, sibling to `src/`, while `SPEC-ops.md`'s bundling step copies it into
+`build/kagg/params/` — nested inside the package folder. That's the exact same class of bug T0.3
+found and fixed for `__file__`: a path relationship that only holds after a reorganizing copy step,
+untestable in the dev tree as it stood. `params/` moved inside `src/kagg/` so the loader (living in
+`kagg/policy/`, a normally-imported submodule with a working `__file__` — see `SPEC-agent.md`'s own
+correction) resolves the *same* relative path in dev and in the built bundle, by construction, not
+by coincidence.
 
 ## Code style
 
