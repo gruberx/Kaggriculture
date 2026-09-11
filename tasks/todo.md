@@ -51,9 +51,12 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 - [x] T4.2 — `run_block()` + Wilson interval (+ closed-form check, seat-invariance test)
 - [x] T4.3 — `detect_shop_reroll()` (+ fixture test)
 - [x] T4.4 — `params/seed_blocks.json` (`tuning_seeds` / `holdout_seeds`, disjoint, committed)
-- [ ] T4.5 — `tools/arena.py` CLI (`--opponent`, `--seeds`, `--jobs auto`, gated `--holdout`)
-- [ ] **Checkpoint 4** — `SPEC-harness.md` Testing section all passes; re-measure Phase 3's baseline
-      through the real harness (working block only). Commit.
+- [x] T4.5 — `tools/arena.py` CLI (`--opponent`, `--seeds`, `--jobs auto`, gated `--holdout`)
+- [x] **Checkpoint 4** — `SPEC-harness.md` Testing section all passes (135/135 full suite);
+      re-measured through the real paired-seat harness on the full 50-seed working
+      (tuning) block: 50/50 paired wins vs `starter`, 50/50 vs `random` (100 paired
+      seeds = 200 episodes each), win rate 1.0000, 95% Wilson interval [0.9286, 1.0000]
+      both times. Commit.
 
 ## Not planned yet (see plan.md)
 
