@@ -49,3 +49,8 @@ MARKET_PARAMS = {
 # it a quadratic term takes over. f(T) == 1 by construction, which keeps
 # `target` meaning the same thing it does for every other shape.
 HINGE_GAIN = 8.0
+
+# n-th hire of the day -> cost = FARM_HAND_COST_MULT * fib(n), resetting
+# each day. Configurable via episode configuration's `farmHandCostMult`,
+# but this is the default multiplier.
+FARM_HAND_COST_MULT = 1

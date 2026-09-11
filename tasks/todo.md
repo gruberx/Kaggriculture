@@ -13,7 +13,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 
 ## Phase 1 — `gamelib` complete
 
-- [ ] T1.1 — `hire_cost()` (+ property test vs `_hire_cost`)
+- [x] T1.1 — `hire_cost()` (+ property test vs `_hire_cost`)
 - [ ] T1.2 — `watering_bonus_window()` + `forecast_one_time_yield()` (+ property test)
 - [ ] T1.3 — `forecast_ongoing_schedule()` + `forecast_animal_schedule()` (+ property test)
 - [ ] T1.4 — `decay_step()` (+ property test)
