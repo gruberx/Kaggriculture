@@ -3,13 +3,20 @@
 Heuristic economic planner for the Kaggle simulation competition
 [Kaggriculture](https://www.kaggle.com/competitions/kaggriculture).
 
-See [`SPEC.md`](SPEC.md) for the full specification (objective, capability map, module specs,
-testing strategy, boundaries).
+See [`SPEC.md`](SPEC.md) for the full specification (objective, capability map, testing strategy,
+boundaries, and competition rule compliance). Module specs, in build order:
+
+1. [`SPEC-harness.md`](SPEC-harness.md) — arena/evaluation protocol
+2. [`SPEC-gamelib.md`](SPEC-gamelib.md) — pure economic model, ships in the submission
+3. [`SPEC-agent.md`](SPEC-agent.md) — submission contract, time budget, fault tolerance
+4. [`SPEC-policy.md`](SPEC-policy.md) — the actual decision-making logic
+5. [`SPEC-tuning.md`](SPEC-tuning.md) — parameter search and the regression gate
+6. [`SPEC-ops.md`](SPEC-ops.md) — Kaggle MCP/CLI, bundling, submission, forum monitoring
 
 ## Status
 
-Pre-implementation: specifications are being written before code (see `SPEC*.md`). This README
-is filled in as each module lands.
+Pre-implementation: all specs above are written and approved; no code yet. This README fills in
+as each module lands.
 
 ## Reproducing results
 
