@@ -14,6 +14,7 @@ and the seed-blocks config land in later tasks.
 
 from __future__ import annotations
 
+import json
 import math
 import multiprocessing
 import os
@@ -189,3 +190,42 @@ def run_block(
         wilson_interval_a=wilson_interval(wins_a, n),
         paired_results=tuple(results),
     )
+
+
+def _recorded_town_shop_sequence(replay_path: str) -> list[str]:
+    """The full town shop unlock sequence recorded in a saved episode
+    replay (env.toJSON()-shaped: {"steps": [[{"observation": {...}}, ...],
+    ...]}).
+
+    town["unlocked_shops"] only ever grows (verified by direct inspection
+    of a real episode: kaggriculture.py's end-of-day town-shop draw
+    appends one entry per in-game day, with replacement, so the same shop
+    can repeat), and is shared identically between both players'
+    observations at a given step (also verified directly) - so the last
+    step's player-0 observation already holds the complete sequence.
+    """
+    with open(replay_path) as f:
+        replay = json.load(f)
+    last_step = replay["steps"][-1]
+    return last_step[0]["observation"]["town"].get("unlocked_shops", [])
+
+
+def detect_shop_reroll(replay_path: str, live_town_log: list[str]) -> bool:
+    """True if the live run's town shop unlock sequence has diverged from
+    the recorded replay's - see SPEC-harness.md requirement 3 (our own
+    moves change which tiles are empty when, perturbing the shared RNG
+    stream that also draws town shop unlocks, which can reroll the
+    sequence relative to a recorded baseline).
+
+    Only used when the opponent side is a recorded replay rather than a
+    second live agent (SPEC-harness.md's own framing) - comparing two live
+    agents has no separate "recorded" sequence to diverge from.
+
+    Compares only the overlapping prefix: a live run that hasn't reached
+    as many in-game days yet as the replay isn't a reroll, just an
+    in-progress comparison - only an actual mismatch within what both
+    sides have reached counts.
+    """
+    recorded = _recorded_town_shop_sequence(replay_path)
+    overlap = min(len(recorded), len(live_town_log))
+    return recorded[:overlap] != list(live_town_log[:overlap])
