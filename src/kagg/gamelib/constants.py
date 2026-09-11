@@ -54,3 +54,7 @@ HINGE_GAIN = 8.0
 # each day. Configurable via episode configuration's `farmHandCostMult`,
 # but this is the default multiplier.
 FARM_HAND_COST_MULT = 1
+
+# NW is always unlocked; players unlock the rest in this order.
+LAND_ORDER = ["NE", "SW", "SE"]
+LAND_PRICES = [1000, 2000, 4000]
