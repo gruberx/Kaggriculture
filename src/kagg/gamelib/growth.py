@@ -11,7 +11,7 @@ Standard library only - ships inside the submission bundle.
 
 from __future__ import annotations
 
-from kagg.gamelib.constants import CROPS
+from kagg.gamelib.constants import ANIMALS, CROPS
 
 # A freshly planted one-time crop starts with yield_units=1 - mirrors
 # kaggriculture.py's _new_plant(): "yield_units": 0 if cd["ongoing"] else 1.
@@ -64,3 +64,59 @@ def forecast_one_time_yield(
             bonus = 2 if _is_fertilizer_active(age, fertilized_days) else 1
             yield_units = min(cd["max_yield"], yield_units + bonus)
     return yield_units
+
+
+def forecast_ongoing_schedule(crop: str, planted_day: int) -> list[int]:
+    """Absolute days on which an ongoing crop (TOMATO/STRAWBERRY) produces
+    its scheduled yield, regardless of watering/fertilizing that day.
+
+    Mirrors _daily_refresh_plants' scheduling check (kaggriculture.py:769):
+    a production tick fires at `next_day = planted_day + first_yield_day +
+    k * interval` for k = 0, 1, ..., independent of whether the tile was
+    watered that day - watering only decides whether the tick is worth 1
+    (unfertilized) or 2 (fertilized that day), not whether it fires at all.
+    That means this function takes no watering/fertilizing input at all;
+    forecast_one_time_yield's fertilizer bonus is the analogous concern for
+    one-time crops, but there is no `forecast_ongoing_yield` here - a
+    caller reasoning about actual accumulated yield needs to fold in its
+    own watering/fertilizing plan against this schedule itself.
+
+    Finite by construction (`SPEC-gamelib.md` "Key subtleties" - ongoing
+    crops are capped at `max_yield` scheduled productions, not indefinite):
+    exactly `max_yield` entries, matching the documented examples (tomato:
+    ages 8-11; strawberry: ages 10, 12, 14, 16).
+    """
+    cd = CROPS[crop]
+    if not cd["ongoing"]:
+        raise ValueError(f"{crop} is not an ongoing crop; use forecast_one_time_yield instead")
+    interval = cd["interval"]
+    first = cd["first_yield_day"]
+    return [planted_day + first + k * interval for k in range(cd["max_yield"])]
+
+
+def forecast_animal_schedule(animal: str, placed_day: int, horizon_days: int = 30) -> list[int]:
+    """Absolute days, up to `horizon_days` (an absolute day number, default
+    30 - the season length at the default `episodeSteps`/`turnsPerDay`
+    configuration), on which a fed animal produces its base yield.
+
+    Mirrors _daily_refresh_animals' scheduling check (kaggriculture.py:805):
+    same `next_day = placed_day + first_yield_day + k * interval` form as
+    ongoing crops, but - unlike ongoing crops - animals have no `max_yield`
+    cap on the *number* of productions (SPEC.md's economic analysis: "no
+    fixed occupancy to divide by"; `max_held` caps unharvested product on
+    the tile, not lifetime output). `horizon_days` bounds the returned list
+    to something finite and useful instead of requiring the genuinely
+    unbounded schedule an unfed `while True` would imply.
+    """
+    a = ANIMALS[animal]
+    interval = a["interval"]
+    first = a["first_yield_day"]
+    days = []
+    k = 0
+    while True:
+        day = placed_day + first + k * interval
+        if day > horizon_days:
+            break
+        days.append(day)
+        k += 1
+    return days
