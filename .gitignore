@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+
+# Build artifacts (submission bundles are generated, not tracked)
+build/
+
+# Local-only overrides (never committed; may contain machine-specific paths)
+*.local.json
+*.local.yaml
+
+# Editors
+.vscode/
+.idea/
