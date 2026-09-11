@@ -37,11 +37,28 @@ site-packages instead - either way, no path manipulation belongs here.
 
 from __future__ import annotations
 
+import copy
+import time
+
 from kagg.policy.wheat_loop import wheat_loop_action
 
 # Returned on any failure. A module-level dict would be a shared mutable
 # object every caller could accidentally corrupt - see _safe_default().
 SAFE_DEFAULT_ACTION = {"farmer": ["PASS"], "hands": [], "market": []}
+
+# Hard ceiling per SPEC-agent.md "Time budget": a circuit breaker for
+# pathological cases, not a budget to spend routinely (target is <=50ms).
+# Measured with time.perf_counter() around the whole _decide() call.
+_TURN_TIME_CEILING_SECONDS = 0.400
+
+# The most recent action that finished *within* the ceiling - used as a
+# fallback when a computation takes too long to trust, even though it
+# didn't raise (SPEC-agent.md: "a stale-but-valid action beats a
+# timeout"). Starts as the safe default so the very first turn already has
+# a sane fallback before anything has succeeded yet. This is a distinct
+# failure mode from an outright exception (see agent()'s docstring) -
+# an exception still gets the plain safe default, not this cache.
+_last_good_action = {"farmer": ["PASS"], "hands": [], "market": []}
 
 
 def _safe_default() -> dict:
@@ -74,8 +91,24 @@ def agent(obs: dict) -> dict:
     need to guard a broken top-level import, which is caught long before
     a real match by the test suite and the bundle-audit smoke test, not by
     this try/except (see the module docstring above).
+
+    Separately, a computation that *succeeds* but takes too long is a
+    different failure mode (SPEC-agent.md "Time budget"): Python has no
+    clean way to preempt an already-running synchronous call, so this
+    can't reduce the wall-clock cost already paid on the slow turn itself
+    - what it protects is *trust*, not time. A decision that took this
+    long is no longer assumed to be reasoning correctly under pressure, so
+    it's discarded in favor of the last one that finished fast enough to
+    trust, rather than acted on.
     """
+    global _last_good_action
+    start = time.perf_counter()
     try:
-        return _decide(obs)
+        action = _decide(obs)
     except Exception:
         return _safe_default()
+    elapsed = time.perf_counter() - start
+    if elapsed > _TURN_TIME_CEILING_SECONDS:
+        return copy.deepcopy(_last_good_action)
+    _last_good_action = copy.deepcopy(action)
+    return action
