@@ -35,7 +35,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 ## Phase 3 — `policy` complete
 
 - [x] T3.1 — Strategic layer (portfolio, land threshold, `hires_per_day` — all as named params)
-- [ ] T3.2 — Task layer (prioritized list + greedy assignment via `tile_distance`)
+- [x] T3.2 — Task layer (prioritized list + greedy assignment via `tile_distance`)
 - [ ] T3.3 — Market layer (sell thresholds, drip-selling, ≤10 orders/turn, `BUY_PRODUCT` restricted)
 - [ ] T3.4 — `params/policy.json` schema + loader (with safe fallback on missing/malformed file)
 - [ ] T3.5 — Replace Phase 0's wheat loop with T3.1–T3.3 in `agent_main.py`
