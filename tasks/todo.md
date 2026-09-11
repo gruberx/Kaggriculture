@@ -17,7 +17,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 - [x] T1.2 — `watering_bonus_window()` + `forecast_one_time_yield()` (+ property test)
 - [x] T1.3 — `forecast_ongoing_schedule()` + `forecast_animal_schedule()` (+ property test)
 - [x] T1.4 — `decay_step()` (+ property test)
-- [ ] T1.5 — `shed_room()` (+ property test)
+- [x] T1.5 — `shed_room()` (+ property test)
 - [ ] T1.6 — `tile_distance()` + `land_price()` (+ unit tests)
 - [ ] T1.7 — Boundary test: no `kaggle_environments` import anywhere under `src/kagg/gamelib/`
 - [ ] **Checkpoint 1** — `pytest repo/tests -k gamelib` all green. Commit.
