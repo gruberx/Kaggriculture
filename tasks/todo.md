@@ -34,7 +34,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 
 ## Phase 3 — `policy` complete
 
-- [ ] T3.1 — Strategic layer (portfolio, land threshold, `hires_per_day` — all as named params)
+- [x] T3.1 — Strategic layer (portfolio, land threshold, `hires_per_day` — all as named params)
 - [ ] T3.2 — Task layer (prioritized list + greedy assignment via `tile_distance`)
 - [ ] T3.3 — Market layer (sell thresholds, drip-selling, ≤10 orders/turn, `BUY_PRODUCT` restricted)
 - [ ] T3.4 — `params/policy.json` schema + loader (with safe fallback on missing/malformed file)
