@@ -14,10 +14,26 @@ or exists purely to make delegation safe.
 
 Per `AGENTS.md`/`kaggriculture.json`: `agent(obs)` receives the observation described in
 `SPEC.md`'s referenced game rules (`player`, `day`, `hour`, `farms`, `private`, `market`, `town`)
-and returns `{"farmer": [op, ...], "hands": [[op, ...], ...], "market": [[op, ...], ...]}`. On
-Kaggle, submission files live at `/kaggle_simulations/agent/`, so `agent_main.py` must not assume
-`__file__`'s directory is the working directory when locating `params/*.json` — resolve paths
-relative to `os.path.dirname(__file__)`.
+and returns `{"farmer": [op, ...], "hands": [[op, ...], ...], "market": [[op, ...], ...]}`.
+
+**Correction (verified empirically during T0.3, not assumed from docs):** an earlier revision of
+this section said to resolve sibling-file paths relative to `os.path.dirname(__file__)` in
+`agent_main.py`. That is wrong and was caught by actually running a file-path agent through
+`kaggle_environments`, not by inspection. The real mechanism, read from
+`kaggle_environments/agent.py: get_last_callable`: a file-path agent's source is
+`exec(compile(source, path, "exec"), {})`'d into a **fresh globals dict**, not imported as a real
+module — `__file__` is never defined there, and referencing it at module level raises `NameError`
+and crashes agent construction outright (silently, under the default `debug=False`, degrading
+every turn to the environment's own default action with no visible error). Separately, the loader
+appends the file's own directory to `sys.path` only for the duration of that one `exec()` call, on
+the first turn only (the resulting callable is cached after that) — so any `import kagg....`
+must happen at `agent_main.py`'s *module top level*, never lazily inside a function, or it will
+resolve on no turn at all once that directory has been popped back off `sys.path`.
+
+Consequence for Phase 3's `params/policy.json` loader: it must live inside a normally-imported
+submodule (`kagg.policy`, not `agent_main.py` itself) and resolve its own sibling path via *that*
+module's `__file__` — submodules reached via a real `import` statement go through the normal
+import machinery and do have a working `__file__`; only the raw-exec'd entry file lacks one.
 
 ## Time budget
 
