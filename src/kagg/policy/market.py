@@ -8,6 +8,14 @@ structure, but those are never a SELL candidate here. Only WHEAT (and
 FERTILIZER, not implemented in this module) can be bought back from the
 market at all.
 
+FERTILIZER (T8.3e) is technically a PRODUCT (sellable in principle - it's
+in the PRODUCTS list) but is excluded from the *routine* sell loop below:
+it exists to be applied via kagg.policy.tasks's FERTILIZE task (a real
+yield-doubling lever), not liquidated for cash the moment it's collected -
+selling it on sight would starve that task of any input to act on.
+`liquidate` (T8.3d) still sells it once there is no more time left to
+ever apply it - see `sell_orders`'s own docstring.
+
 Standard library only - ships inside the submission bundle.
 """
 
@@ -22,6 +30,9 @@ from kagg.gamelib.market import price
 # `above_target` > 1, meaning a modest glut already drives them toward the
 # $1 floor) - named explicitly in SPEC-policy.md's task description.
 PREMIUM_GOODS = frozenset({"MILK", "WOOL", "MELON", "STRAWBERRY"})
+
+# T8.3e: never routinely sold - see this module's own docstring above.
+_NEVER_ROUTINELY_SOLD = frozenset({"FERTILIZER"})
 
 _DEFAULT_SELL_MARGIN = 0
 _DEFAULT_DRIP_SELL_MAX_PER_TURN = 5
@@ -56,6 +67,7 @@ def sell_orders(
     max_orders: int = 10,
     wheat_reserve: int = 0,
     liquidate: bool = False,
+    use_fertilizer: bool = True,
 ) -> list[list]:
     """Sell orders for this turn, one per sellable item with stock and a
     price that clears its margin, capped at `max_orders` (kept as an
@@ -93,7 +105,16 @@ def sell_orders(
     the last step scores exactly zero, which is strictly worse than
     selling it at any positive price (PRICE_FLOOR guarantees > 0).
     `decide()` sets this once the season is within its configured
-    liquidation window of ending.
+    liquidation window of ending. Also overrides `_NEVER_ROUTINELY_SOLD`
+    (T8.3e) - see this module's own docstring for why FERTILIZER is
+    normally excluded here at all.
+
+    `use_fertilizer` (T8.3e) mirrors kagg.policy.tasks's own param of the
+    same name: when the FERTILIZE task is disabled there, excluding
+    FERTILIZER from routine selling here would just strand it as dead
+    weight until `liquidate` finally sells it - so this same flag also
+    controls the `_NEVER_ROUTINELY_SOLD` exclusion, keeping the two
+    modules' behavior consistent for a clean on/off self-play comparison.
     """
     params = params or {}
     margin = params.get("sell_margin", _DEFAULT_SELL_MARGIN)
@@ -103,6 +124,8 @@ def sell_orders(
     for item in PRODUCTS:
         if len(orders) >= max_orders:
             break
+        if item in _NEVER_ROUTINELY_SOLD and use_fertilizer and not liquidate:
+            continue
         count = shed.get(item, 0)
         if item == "WHEAT":
             count = max(0, count - wheat_reserve)
@@ -152,16 +175,23 @@ def market_orders(
     max_orders: int = 10,
     wheat_reserve: int = 0,
     liquidate: bool = False,
+    use_fertilizer: bool = True,
 ) -> list[list]:
     """This turn's full market-layer order list: sells first, then a
     wheat restock if there's still room under `max_orders` - never more
     than `max_orders` total, matching `maxMarketOrdersPerTurn`.
 
-    `wheat_reserve` and `liquidate` are passed straight through to
-    `sell_orders` - see its own docstring for why they exist.
+    `wheat_reserve`, `liquidate`, and `use_fertilizer` are passed straight
+    through to `sell_orders` - see its own docstring for why they exist.
     """
     orders = sell_orders(
-        shed, market_inventory, params, max_orders=max_orders, wheat_reserve=wheat_reserve, liquidate=liquidate
+        shed,
+        market_inventory,
+        params,
+        max_orders=max_orders,
+        wheat_reserve=wheat_reserve,
+        liquidate=liquidate,
+        use_fertilizer=use_fertilizer,
     )
     if len(orders) < max_orders:
         wheat_order = buy_wheat_order(wheat_on_hand, market_prices.get("WHEAT", 0), params)

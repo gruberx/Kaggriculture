@@ -350,10 +350,42 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       disabled for the *entire* season, not just the end). That is a materially different, unreviewed
       change - the `PREMIUM_GOODS` drip cap turning out not to earn its keep at all under current
       single-farmer conditions, vs. the narrow "liquidate near the end" fix actually asked for here -
-      and deserves its own dedicated investigation (candidate: T8.3e or later), not scope creep into
+      and deserves its own dedicated investigation (candidate: T8.3f or later), not scope creep into
       this task. Golden table unchanged (none of the 6 recorded seeds happened to hit a
       margin-blocked or drip-capped sale in the last 2 days under these exact params). 257/257 full
       suite (7 new tests), compileall clean, boundary check green.
+- [x] T8.3e — The user's own observed defect from watching real replays: FERTILIZER was only ever
+      collected (`COLLECT_FERTILIZER`) and sold as an ordinary `PRODUCT`, never applied via the real
+      `FERTILIZE` action - confirmed directly in `kaggriculture.py`: `FERTILIZE` doubles the yield
+      bonus (via `_daily_refresh_plants`/the WATER handler, both gated on `was_watered` - "basic needs
+      first") for the day of application plus the following two (`fertilized_until_day = max(existing,
+      day+2)`).
+      **Built:** a new `FERTILIZE` task in `tasks.py` (fires when the farmer holds ≥1 FERTILIZER and
+      the target tile isn't already actively fertilized - gated on `fertilized_until_day < current_day`
+      so a second application while one is still active can never be a wasted no-op unit), plus a
+      `market.py` change excluding FERTILIZER from the routine sell loop (it exists to be applied, not
+      liquidated on sight - `liquidate`, T8.3d, still sells any leftover once there's no time left to
+      ever use it). Both gated by one new `params["use_fertilizer"]` flag for a clean, fully-isolated
+      self-play comparison.
+      **Measured — a real, decisive rejection, not an acceptance**, mirroring the SHED anchor's own
+      history (a plausible-sounding mechanism that still needs real evidence): at
+      `PRIORITY_ROUTINE_CARE` (tied with WATER, outranking PLANT) it lost 0/50 on the working block and
+      0/50 on the held-out block - every non-tied episode a loss. Re-tried at `PRIORITY_MAINTENANCE`
+      (same tier as `COLLECT_FERTILIZER`, below PLANT) on the theory that ROUTINE_CARE was crowding out
+      higher-value work - still 0/4 and 0/3 losses (fewer episodes differed at all, but zero favored
+      fertilizing). **Traced, not just trusted** (seed 117): the fertilize-enabled agent completed
+      *fewer* total `COLLECT_FERTILIZER` actions over the whole game (4 vs 5) than the identical code
+      with the mechanism off - `FERTILIZE` and `COLLECT_FERTILIZER` share the same `PRIORITY_MAINTENANCE`
+      tier, so a second consumer of the farmer's already-scarce lowest-priority turns directly dilutes
+      `COLLECT_FERTILIZER`'s own throughput, losing more sale income than the rare successful
+      `FERTILIZE` application won back. A real single-farmer capacity limit, not fixable by priority
+      tuning alone.
+      **Shipped default: `use_fertilizer=False`** (`DEFAULT_PARAMS`, `params/policy.json`,
+      `decide.py`'s `_DEFAULT_USE_FERTILIZER`) - the mechanism stays in the codebase, tested and
+      available (`use_fertilizer=True`), kept for a future re-check once T8.6/T8.7 give a second unit
+      real spare MAINTENANCE-tier capacity, not deleted outright. Golden table unchanged (default
+      behavior is bit-identical to before this task). 265/265 full suite (10 new tests), compileall
+      clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

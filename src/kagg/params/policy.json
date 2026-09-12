@@ -10,5 +10,6 @@
   "plant_while_pursuing_animal": true,
   "land_buy_max_free_tile_fraction": 0.25,
   "land_buy_min_frontier_distance": 99,
-  "liquidation_days_before_end": 2
+  "liquidation_days_before_end": 2,
+  "use_fertilizer": false
 }

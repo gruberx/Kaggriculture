@@ -83,6 +83,21 @@ DEFAULT_PARAMS = {
     # end) - out of scope for this task, flagged in tasks/todo.md for a
     # dedicated follow-up.
     "liquidation_days_before_end": 2,
+    # T8.3e: the user's own observed defect - FERTILIZER was only ever
+    # collected and sold, never applied via the real FERTILIZE action
+    # (a real yield-doubling lever). Built and tested, but **rejected as
+    # the default** after direct self-play measurement, mirroring the
+    # SHED anchor's own history - a real, decisive loss at both priority
+    # tiers tried (0 wins across every differing episode in either self-
+    # play block, either tier), traced to FERTILIZE and
+    # COLLECT_FERTILIZER sharing the same PRIORITY_MAINTENANCE tier: a
+    # second consumer of the farmer's scarce lowest-priority turns
+    # directly reduces COLLECT_FERTILIZER's own throughput - a real
+    # single-farmer capacity limit, not a tunable-away default. See
+    # kagg.policy.decide's _DEFAULT_USE_FERTILIZER comment for the full
+    # story. Kept available (like "SHED") for a future re-check once a
+    # second unit (T8.6/T8.7) gives real spare capacity.
+    "use_fertilizer": False,
 }
 
 

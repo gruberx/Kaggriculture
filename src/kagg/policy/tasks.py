@@ -64,8 +64,8 @@ _WHEAT_PICKUP_BATCH = 10
 class Task:
     priority: int
     pos: tuple[int, int]
-    # "WATER"|"HARVEST"|"FEED"|"PLANT"|"DIG"|"COLLECT_FERTILIZER"|
-    # "BUILD_COOP"|"BUILD_PASTURE"|"PLACE"|"PICKUP"
+    # "WATER"|"HARVEST"|"FEED"|"FERTILIZE"|"PLANT"|"DIG"|
+    # "COLLECT_FERTILIZER"|"BUILD_COOP"|"BUILD_PASTURE"|"PLACE"|"PICKUP"
     op: str
     crop: str | None = None  # only set for PLANT tasks
     animal: str | None = None  # only set for PLACE tasks
@@ -153,6 +153,7 @@ def build_task_list(
     farmer_inventory: dict | None = None,
     current_day: int = 0,
     anchor: str = _ANCHOR_SHED,
+    use_fertilizer: bool = True,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -174,8 +175,8 @@ def build_task_list(
     `farmer_inventory` are both needed because they mean different
     things: `shed` is what's been bought (BUY_ANIMAL delivers there, not
     to any unit's inventory), `farmer_inventory` is what the farmer is
-    actually carrying (what PLACE - and FEED, below - really consume
-    from). Simplification, not an oversight: this whole pipeline is
+    actually carrying (what PLACE - and FEED/FERTILIZE, below - really
+    consume from). Simplification, not an oversight: this whole pipeline is
     modeled as the *farmer's* (not any hand's) inventory - correct while
     `hires_per_day` defaults to 0; revisit once hiring is tuned to a
     nonzero value, since a hand could end up carrying the animal instead.
@@ -221,7 +222,7 @@ def build_task_list(
             if kind == "WEED":
                 tasks.append(Task(PRIORITY_MAINTENANCE, pos, "DIG"))
             elif kind == "PLANT":
-                tasks.extend(_plant_tile_tasks(pos, tile, current_day))
+                tasks.extend(_plant_tile_tasks(pos, tile, current_day, farmer_inventory, use_fertilizer))
             elif "animal" in tile:
                 animal_tasks, needs_wheat_priority = _animal_tile_tasks(pos, tile, farmer_inventory)
                 tasks.extend(animal_tasks)
@@ -303,7 +304,9 @@ def _new_investment_task(
     return None
 
 
-def _plant_tile_tasks(pos: tuple[int, int], tile: dict, current_day: int) -> list[Task]:
+def _plant_tile_tasks(
+    pos: tuple[int, int], tile: dict, current_day: int, farmer_inventory: dict, use_fertilizer: bool = True
+) -> list[Task]:
     tasks = []
     if not tile.get("watered_today", False):
         urgent = tile.get("consecutive_unwatered", 0) >= 1
@@ -311,6 +314,39 @@ def _plant_tile_tasks(pos: tuple[int, int], tile: dict, current_day: int) -> lis
         tasks.append(Task(priority, pos, "WATER"))
     if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(tile, current_day):
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
+    if (
+        use_fertilizer
+        and farmer_inventory.get("FERTILIZER", 0) > 0
+        and tile.get("fertilized_until_day", -1) < current_day
+    ):
+        # T8.3e: the user's own observed defect - FERTILIZER was only
+        # ever collected and sold, never applied. The real FERTILIZE
+        # handler doubles the yield bonus on any day it's active *and*
+        # the tile is watered that day (kaggriculture.py's
+        # _daily_refresh_plants/WATER handler both gate the bonus on
+        # `was_watered` - "basic needs first") for `fertilized_until_day
+        # = max(existing, day+2)`, i.e. today plus the next two days.
+        # Gated on `fertilized_until_day < current_day` (not merely
+        # "already active") so this never fires while an earlier
+        # application still fully covers today - the real handler's own
+        # `max()` would make a second application on top of that a
+        # complete no-op, silently wasting a real unit of FERTILIZER for
+        # nothing. No crop-maturity/remaining-life targeting yet (same
+        # simplicity level as the existing WATER task, which doesn't
+        # check watering_bonus_window either) - a plausible refinement,
+        # not yet measured to matter.
+        #
+        # PRIORITY_MAINTENANCE (below PRIORITY_PLANT), not
+        # PRIORITY_ROUTINE_CARE - measured, not assumed: an earlier
+        # version at ROUTINE_CARE (tied with WATER, and so outranking
+        # PLANT) lost decisively in direct self-play (0/50 working, 0/50
+        # held-out - every non-tied episode was a loss), traced to
+        # FERTILIZE crowding out both farther routine watering and
+        # opening new PLANT tiles - a modest 3-day yield bump on one
+        # already-productive tile is a worse trade than either. At
+        # MAINTENANCE it only fires once nothing more pressing is queued,
+        # same tier as DIG/COLLECT_FERTILIZER.
+        tasks.append(Task(PRIORITY_MAINTENANCE, pos, "FERTILIZE"))
     return tasks
 
 

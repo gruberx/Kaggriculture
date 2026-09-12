@@ -119,6 +119,27 @@ def test_sell_orders_default_margin_sells_whenever_price_is_positive():
     assert orders == [["SELL", "EGG", 4]]
 
 
+def test_sell_orders_never_routinely_sells_fertilizer():
+    # T8.3e: FERTILIZER exists to be applied via FERTILIZE (a real yield
+    # lever - see tasks.py's own FERTILIZE task), not sold off the moment
+    # it's collected - selling it the same turn it lands in the shed
+    # would starve the new FERTILIZE task of any input to act on.
+    shed = {p: 0 for p in PRODUCTS}
+    shed["FERTILIZER"] = 4
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY)
+    assert orders == []
+
+
+def test_sell_orders_liquidates_fertilizer_near_season_end():
+    # Once there's no time left to ever apply it, unsold FERTILIZER is
+    # just as much a total loss as any other stranded shed stock (T8.3d) -
+    # liquidate=True overrides the never-routinely-sold rule too.
+    shed = {p: 0 for p in PRODUCTS}
+    shed["FERTILIZER"] = 4
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, liquidate=True)
+    assert orders == [["SELL", "FERTILIZER", 4]]
+
+
 def test_sell_orders_sells_below_margin_when_liquidating():
     # T8.3d: near season end, holding out for a price recovery that will
     # never arrive is strictly worse than selling now at any positive

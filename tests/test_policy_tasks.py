@@ -81,6 +81,48 @@ def test_build_task_list_routine_watering_is_lower_priority_than_prevent_loss():
     assert tasks[0].priority == PRIORITY_ROUTINE_CARE
 
 
+def test_build_task_list_fertilizes_a_plant_when_fertilizer_is_on_hand():
+    # T8.3e (tasks/plan.md), the user's own observed defect: FERTILIZER
+    # was only ever collected and sold, never applied - the real
+    # kaggriculture.py FERTILIZE handler doubles the watering bonus for
+    # 3 days (day, day+1, day+2), a real yield lever left completely
+    # unused.
+    #
+    # PRIORITY_MAINTENANCE, not PRIORITY_ROUTINE_CARE - measured, not
+    # assumed: an earlier version at ROUTINE_CARE (tied with WATER, and
+    # so outranking PRIORITY_PLANT) lost decisively in direct self-play
+    # (0/50 working, 0/50 held-out - every non-tied episode was a loss),
+    # traced to FERTILIZE crowding out both farther routine watering and
+    # opening new PLANT tiles - a modest 3-day yield bump on one already-
+    # productive tile is a worse trade than either. MAINTENANCE (below
+    # PLANT, same tier as DIG/COLLECT_FERTILIZER) only fires once nothing
+    # more pressing is queued - see tasks/todo.md's T8.3e entry.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile()  # fertilized_until_day=-1, i.e. not active
+    tasks = build_task_list(tiles, farmer_inventory={"FERTILIZER": 1})
+    assert any(t.priority == PRIORITY_MAINTENANCE and t.op == "FERTILIZE" and t.pos == (2, 2) for t in tasks)
+
+
+def test_build_task_list_does_not_fertilize_without_any_fertilizer_on_hand():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile()
+    tasks = build_task_list(tiles, farmer_inventory={})
+    assert [t for t in tasks if t.op == "FERTILIZE"] == []
+
+
+def test_build_task_list_does_not_waste_fertilizer_on_an_already_active_tile():
+    # The real handler is `fertilized_until_day = max(existing, day+2)` -
+    # reapplying while an earlier application still covers today is a
+    # complete no-op there, so doing it anyway would waste a real unit of
+    # FERTILIZER for nothing.
+    tiles = _empty_tiles()
+    tile = _plant_tile()
+    tile["fertilized_until_day"] = 2  # still active on current_day=0
+    tiles[2][2] = tile
+    tasks = build_task_list(tiles, farmer_inventory={"FERTILIZER": 1}, current_day=0)
+    assert [t for t in tasks if t.op == "FERTILIZE"] == []
+
+
 def test_build_task_list_flags_prevent_loss_feeding():
     tiles = _empty_tiles()
     tiles[3][3] = _animal_tile(consecutive_unfed=1, fed_today=False)

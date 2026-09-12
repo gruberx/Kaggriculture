@@ -131,6 +131,46 @@ def test_decide_does_not_liquidate_early_in_the_season():
     assert sell_melon == [["SELL", "MELON", 5]]  # default drip_sell_max_per_turn still applies
 
 
+def test_decide_defaults_use_fertilizer_to_false_when_unset():
+    # T8.3e: built and tested, but measured to lose in direct self-play
+    # at both priority tiers tried (see decide.py's own
+    # _DEFAULT_USE_FERTILIZER comment for the full story) - kept
+    # available, like "SHED", not the default.
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("use_fertilizer") is False
+    assert decide_module._DEFAULT_USE_FERTILIZER is False
+
+
+def test_decide_does_not_fertilize_by_default():
+    obs = _obs()
+    obs["farms"][0]["tiles"][2][2] = {
+        "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": True,
+        "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+        "fertilized_until_day": -1,
+    }
+    obs["private"]["inventories"] = [{"FERTILIZER": 1}]
+    action = decide(obs, DEFAULT_PARAMS)
+    assert action["farmer"][0] != "FERTILIZE"
+    # Not held back either - sold normally, matching the pre-T8.3e default.
+    obs["private"]["shed"]["FERTILIZER"] = 1
+    action = decide(obs, DEFAULT_PARAMS)
+    assert ["SELL", "FERTILIZER", 1] in action["market"]
+
+
+def test_decide_fertilizes_when_explicitly_enabled():
+    obs = _obs()
+    obs["farms"][0]["tiles"][2][2] = {
+        "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": True,
+        "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+        "fertilized_until_day": -1,
+    }
+    obs["farms"][0]["farmer"] = [2, 2]
+    obs["private"]["inventories"] = [{"FERTILIZER": 1}]
+    action = decide(obs, dict(DEFAULT_PARAMS, use_fertilizer=True))
+    assert action["farmer"] == ["FERTILIZE"]
+
+
 def test_decide_defaults_investment_anchor_to_unit_toward_shed_when_unset():
     # T8.3c accepted "UNIT_TOWARD_SHED" as the default (50/50 on both
     # self-play blocks against the previously-shipped plain "UNIT") -

@@ -89,6 +89,42 @@ _WHEAT_FEED_RESERVE = 10
 # T8.3d entry.
 _DEFAULT_LIQUIDATION_DAYS_BEFORE_END = 2
 
+# T8.3e (the user's own observed defect): FERTILIZER was only ever
+# collected (COLLECT_FERTILIZER) and sold (market.sell_orders, since it's
+# a PRODUCT), never applied - the real FERTILIZE handler doubles the
+# yield bonus on any day the tile is both watered and fertilizer-active
+# (kaggriculture.py's _daily_refresh_plants/WATER handler both gate the
+# bonus on `was_watered` first), for the day of application plus the
+# following two. Gates both kagg.policy.tasks's new FERTILIZE task and
+# market.sell_orders's exclusion of FERTILIZER from routine selling (see
+# both modules' own docstrings) - a single flag, so enabling it is a
+# clean, fully-isolated change for self-play comparison.
+#
+# Built, tested, and measured - **not accepted as the default**, a real
+# rejection rather than a silent no-op default (mirroring the SHED
+# anchor's own history - a plausible-sounding mechanism that still needs
+# real evidence): measured a clean, decisive loss in direct self-play at
+# *both* tiers tried. At PRIORITY_ROUTINE_CARE (tied with WATER, so
+# outranking PRIORITY_PLANT): 0/50 working, 0/50 held-out - every
+# non-tied episode a loss. At PRIORITY_MAINTENANCE (this module's
+# tasks.py default, below PLANT, same tier as COLLECT_FERTILIZER): still
+# 0/4 working-block losses and 0/3 held-out-block losses (fewer episodes
+# differed at all, but zero of the ones that did favored fertilizing).
+# Traced, not just trusted (seed 117, single seat): the fertilize-enabled
+# agent completed *fewer* total COLLECT_FERTILIZER actions over the whole
+# game (4 vs 5) than the exact same code with the mechanism off, losing
+# more FERTILIZER-sale income than the one real FERTILIZE application it
+# managed gained back. Root cause: FERTILIZE and COLLECT_FERTILIZER share
+# the same PRIORITY_MAINTENANCE tier, so adding FERTILIZE as a second
+# consumer of the farmer's already-scarce lowest-priority turns directly
+# dilutes COLLECT_FERTILIZER's own throughput - a real, structural
+# tension, not tunable away by priority alone at a single farmer's
+# capacity. Kept as a real, arena-checkable alternative (like
+# `investment_anchor="SHED"`) rather than deleted outright - worth
+# revisiting once T8.6/T8.7 give a second unit real spare capacity for
+# opportunistic MAINTENANCE-tier work.
+_DEFAULT_USE_FERTILIZER = False
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -380,6 +416,8 @@ def decide(obs: dict, params: dict) -> dict:
         shed.get(acquisition_animal, 0) > 0 or farmer_inventory.get(acquisition_animal, 0) > 0
     )
 
+    use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
+
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
         me["tiles"], unit_positions,
@@ -387,6 +425,7 @@ def decide(obs: dict, params: dict) -> dict:
         shed=shed, farmer_inventory=farmer_inventory,
         current_day=current_day,
         anchor=params.get("investment_anchor", _DEFAULT_INVESTMENT_ANCHOR),
+        use_fertilizer=use_fertilizer,
     )
     assignment = assign_units(tasks, unit_positions)
 
@@ -421,6 +460,7 @@ def decide(obs: dict, params: dict) -> dict:
         max_orders=_MAX_MARKET_ORDERS,
         wheat_reserve=wheat_reserve,
         liquidate=liquidate,
+        use_fertilizer=use_fertilizer,
     )
 
     # Seed/animal purchase: arrives next turn (market orders resolve
