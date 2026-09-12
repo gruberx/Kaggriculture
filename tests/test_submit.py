@@ -45,7 +45,9 @@ class _RecordingPutHandler(http.server.BaseHTTPRequestHandler):
     def do_PUT(self):
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length)
-        _RecordingPutHandler.received.append((self.headers.get("Content-Length"), body))
+        _RecordingPutHandler.received.append(
+            (self.headers.get("Content-Length"), self.headers.get("Content-Type"), body)
+        )
         self.send_response(200)
         self.end_headers()
 
@@ -70,9 +72,17 @@ def test_upload_bytes_puts_the_exact_file_contents(tmp_path):
         thread.join()
 
     assert len(_RecordingPutHandler.received) == 1
-    content_length_header, body = _RecordingPutHandler.received[0]
+    content_length_header, content_type_header, body = _RecordingPutHandler.received[0]
     assert body == payload
     assert content_length_header == str(len(payload))
+    # Real bug found submitting for real (T5.3, ref 56175204): Kaggle's
+    # upload URL is a GCS resumable-upload session - a PUT with no
+    # Content-Type header was never actually exercised against it before
+    # this (the real submission was pushed through by hand with curl,
+    # bypassing this function entirely). GCS accepted the upload once
+    # Content-Type was set; this test would not have caught its absence
+    # before, since it never checked the header at all.
+    assert content_type_header == "application/gzip"
 
 
 def test_build_submission_log_entry_has_the_documented_fields():

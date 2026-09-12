@@ -61,16 +61,29 @@ def compute_file_metadata(path: str) -> tuple[int, int]:
     return st.st_size, int(st.st_mtime)
 
 
-def upload_bytes(upload_url: str, file_path: str) -> None:
+def upload_bytes(upload_url: str, file_path: str, content_type: str = "application/gzip") -> None:
     """PUT `file_path`'s exact bytes to `upload_url` - the plain-HTTP step
     SPEC-ops.md splits out from the MCP calls (a submission bundle is
     small - source files plus one JSON params file - so reading it fully
     into memory rather than streaming is a deliberate simplicity choice,
-    not an oversight)."""
+    not an oversight).
+
+    `content_type` matters here, found the hard way during the real T5.3
+    submission (ref 56175204): Kaggle's start_competition_submission_upload
+    returns a GCS resumable-upload session URL, not an arbitrary endpoint.
+    Without an explicit Content-Type, urllib.request silently defaults
+    bytes bodies to "application/x-www-form-urlencoded" - the real upload
+    only succeeded once verified by hand (curl) with Content-Type set to
+    match the tarball's actual type. This function was never exercised
+    against the real endpoint before that (the real upload was done
+    manually, bypassing it), so this bug shipped untested - see
+    tests/test_submit.py's regression test, which now checks the header.
+    """
     with open(file_path, "rb") as f:
         data = f.read()
     request = urllib.request.Request(upload_url, data=data, method="PUT")
     request.add_header("Content-Length", str(len(data)))
+    request.add_header("Content-Type", content_type)
     with urllib.request.urlopen(request) as response:
         if response.status not in (200, 201, 204):
             raise RuntimeError(f"upload to {upload_url} failed: HTTP {response.status}")
