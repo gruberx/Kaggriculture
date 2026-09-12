@@ -133,7 +133,12 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       against a synthetic worse/better candidate (+ a numerically-higher-but-overlapping case)
 - [x] T7.2 — Coordinate-ascent loop, tested on a toy 2-parameter objective before the real arena
       (single-param sweeps, a correlated-group sweep, and a fixed-point/no-regression check)
-- [ ] T7.3 — Opponent panel (starter/random/previous-best snapshot) + eval-only params override hook
+- [x] T7.3 — Opponent panel (starter/random/previous-best snapshot) + eval-only params override.
+      Deviated from the plan's tentative env-var hook: found a real caching hazard (a wrapper
+      that `import kagg.agent_main` would get that import cached process-wide, silently reusing
+      the first candidate's params for a second one compared in the same process — exactly the
+      "candidate vs previous-best" case). Fixed by copying `agent_main.py`'s real source with its
+      params-load line patched, never importing it as a module — full fidelity, no shared state.
 - [ ] T7.4 — Run the sweep (hiring-count question first); each accepted change its own commit +
       fresh `ops` submission
 - [ ] **Checkpoint 7** — `SPEC-tuning.md` Testing section passes; ≥1 accepted held-out-gated

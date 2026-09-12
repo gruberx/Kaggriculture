@@ -17,12 +17,18 @@ import datetime
 import json
 import os
 import sys
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import diskguard  # noqa: E402
 from harness import BlockResult  # noqa: E402
 
 _ACCEPTED_RUNS_LOG_RELATIVE_PATH = os.path.join("data", "arena", "accepted_runs.jsonl")
+
+_AGENT_MAIN_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "src", "kagg", "agent_main.py"
+)
+_PARAMS_LOAD_LINE = "_PARAMS = load_params()"
 
 
 def wilson_intervals_overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -145,3 +151,83 @@ def coordinate_ascent(
         if not changed:
             break
     return current
+
+
+def write_candidate_agent(params: dict, workdir: str) -> str:
+    """Write a real, standalone agent file into `workdir` that behaves
+    exactly like agent_main.py but loads `params` from a scratch JSON
+    file instead of the checked-in params/policy.json, and return its
+    path - usable directly as an agent path for harness.run_paired/
+    run_block, e.g. to compare two parameter sets against each other
+    without ever mutating params/policy.json (tasks/plan.md T7.3's own
+    Verify criterion).
+
+    Design note - a real deviation from the plan's own tentative
+    suggestion (an env-var hook), found and fixed while designing this,
+    not assumed safe: kaggle_environments' loader execs each agent's raw
+    source into its own fresh globals dict (verified directly in
+    kaggle_environments/agent.py: `exec(code_object, env)`, never going
+    through sys.modules) - safe on its own. But a wrapper that did
+    `import kagg.agent_main` instead of copying its source would have
+    that *inner* import cached process-wide by Python's ordinary import
+    machinery, silently reusing whichever candidate's params loaded
+    first for every other candidate compared in the same process -
+    exactly the "candidate vs previous-best snapshot" opponent-panel
+    case this module needs, where both sides are our own code with
+    different params, potentially both exec'd within one
+    multiprocessing.Pool worker. Copying agent_main.py's real source
+    (never importing it as a module) sidesteps this entirely: the only
+    import in the modified copy is `from kagg.policy.params import
+    load_params`, a pure function with no per-candidate state, so
+    caching it is harmless regardless of how many candidates run in the
+    same process.
+
+    Full fidelity, not a reimplementation: copies agent_main.py's actual
+    source (fault-tolerance, time-budget circuit breaker, everything)
+    rather than a hand-written approximation, since what SPEC-tuning.md's
+    arena needs to measure is what would actually ship.
+    """
+    with open(_AGENT_MAIN_PATH) as f:
+        source = f.read()
+    occurrences = source.count(_PARAMS_LOAD_LINE)
+    if occurrences != 1:
+        raise RuntimeError(
+            f"expected exactly one {_PARAMS_LOAD_LINE!r} line in {_AGENT_MAIN_PATH}, "
+            f"found {occurrences} - agent_main.py may have changed shape; "
+            "update write_candidate_agent to match"
+        )
+
+    unique = uuid.uuid4().hex
+    params_path = os.path.join(workdir, f"tuning_candidate_params_{unique}.json")
+    with open(params_path, "w") as f:
+        json.dump(params, f)
+
+    patched_source = source.replace(_PARAMS_LOAD_LINE, f"_PARAMS = load_params({params_path!r})")
+    agent_path = os.path.join(workdir, f"tuning_candidate_agent_{unique}.py")
+    with open(agent_path, "w") as f:
+        f.write(patched_source)
+    return agent_path
+
+
+def resolve_opponent(opponent, workdir: str) -> str:
+    """A panel entry (see build_opponent_panel) is either a plain
+    built-in name/agent path (used as-is) or a params dict - the
+    previous-best snapshot, written via write_candidate_agent so it's
+    usable as a real agent path."""
+    if isinstance(opponent, dict):
+        return write_candidate_agent(opponent, workdir)
+    return opponent
+
+
+def build_opponent_panel(previous_best_params: dict | None = None) -> list:
+    """The Stage 1 opponent panel (SPEC-tuning.md): starter, random, and
+    the previous-best policy snapshot if one exists yet (None before the
+    first accepted params/policy.json update - there's nothing to
+    compare against). The public yhay81/shop-router-0909 notebook joins
+    once ops downloads it (SPEC-ops.md) - not required to start Stage 1,
+    so not modeled here; append it to the returned list once available.
+    """
+    panel: list = ["starter", "random"]
+    if previous_best_params is not None:
+        panel.append(previous_best_params)
+    return panel

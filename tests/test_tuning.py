@@ -11,6 +11,10 @@ import diskguard  # noqa: E402
 import harness  # noqa: E402
 import tuning  # noqa: E402
 
+_REAL_POLICY_JSON = os.path.join(
+    os.path.dirname(__file__), "..", "src", "kagg", "params", "policy.json"
+)
+
 
 def _block(wins: int, n: int = 50) -> harness.BlockResult:
     return harness.BlockResult(
@@ -180,3 +184,79 @@ def test_coordinate_ascent_never_regresses_a_parameter_not_in_the_grid():
         param_grid, _toy_evaluate, initial_params={"x": 1, "y": 2}
     )
     assert result == {"x": 3, "y": 2}
+
+
+# --- opponent panel (T7.3) ------------------------------------------------
+
+
+def test_write_candidate_agent_produces_a_real_runnable_agent(tmp_path):
+    from kagg.policy.params import DEFAULT_PARAMS
+
+    candidate = dict(DEFAULT_PARAMS, hires_per_day=2)
+    agent_path = tuning.write_candidate_agent(candidate, str(tmp_path))
+
+    result = harness.run_paired(agent_path, "pass", seed=1, episode_steps=48)
+
+    assert result.winner in ("a", "b", "tie")  # ran to completion without error
+
+
+def test_write_candidate_agent_never_touches_the_checked_in_policy_json(tmp_path):
+    from kagg.policy.params import DEFAULT_PARAMS
+
+    before = os.stat(_REAL_POLICY_JSON)
+    candidate_a = dict(DEFAULT_PARAMS, hires_per_day=3)
+    candidate_b = dict(DEFAULT_PARAMS, hires_per_day=0)
+    agent_a = tuning.write_candidate_agent(candidate_a, str(tmp_path))
+    agent_b = tuning.write_candidate_agent(candidate_b, str(tmp_path))
+
+    harness.run_paired(agent_a, agent_b, seed=1, episode_steps=48)
+
+    after = os.stat(_REAL_POLICY_JSON)
+    assert before.st_mtime == after.st_mtime
+    assert before.st_size == after.st_size
+
+
+def test_two_candidate_agents_genuinely_use_their_own_distinct_params(tmp_path):
+    # The real hazard this design avoids (found while designing T7.3, not
+    # anticipated in advance): kaggle_environments' loader execs each
+    # agent's raw source into its own fresh globals dict (verified
+    # directly in kaggle_environments/agent.py: exec(code_object, env),
+    # never going through sys.modules) - safe on its own, but a wrapper
+    # that did `import kagg.agent_main` instead of copying its source
+    # would have its *inner* import cached process-wide, silently
+    # reusing the first candidate's params for the second. This test
+    # compares two candidates against *each other* within one
+    # run_paired call (both seatings, same process) - exactly the
+    # scenario where that hazard would surface if it existed.
+    from kagg.policy.params import DEFAULT_PARAMS
+
+    many_hires = tuning.write_candidate_agent(dict(DEFAULT_PARAMS, hires_per_day=3), str(tmp_path))
+    no_hires = tuning.write_candidate_agent(dict(DEFAULT_PARAMS, hires_per_day=0), str(tmp_path))
+
+    result = harness.run_paired(many_hires, no_hires, seed=1, episode_steps=240)
+
+    assert result.a_total_money != result.b_total_money  # genuinely different behavior
+
+
+def test_build_opponent_panel_includes_starter_and_random_by_default():
+    panel = tuning.build_opponent_panel()
+    assert panel == ["starter", "random"]
+
+
+def test_build_opponent_panel_appends_a_previous_best_snapshot():
+    from kagg.policy.params import DEFAULT_PARAMS
+
+    panel = tuning.build_opponent_panel(previous_best_params=DEFAULT_PARAMS)
+    assert panel == ["starter", "random", DEFAULT_PARAMS]
+
+
+def test_resolve_opponent_passes_through_a_plain_string():
+    assert tuning.resolve_opponent("starter", "/unused") == "starter"
+
+
+def test_resolve_opponent_writes_a_params_dict_to_a_real_agent(tmp_path):
+    from kagg.policy.params import DEFAULT_PARAMS
+
+    resolved = tuning.resolve_opponent(DEFAULT_PARAMS, str(tmp_path))
+    assert resolved != "starter"
+    assert os.path.isfile(resolved)
