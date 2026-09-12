@@ -100,7 +100,21 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       on it (5274→3932 regression, traced and fixed via `tasks._is_actually_harvestable()`). The
       fix alone (independent of animals) unlocked a much larger real improvement across all golden
       seeds (e.g. starter/seed2: 5292→13322) — re-recorded golden episodes accordingly.
-- [ ] T6.4 — Real-episode integration + re-measurement (document any timing/deadlock bug found)
+- [x] T6.4 — Real-episode integration + re-measurement.
+      Found+fixed 3 real bugs that together meant NO animal had ever actually produced
+      anything in prior measurements: (1) PLACE/FEED consume from the acting unit's own
+      inventory, never the shed BUY_ANIMAL/BUY_PRODUCT deliver to — added a PICKUP task
+      (tasks.py) + gamelib.farm.shed_access_tiles(); (2) the wheat buy/sell arbitrage sold
+      100% of shed WHEAT every turn, racing against PICKUP for feeding — added a
+      wheat_reserve param (market.py); (3) decide() kept re-buying animals forever (a
+      shifting top-choice ranking, and no "already have one" check) — a real trace found
+      21 BUY_ANIMAL vs only 18 PLACEs — added two guards in decide.py (finish a stuck
+      animal before anything new; never buy a second of an already-placed type). All three
+      needed together before every golden seed showed a genuine improvement over T6.3
+      (e.g. pass/seed1: 5510→8078). Re-recorded golden episodes; added a permanent
+      real-episode invariant test confirming production actually happens. Re-measured via
+      arena.py: 50/50 vs both starter/random (same as Checkpoint 5 — no regression; the
+      real gap is against the Kaggle field, not these weak baselines).
 - [ ] T6.5 — Fix documented `BUY_SEED` gap: don't buy without an empty tile to plant on
 - [ ] T6.6 — Extend `kaggle_environments`-import boundary check to `policy/` (+ `agent_main.py`)
 - [ ] **Checkpoint 6** — full suite green; arena re-measurement vs starter/random recorded in the

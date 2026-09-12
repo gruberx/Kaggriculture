@@ -234,6 +234,71 @@ def test_decide_emits_a_build_task_when_animal_is_the_top_choice():
     assert action["farmer"] == ["BUILD_PASTURE"]  # COW's structure
 
 
+def test_decide_picks_up_a_bought_animal_before_placing_it():
+    # T6.4's central finding: BUY_ANIMAL delivers to the shed, but PLACE
+    # needs the animal in the farmer's own inventory. The base fixture's
+    # farmer stands at (4, 4), one of the four real shed-access tiles
+    # (gamelib.farm.shed_access_tiles(10)) - so PICKUP fires immediately,
+    # no movement needed.
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    obs["farms"][0]["tiles"][2][4] = {"kind": "PASTURE"}  # already built
+    obs["private"]["shed"]["COW"] = 1
+    action = decide(obs, DEFAULT_PARAMS)
+    assert action["farmer"] == ["PICKUP", "COW", 1]
+
+
+def test_decide_finishes_a_stuck_animal_before_starting_anything_new():
+    # T6.4's finding: a previously-bought animal already sitting in the
+    # shed must be finished (built/picked-up/placed) before decide()
+    # starts a *new* investment, even if the current top choice has since
+    # shifted to something else entirely (here: MELON, a crop, at base
+    # pricing) - without this, a shifting top choice abandoned paid-for
+    # animals in the shed forever (measured: 21 BUY_ANIMAL orders against
+    # only 18 PLACEs in one real episode).
+    obs = _obs()
+    obs["private"]["shed"]["COW"] = 1
+    action = decide(obs, DEFAULT_PARAMS)
+    assert action["farmer"] == ["BUILD_PASTURE"]  # not PLANT MELON
+    assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
+
+
+def test_decide_does_not_buy_a_new_animal_while_a_different_one_is_stuck():
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW would otherwise be top choice
+    obs["private"]["shed"]["GOOSE"] = 1  # already bought, unplaced, a different animal
+    action = decide(obs, DEFAULT_PARAMS)
+    assert action["farmer"] == ["BUILD_COOP"]  # finishes GOOSE, not COW
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
+def test_decide_does_not_buy_a_second_animal_of_a_type_already_placed_and_alive():
+    # A second real bug found the same way as the stuck-animal one:
+    # even with that fix, decide() kept re-buying *another* instance of
+    # the top-ranked animal forever, even with one already placed and
+    # producing - a live episode showed 18 BUY_ANIMAL orders for a farm
+    # that only ever needed one of each. Deliberate simplification: never
+    # pursue a second instance of an animal type already placed and
+    # alive, correct for a single farmer that can't reliably tend more
+    # than one anyway.
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW is the top choice
+    obs["farms"][0]["tiles"][3][3] = {
+        "kind": "PASTURE",
+        "animal": "COW",
+        "placed_day": 0,
+        "yield_units": 0,
+        "consecutive_unfed": 0,
+        "fed_today": True,
+        "cared_today": False,
+        "fertilizer_available": False,
+        "pending_care_bonus": 0,
+    }
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+    assert action["farmer"] != ["BUILD_PASTURE"]
+
+
 def test_decide_plants_nothing_when_no_crop_can_mature_in_time():
     obs = _obs()
     obs["day"] = 29

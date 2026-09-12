@@ -54,6 +54,7 @@ def sell_orders(
     market_inventory: dict,
     params: dict | None = None,
     max_orders: int = 10,
+    wheat_reserve: int = 0,
 ) -> list[list]:
     """Sell orders for this turn, one per sellable item with stock and a
     price that clears its margin, capped at `max_orders` (kept as an
@@ -67,6 +68,18 @@ def sell_orders(
     the shed, rather than dumped in one order (README.md "Selling
     inventory to the market": a single large SELL order walks the price
     down unit-by-unit within that same turn).
+
+    `wheat_reserve` keeps that many WHEAT units off the sell list
+    regardless of price. Real bug found while implementing T6.4: the
+    wheat buy/sell arbitrage (a real, deliberate small income source -
+    T3.6) sold 100% of shed WHEAT every turn it was profitable, which
+    raced against any attempt to PICKUP wheat for feeding a placed
+    animal - a direct episode trace showed the shed's WHEAT flickering
+    0/10 every single turn, so the farmer could never complete a PICKUP
+    before the arbitrage's own SELL order emptied the shed again, and a
+    placed COW starved and escaped. `decide()` sets this to a positive
+    reserve once any animal exists on the farm - the arbitrage still
+    runs on whatever's left above the reserve.
     """
     params = params or {}
     margin = params.get("sell_margin", _DEFAULT_SELL_MARGIN)
@@ -77,6 +90,8 @@ def sell_orders(
         if len(orders) >= max_orders:
             break
         count = shed.get(item, 0)
+        if item == "WHEAT":
+            count = max(0, count - wheat_reserve)
         if count <= 0:
             continue
         current_price = price(item, market_inventory.get(item, MARKET_I0))
@@ -120,12 +135,16 @@ def market_orders(
     wheat_on_hand: int,
     params: dict | None = None,
     max_orders: int = 10,
+    wheat_reserve: int = 0,
 ) -> list[list]:
     """This turn's full market-layer order list: sells first, then a
     wheat restock if there's still room under `max_orders` - never more
     than `max_orders` total, matching `maxMarketOrdersPerTurn`.
+
+    `wheat_reserve` is passed straight through to `sell_orders` - see its
+    own docstring for why it exists.
     """
-    orders = sell_orders(shed, market_inventory, params, max_orders=max_orders)
+    orders = sell_orders(shed, market_inventory, params, max_orders=max_orders, wheat_reserve=wheat_reserve)
     if len(orders) < max_orders:
         wheat_order = buy_wheat_order(wheat_on_hand, market_prices.get("WHEAT", 0), params)
         if wheat_order is not None:

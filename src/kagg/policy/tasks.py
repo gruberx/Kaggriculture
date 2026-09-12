@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from kagg.gamelib.constants import ANIMALS, CROPS
-from kagg.gamelib.farm import tile_distance
+from kagg.gamelib.farm import shed_access_tiles, tile_distance
 
 PRIORITY_PREVENT_LOSS = 0
 PRIORITY_HARVEST = 1
@@ -29,14 +29,25 @@ PRIORITY_ROUTINE_CARE = 2
 PRIORITY_PLANT = 3
 PRIORITY_MAINTENANCE = 4
 
+# How much WHEAT to PICKUP in one trip once any is needed for feeding -
+# more than the 1 unit a single FEED consumes, so the farmer doesn't have
+# to revisit the shed every single day an animal needs feeding. Matches
+# params.DEFAULT_PARAMS's wheat_restock_qty default (10) in spirit, not
+# by import - this module has no dependency on kagg.policy.params.
+_WHEAT_PICKUP_BATCH = 10
+
 
 @dataclass(frozen=True)
 class Task:
     priority: int
     pos: tuple[int, int]
-    op: str  # "WATER"|"HARVEST"|"FEED"|"PLANT"|"DIG"|"COLLECT_FERTILIZER"|"BUILD_COOP"|"BUILD_PASTURE"|"PLACE"
+    # "WATER"|"HARVEST"|"FEED"|"PLANT"|"DIG"|"COLLECT_FERTILIZER"|
+    # "BUILD_COOP"|"BUILD_PASTURE"|"PLACE"|"PICKUP"
+    op: str
     crop: str | None = None  # only set for PLANT tasks
     animal: str | None = None  # only set for PLACE tasks
+    item: str | None = None  # only set for PICKUP tasks
+    qty: int = 1  # only meaningful for PICKUP tasks
 
 
 def _closest_pos(candidates: list[tuple[int, int]], unit_positions) -> tuple[int, int] | None:
@@ -65,7 +76,8 @@ def build_task_list(
     unit_positions=(),
     plant_crop: str | None = None,
     desired_animal: str | None = None,
-    have_animal: bool = False,
+    shed: dict | None = None,
+    farmer_inventory: dict | None = None,
     current_day: int = 0,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
@@ -76,35 +88,47 @@ def build_task_list(
     means don't plant this turn (no seeds available, or nothing worth
     planting).
 
-    `desired_animal` (T6.2) generalizes the same idea to animal
-    acquisition: builds the matching structure (BUILD_COOP/BUILD_PASTURE)
-    proactively on the nearest empty tile if none exists yet - this does
-    NOT wait on `have_animal` (tasks/plan.md T6.2's design decision: the
-    structure and the BUY_ANIMAL market order can complete in parallel
-    across turns) - or PLACEs a held animal (`have_animal=True`) on the
-    nearest matching empty structure once one exists. If a matching
-    structure already exists but the animal isn't held yet, there is
-    nothing for this layer to do this turn (BUY_ANIMAL is decide()'s
-    concern, not this one's).
+    `desired_animal` (T6.2/T6.3/T6.4) generalizes the same idea to animal
+    acquisition, now a real multi-step pipeline: builds the matching
+    structure (BUILD_COOP/BUILD_PASTURE) proactively on the nearest empty
+    tile if none exists yet (tasks/plan.md T6.2's design decision: this
+    does not wait on already owning the animal - it runs in parallel with
+    the BUY_ANIMAL order); PICKUPs a bought animal from the shed into the
+    farmer's own inventory once a matching structure exists (T6.4's real
+    finding - see `_new_investment_task`'s docstring for why this step
+    exists at all); then PLACEs it once actually held. `shed` and
+    `farmer_inventory` are both needed because they mean different
+    things: `shed` is what's been bought (BUY_ANIMAL delivers there, not
+    to any unit's inventory), `farmer_inventory` is what the farmer is
+    actually carrying (what PLACE - and FEED, below - really consume
+    from). Simplification, not an oversight: this whole pipeline is
+    modeled as the *farmer's* (not any hand's) inventory - correct while
+    `hires_per_day` defaults to 0; revisit once hiring is tuned to a
+    nonzero value, since a hand could end up carrying the animal instead.
 
     At most one new-investment task (`PLANT`/`BUILD_COOP`/
-    `BUILD_PASTURE`/`PLACE`) is ever produced per call - one action
-    plants/builds/places at most one tile, so there's nothing to gain
+    `BUILD_PASTURE`/`PICKUP`/`PLACE`) is ever produced per call - one
+    action advances at most one investment, so there's nothing to gain
     from listing every candidate right now. `desired_animal` takes
     priority over `plant_crop` if both are somehow given (callers are
     expected to supply only one, mirroring `_top_investment_choice`'s
     single top pick, but this keeps behavior well-defined either way).
+    A *separate* PICKUP task (for WHEAT, not an animal) can also fire
+    independently, in place of a blocked FEED - see `_animal_tile_tasks`.
 
     `current_day` gates HARVEST for one-time crops (T6.3's real bug fix,
-    not anticipated in advance - see `_plant_tile_tasks`'s own docstring
-    for the full story). Defaults to 0 for callers that don't pass it
-    (e.g. existing tests using `planted_day=0` fixtures), not the
+    not anticipated in advance - see `_is_actually_harvestable`'s own
+    docstring for the full story). Defaults to 0 for callers that don't
+    pass it (e.g. existing tests using `planted_day=0` fixtures), not the
     intended real-play path - `decide()` always supplies the real day.
     """
+    shed = shed or {}
+    farmer_inventory = farmer_inventory or {}
     tasks: list[Task] = []
     empty_tiles: list[tuple[int, int]] = []
     matching_structure_tiles: list[tuple[int, int]] = []
     desired_structure = ANIMALS[desired_animal]["structure"] if desired_animal is not None else None
+    wheat_pickup_priority: int | None = None
 
     for y, row in enumerate(tiles):
         for x, tile in enumerate(row):
@@ -120,15 +144,27 @@ def build_task_list(
             elif kind == "PLANT":
                 tasks.extend(_plant_tile_tasks(pos, tile, current_day))
             elif "animal" in tile:
-                tasks.extend(_animal_tile_tasks(pos, tile))
+                animal_tasks, needs_wheat_priority = _animal_tile_tasks(pos, tile, farmer_inventory)
+                tasks.extend(animal_tasks)
+                if needs_wheat_priority is not None:
+                    wheat_pickup_priority = (
+                        needs_wheat_priority
+                        if wheat_pickup_priority is None
+                        else min(wheat_pickup_priority, needs_wheat_priority)
+                    )
             elif kind == desired_structure:
                 matching_structure_tiles.append(pos)
             # An empty COOP/PASTURE not matching desired_structure has
             # nothing to do.
 
+    if wheat_pickup_priority is not None and shed.get("WHEAT", 0) > 0:
+        pos = _closest_pos(shed_access_tiles(len(tiles)), unit_positions)
+        qty = min(shed["WHEAT"], _WHEAT_PICKUP_BATCH)
+        tasks.append(Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty))
+
     investment_task = _new_investment_task(
-        empty_tiles, matching_structure_tiles, unit_positions,
-        plant_crop, desired_animal, desired_structure, have_animal,
+        empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
+        plant_crop, desired_animal, desired_structure, shed, farmer_inventory,
     )
     if investment_task is not None:
         tasks.append(investment_task)
@@ -138,17 +174,29 @@ def build_task_list(
 
 
 def _new_investment_task(
-    empty_tiles, matching_structure_tiles, unit_positions,
-    plant_crop, desired_animal, desired_structure, have_animal,
+    empty_tiles, matching_structure_tiles, unit_positions, board_size,
+    plant_crop, desired_animal, desired_structure, shed, farmer_inventory,
 ) -> Task | None:
+    """T6.4's real finding, not anticipated when T6.2 first wrote this
+    pipeline: PLACE's real handler (kaggriculture.py) consumes the animal
+    from the *acting unit's own inventory*, not the shed - BUY_ANIMAL
+    delivers to the shed (verified directly: a real episode showed PLACE
+    silently failing forever, the animal just sitting in the shed).
+    A PICKUP step (standing on a real shed-access tile - see
+    gamelib.farm.shed_access_tiles) is required in between."""
     if desired_animal is not None:
-        if have_animal and matching_structure_tiles:
+        animal_in_hand = farmer_inventory.get(desired_animal, 0) > 0
+        animal_in_shed = shed.get(desired_animal, 0) > 0
+        if animal_in_hand and matching_structure_tiles:
             pos = _closest_pos(matching_structure_tiles, unit_positions)
             return Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal)
         if not matching_structure_tiles and empty_tiles:
             pos = _closest_pos(empty_tiles, unit_positions)
             build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
             return Task(PRIORITY_PLANT, pos, build_op)
+        if matching_structure_tiles and animal_in_shed and not animal_in_hand:
+            pos = _closest_pos(shed_access_tiles(board_size), unit_positions)
+            return Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1)
         return None
     if plant_crop is not None and empty_tiles:
         pos = _closest_pos(empty_tiles, unit_positions)
@@ -197,17 +245,28 @@ def _is_actually_harvestable(tile: dict, current_day: int) -> bool:
     return current_day - tile["planted_day"] >= cd["first_yield_day"]
 
 
-def _animal_tile_tasks(pos: tuple[int, int], tile: dict) -> list[Task]:
+def _animal_tile_tasks(pos: tuple[int, int], tile: dict, farmer_inventory: dict) -> tuple[list[Task], int | None]:
+    """Returns (tasks, wheat_pickup_priority) - the second element is
+    `None` unless this tile needs feeding and the farmer isn't currently
+    carrying any WHEAT to do it with (T6.4's finding, same root cause as
+    PLACE's: FEED's real handler consumes from the acting unit's own
+    inventory, not the shed - see `_new_investment_task`'s docstring).
+    The caller aggregates this across all animal tiles into at most one
+    PICKUP task, at the most urgent priority found."""
     tasks = []
+    wheat_pickup_priority = None
     if not tile.get("fed_today", False):
         urgent = tile.get("consecutive_unfed", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
-        tasks.append(Task(priority, pos, "FEED"))
+        if farmer_inventory.get("WHEAT", 0) > 0:
+            tasks.append(Task(priority, pos, "FEED"))
+        else:
+            wheat_pickup_priority = priority
     if tile.get("yield_units", 0) > 0:
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     if tile.get("fertilizer_available", False):
         tasks.append(Task(PRIORITY_MAINTENANCE, pos, "COLLECT_FERTILIZER"))
-    return tasks
+    return tasks, wheat_pickup_priority
 
 
 def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> list[Task | None]:
@@ -260,6 +319,8 @@ def action_for_unit(unit_pos: tuple[int, int], task: Task | None) -> list:
             return ["PLANT", task.crop]
         if task.op == "PLACE":
             return ["PLACE", task.animal]
+        if task.op == "PICKUP":
+            return ["PICKUP", task.item, task.qty]
         return [task.op]
     x, y = unit_pos
     tx, ty = task.pos

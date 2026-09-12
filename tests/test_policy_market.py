@@ -42,6 +42,37 @@ def test_sell_orders_skips_items_with_zero_stock():
     assert orders == [["SELL", "WHEAT", 5]]
 
 
+def test_sell_orders_reserves_wheat_for_feeding_instead_of_selling_it_all():
+    # Real bug found while implementing T6.4: the wheat buy/sell
+    # arbitrage (a real, deliberate small income source - see T3.6) sold
+    # 100% of shed WHEAT every turn it was profitable, racing against any
+    # attempt to PICKUP wheat for feeding a placed animal - a direct
+    # episode trace showed the shed's WHEAT flickering 0/10 every single
+    # turn, so the farmer could never complete a PICKUP before the
+    # arbitrage's own SELL order emptied the shed again, and the placed
+    # animal starved and escaped. wheat_reserve keeps enough on hand
+    # regardless of how profitable selling it would otherwise be.
+    shed = {p: 0 for p in PRODUCTS}
+    shed["WHEAT"] = 10
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, wheat_reserve=10)
+    assert orders == []
+
+
+def test_sell_orders_sells_only_the_wheat_above_the_reserve():
+    shed = {p: 0 for p in PRODUCTS}
+    shed["WHEAT"] = 15
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, wheat_reserve=10)
+    assert orders == [["SELL", "WHEAT", 5]]
+
+
+def test_sell_orders_reserve_never_blocks_other_products():
+    shed = {p: 0 for p in PRODUCTS}
+    shed["WHEAT"] = 5
+    shed["EGG"] = 4
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, wheat_reserve=10)
+    assert orders == [["SELL", "EGG", 4]]
+
+
 def test_sell_orders_never_emits_an_order_for_a_non_product_item():
     # The shed can also hold live animals waiting to be PLACEd - those are
     # never a SELL candidate (README.md: only products are sellable).
@@ -114,6 +145,15 @@ def test_market_orders_never_emits_buy_product_for_anything_but_wheat():
     buy_product_orders = [o for o in orders if o[0] == "BUY_PRODUCT"]
     assert all(o[1] == "WHEAT" for o in buy_product_orders)
     assert len(buy_product_orders) == 1
+
+
+def test_market_orders_passes_the_wheat_reserve_through_to_sell_orders():
+    shed = {p: 0 for p in PRODUCTS}
+    shed["WHEAT"] = 10
+    orders = market_orders(
+        shed, _BASE_MARKET_INVENTORY, market_prices={"WHEAT": 25}, wheat_on_hand=10, wheat_reserve=10
+    )
+    assert [o for o in orders if o[0] == "SELL"] == []
 
 
 def test_market_orders_total_never_exceeds_max_orders():

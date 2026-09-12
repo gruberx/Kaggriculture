@@ -8,7 +8,7 @@ since that costs nothing extra and catches an off-by-one for free.
 
 from kaggle_environments.envs.kaggriculture import kaggriculture as real
 
-from kagg.gamelib.farm import land_price, tile_distance
+from kagg.gamelib.farm import land_price, shed_access_tiles, tile_distance
 
 
 def test_tile_distance_is_zero_on_identity():
@@ -48,3 +48,15 @@ def test_land_price_matches_documented_prices():
     assert land_price(0) == 1000
     assert land_price(1) == 2000
     assert land_price(2) == 4000
+
+
+def test_shed_access_tiles_matches_the_real_interpreter():
+    # Found needed while implementing T6.4: PICKUP/PLACE/FEED all key off
+    # standing on one of these exact tiles (_is_shed_adjacent), so this
+    # must match kaggriculture.py's own _shed_access_tiles precisely, not
+    # just "somewhere near the shed."
+    assert shed_access_tiles(10) == real._shed_access_tiles(10)
+
+
+def test_shed_access_tiles_are_the_board_center():
+    assert set(shed_access_tiles(10)) == {(4, 4), (5, 4), (4, 5), (5, 5)}

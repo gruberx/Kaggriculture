@@ -84,8 +84,48 @@ def test_build_task_list_routine_watering_is_lower_priority_than_prevent_loss():
 def test_build_task_list_flags_prevent_loss_feeding():
     tiles = _empty_tiles()
     tiles[3][3] = _animal_tile(consecutive_unfed=1, fed_today=False)
-    tasks = build_task_list(tiles)
+    tasks = build_task_list(tiles, farmer_inventory={"WHEAT": 1})
     assert any(t.priority == PRIORITY_PREVENT_LOSS and t.op == "FEED" and t.pos == (3, 3) for t in tasks)
+
+
+def test_build_task_list_picks_up_wheat_instead_of_feeding_without_any_on_hand():
+    # Real gap found while implementing T6.4, not anticipated in advance:
+    # the real FEED handler consumes WHEAT from the *acting unit's own
+    # inventory* (kaggriculture.py's _inv_take(inv, "WHEAT", 1), where
+    # inv is _farmer_inventory), not the shed - BUY_PRODUCT delivers to
+    # the shed. Without a PICKUP step first, FEED silently fails forever
+    # and every placed animal starves and escapes.
+    tiles = _empty_tiles()
+    tiles[3][3] = _animal_tile(consecutive_unfed=1, fed_today=False)
+    tasks = build_task_list(
+        tiles, unit_positions=[(4, 4)], farmer_inventory={}, shed={"WHEAT": 5}
+    )
+    assert [t for t in tasks if t.op == "FEED"] == []
+    pickup = [t for t in tasks if t.op == "PICKUP"]
+    assert len(pickup) == 1
+    assert pickup[0].item == "WHEAT"
+    assert pickup[0].priority == PRIORITY_PREVENT_LOSS  # as urgent as the FEED it stands in for
+    assert pickup[0].pos in {(4, 4), (5, 4), (4, 5), (5, 5)}  # a real shed-access tile
+
+
+def test_build_task_list_does_not_pick_up_wheat_the_shed_does_not_have():
+    tiles = _empty_tiles()
+    tiles[3][3] = _animal_tile(consecutive_unfed=0, fed_today=False)  # routine, not urgent
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], farmer_inventory={}, shed={})
+    assert [t for t in tasks if t.op in ("FEED", "PICKUP")] == []
+
+
+def test_build_task_list_wheat_pickup_is_routine_when_no_animal_is_urgent():
+    tiles = _empty_tiles()
+    tiles[3][3] = _animal_tile(consecutive_unfed=0, fed_today=False)
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], farmer_inventory={}, shed={"WHEAT": 5})
+    pickup = [t for t in tasks if t.op == "PICKUP"]
+    assert pickup[0].priority == PRIORITY_ROUTINE_CARE
+
+
+def test_action_for_unit_includes_item_and_qty_for_pickup():
+    task = Task(priority=PRIORITY_PREVENT_LOSS, pos=(4, 4), op="PICKUP", item="WHEAT", qty=5)
+    assert action_for_unit((4, 4), task) == ["PICKUP", "WHEAT", 5]
 
 
 def test_build_task_list_flags_harvest_ready_tiles():
@@ -202,7 +242,7 @@ def _empty_structure(kind: str) -> dict:
 
 def test_build_task_list_builds_a_structure_when_none_exists_yet():
     tiles = _empty_tiles()
-    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="COW", have_animal=False)
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="COW")
     assert len(tasks) == 1
     assert tasks[0].op == "BUILD_PASTURE"  # COW's structure, per gamelib.constants.ANIMALS
     assert tasks[0].pos == (4, 4)
@@ -213,34 +253,59 @@ def test_build_task_list_builds_proactively_even_when_the_animal_is_already_held
     # already owning the animal - it can run in parallel with the
     # BUY_ANIMAL order.
     tiles = _empty_tiles()
-    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="COW", have_animal=True)
+    tasks = build_task_list(
+        tiles, unit_positions=[(4, 4)], desired_animal="COW", farmer_inventory={"COW": 1}
+    )
     assert len(tasks) == 1
     assert tasks[0].op == "BUILD_PASTURE"
 
 
 def test_build_task_list_builds_coop_for_goose():
     tiles = _empty_tiles()
-    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="GOOSE", have_animal=False)
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="GOOSE")
     assert tasks[0].op == "BUILD_COOP"
 
 
 def test_build_task_list_places_a_held_animal_on_a_matching_empty_structure():
+    # "Held" specifically means in the *farmer's own inventory* - PLACE's
+    # real handler (kaggriculture.py) consumes from there, not the shed
+    # (T6.4's real finding - see the PICKUP tests below).
     tiles = _empty_tiles()
     tiles[4][4] = _empty_structure("PASTURE")
-    tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW", have_animal=True)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], desired_animal="COW", farmer_inventory={"COW": 1}
+    )
     assert len(tasks) == 1
     assert tasks[0].op == "PLACE"
     assert tasks[0].pos == (4, 4)
     assert tasks[0].animal == "COW"
 
 
-def test_build_task_list_does_nothing_when_structure_exists_but_animal_not_held():
-    # Structure already built, BUY_ANIMAL hasn't landed yet (decide()'s
-    # job, pending) - neither BUILD (already done) nor PLACE (nothing to
-    # place) applies this turn.
+def test_build_task_list_picks_up_an_animal_held_in_the_shed_but_not_in_hand():
+    # T6.4's central finding: BUY_ANIMAL delivers to the shed, but PLACE
+    # needs the animal in the farmer's own inventory - a PICKUP step
+    # (standing on a real shed-access tile) is required in between, or
+    # PLACE silently fails forever (verified directly against a real
+    # episode: the animal just sat in the shed, never placed).
     tiles = _empty_tiles()
     tiles[4][4] = _empty_structure("PASTURE")
-    tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW", have_animal=False)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], desired_animal="COW", shed={"COW": 1}
+    )
+    assert len(tasks) == 1
+    assert tasks[0].op == "PICKUP"
+    assert tasks[0].item == "COW"
+    assert tasks[0].qty == 1
+    assert tasks[0].pos in {(4, 4), (5, 4), (4, 5), (5, 5)}
+
+
+def test_build_task_list_does_nothing_when_structure_exists_but_animal_not_bought_yet():
+    # Structure already built, BUY_ANIMAL hasn't landed yet (decide()'s
+    # job, pending) - neither BUILD (already done) nor PICKUP/PLACE
+    # (nothing bought yet) applies this turn.
+    tiles = _empty_tiles()
+    tiles[4][4] = _empty_structure("PASTURE")
+    tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW")
     assert tasks == []
 
 
@@ -248,7 +313,9 @@ def test_build_task_list_ignores_a_mismatched_empty_structure():
     # An empty COOP sits idle when the desired animal needs a PASTURE.
     tiles = _empty_tiles()
     tiles[4][4] = _empty_structure("COOP")
-    tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW", have_animal=True)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], desired_animal="COW", farmer_inventory={"COW": 1}
+    )
     assert tasks[0].op == "BUILD_PASTURE"  # builds a fresh PASTURE elsewhere, ignoring the COOP
 
 
@@ -256,7 +323,9 @@ def test_build_task_list_places_on_the_nearest_matching_structure():
     tiles = _empty_tiles()
     tiles[0][0] = _empty_structure("PASTURE")
     tiles[9][9] = _empty_structure("PASTURE")
-    tasks = build_task_list(tiles, unit_positions=[(9, 8)], desired_animal="COW", have_animal=True)
+    tasks = build_task_list(
+        tiles, unit_positions=[(9, 8)], desired_animal="COW", farmer_inventory={"COW": 1}
+    )
     assert tasks[0].pos == (9, 9)
 
 

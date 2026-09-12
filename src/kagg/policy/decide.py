@@ -58,6 +58,11 @@ _DEFAULT_SEASON_LENGTH_DAYS = 30
 # default baked in, not something read from obs.
 _DEFAULT_SHED_CAPACITY = 100
 
+# How much WHEAT to keep off the sell-everything arbitrage once any
+# animal exists on the farm - see the wheat_reserve wiring below and
+# market.sell_orders's own docstring for the real deadlock this avoids.
+_WHEAT_FEED_RESERVE = 10
+
 
 def _crop_has_time_to_mature(crop: str, current_day: int, season_length_days: int) -> bool:
     """True if planting `crop` *today* still leaves enough season left to
@@ -146,12 +151,60 @@ def decide(obs: dict, params: dict) -> dict:
 
     have_seed = desired_crop is not None and seeds.get(desired_crop, 0) > 0
     plant_crop = desired_crop if have_seed else None
-    have_animal = desired_animal is not None and shed.get(desired_animal, 0) > 0
+    # Index 0 is always the farmer's own inventory (_farmer_inventory's
+    # own indexing convention - hands are index 1+). PLACE/FEED's real
+    # handlers consume from here, never the shed directly - see
+    # tasks.build_task_list's own docstring for why both are needed.
+    farmer_inventory = (private.get("inventories") or [{}])[0]
+
+    # Real bug found while implementing T6.4: _top_investment_choice's
+    # ranking can shift turn to turn as market prices move, and reacting
+    # to it immediately meant repeatedly buying a *different* animal
+    # before the previous one was ever placed - a direct episode trace
+    # showed 21 BUY_ANIMAL orders against only 18 PLACEs, abandoning
+    # several paid-for animals to rot in the shed forever (each purchase
+    # a sunk $300-500 loss). Finish placing whatever's already been
+    # bought - found here by scanning the shed/farmer_inventory directly,
+    # not by remembering past turns (decide() stays a pure function of
+    # obs+params) - before ever considering a new purchase, regardless of
+    # what the current top choice ranks highest.
+    stuck_animal = next(
+        (a for a in ANIMALS if shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0), None
+    )
+    placed_animal_types = {
+        tile["animal"]
+        for row in me["tiles"]
+        for tile in row
+        if isinstance(tile, dict) and "animal" in tile
+    }
+    if stuck_animal is not None:
+        acquisition_animal = stuck_animal
+        plant_crop = None  # finish the paid-for animal before starting a new crop too
+    elif desired_animal is not None and desired_animal in placed_animal_types:
+        # A second real bug found the same way: even with the stuck-
+        # animal fix above, decide() kept re-buying *another* instance of
+        # the same top-ranked animal indefinitely - a live, well-fed,
+        # already-producing COW is not "done" in _top_investment_choice's
+        # eyes, so it commissioned a second one, then a third, forever.
+        # Deliberate simplification, not a full fix: never pursue a
+        # second instance of an animal type we already have placed and
+        # alive, rather than re-ranking to find the next-best
+        # alternative - correct and safe for a single farmer (which
+        # can't reliably tend more than one animal's feeding anyway
+        # while also farming crops); revisit once multiple hands make
+        # tending more than one worthwhile.
+        acquisition_animal = None
+    else:
+        acquisition_animal = desired_animal
+    have_animal_anywhere = acquisition_animal is not None and (
+        shed.get(acquisition_animal, 0) > 0 or farmer_inventory.get(acquisition_animal, 0) > 0
+    )
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
         me["tiles"], unit_positions,
-        plant_crop=plant_crop, desired_animal=desired_animal, have_animal=have_animal,
+        plant_crop=plant_crop, desired_animal=acquisition_animal,
+        shed=shed, farmer_inventory=farmer_inventory,
         current_day=current_day,
     )
     assignment = assign_units(tasks, unit_positions)
@@ -162,6 +215,16 @@ def decide(obs: dict, params: dict) -> dict:
         for i in range(1, len(unit_positions))
     ]
 
+    # Reserve WHEAT from the sell-everything arbitrage once any animal
+    # exists on the farm - see market.sell_orders's own docstring for the
+    # real deadlock this avoids (found during T6.4: the arbitrage's own
+    # SELL emptied the shed before a PICKUP for feeding could ever
+    # complete, starving a placed COW to escape). Matches
+    # tasks._WHEAT_PICKUP_BATCH's batch size, not by import (tasks.py has
+    # no dependency on this module) - keep the two in sync by hand if
+    # either changes.
+    wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_types else 0
+
     market = market_orders(
         shed,
         obs["market"]["inventory"],
@@ -169,6 +232,7 @@ def decide(obs: dict, params: dict) -> dict:
         wheat_on_hand=shed.get("WHEAT", 0),
         params=params,
         max_orders=_MAX_MARKET_ORDERS,
+        wheat_reserve=wheat_reserve,
     )
 
     # Seed/animal purchase: arrives next turn (market orders resolve
@@ -176,16 +240,19 @@ def decide(obs: dict, params: dict) -> dict:
     # naturally starts firing once the seed/animal shows up in a future
     # observation, no extra state needed here. Mutually exclusive by
     # construction (desired_crop and desired_animal can't both be set -
-    # _top_investment_choice returns a single top pick).
-    if desired_crop is not None and not have_seed and len(market) < _MAX_MARKET_ORDERS:
+    # _top_investment_choice returns a single top pick). Both gated on
+    # `stuck_animal is None` too - finish placing what's already bought
+    # (see the stuck_animal comment above) before spending on anything
+    # else, seed or animal.
+    if stuck_animal is None and desired_crop is not None and not have_seed and len(market) < _MAX_MARKET_ORDERS:
         seed_cost = CROPS[desired_crop]["seed"]
         if me["money"] >= seed_cost:
             market.append(["BUY_SEED", desired_crop, 1])
-    elif desired_animal is not None and not have_animal and len(market) < _MAX_MARKET_ORDERS:
-        animal_cost = ANIMALS[desired_animal]["cost"]
+    elif acquisition_animal is not None and not have_animal_anywhere and len(market) < _MAX_MARKET_ORDERS:
+        animal_cost = ANIMALS[acquisition_animal]["cost"]
         shed_capacity = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
         if me["money"] >= animal_cost and shed_room(shed, shed_capacity) > 0:
-            market.append(["BUY_ANIMAL", desired_animal, 1])
+            market.append(["BUY_ANIMAL", acquisition_animal, 1])
 
     # Land purchase, per the strategic layer's tunable threshold
     # (SPEC-policy.md "1. Strategic layer"). One order per turn - if

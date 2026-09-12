@@ -22,6 +22,16 @@ def tile_distance(a: tuple[int, int], b: tuple[int, int]) -> int:
     return abs(ax - bx) + abs(ay - by)
 
 
+def shed_access_tiles(board_size: int) -> list[tuple[int, int]]:
+    """The four inner-corner tiles around the shed (one per quadrant's
+    corner touching the board's exact center), in NWSE order - mirrors
+    kaggriculture.py's `_shed_access_tiles`. PICKUP/PLACE (see
+    kaggriculture.py's `_is_shed_adjacent`) and the shed-drop branch of
+    PLACE all require standing on exactly one of these tiles."""
+    half = board_size // 2
+    return [(half - 1, half - 1), (half, half - 1), (half - 1, half), (half, half)]
+
+
 def land_price(n_unlocked_extra: int) -> int | None:
     """Cost of the next quadrant beyond NW, given how many extra quadrants
     (NE/SW/SE) are already unlocked. `None` once all three are bought -

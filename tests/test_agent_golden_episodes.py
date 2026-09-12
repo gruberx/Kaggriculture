@@ -31,6 +31,24 @@ animals) unlocked a much larger, genuine improvement, since the farmer
 was losing productive time on *every* one-time-crop planting all game,
 not just the one that happened to coincide with an animal purchase.
 
+Re-recorded a third time for T6.4 (real-episode integration): the T6.3
+numbers above turned out to reflect a policy that could never actually
+produce anything from an animal at all. Direct inspection of a real
+episode found PLACE's real handler consumes the animal from the acting
+unit's *own inventory*, never the shed BUY_ANIMAL delivers to - every
+placed animal just sat un-placeable (or, once a PICKUP step was added,
+placed but then starved: FEED has the identical inventory-vs-shed gap
+for WHEAT, and the wheat buy/sell arbitrage's own SELL order emptied
+the shed before a PICKUP for feeding could ever complete). Fixed with a
+PICKUP task (tasks.py), a WHEAT sell-reservation once any animal exists
+(market.py), and two "don't keep re-buying" guards in decide.py (finish
+a stuck, already-bought animal before starting anything new; never buy
+a second instance of an animal type already placed and alive - a real
+episode trace found 21 BUY_ANIMAL orders against only 18 PLACEs before
+these fixes). All three fixes together, not any one
+alone, were needed before every seed showed a genuine improvement over
+T6.3 (e.g. pass/seed1: 5510 -> 8078).
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -56,12 +74,12 @@ AGENT_MAIN_PATH = os.path.join(
 # Phase 4's paired-seed harness, not three ad-hoc seeds), but a real
 # improvement worth locking in as a floor.
 _GOLDEN = {
-    ("starter", 1): (6886.0, 3571.0),
-    ("starter", 2): (13322.0, 3712.0),
-    ("starter", 3): (12899.0, 3425.0),
-    ("pass", 1): (5510.0, 3000.0),
-    ("pass", 2): (8001.0, 3000.0),
-    ("pass", 3): (5733.0, 3000.0),
+    ("starter", 1): (9343.0, 3536.0),
+    ("starter", 2): (13522.0, 3712.0),
+    ("starter", 3): (13198.0, 3421.0),
+    ("pass", 1): (8078.0, 3000.0),
+    ("pass", 2): (10430.0, 3000.0),
+    ("pass", 3): (7930.0, 3000.0),
 }
 
 
@@ -129,3 +147,33 @@ def test_beats_starter_and_random_across_additional_seeds():
             assert our_result.status == "DONE", (opponent, seed)
             assert opponent_result.status == "DONE", (opponent, seed)
             assert our_result.reward > opponent_result.reward, (opponent, seed)
+
+
+def test_at_least_one_animal_reaches_production_in_a_representative_episode():
+    """T6.4's own acceptance criterion (tasks/plan.md): confirms the full
+    animal-acquisition pipeline (choose -> BUY_ANIMAL -> BUILD_* ->
+    PICKUP -> PLACE -> FEED -> production) actually reaches production in
+    a real episode, not just in isolated unit tests.
+
+    Real, not hypothetical: the very first full T6.4 attempt reached
+    PLACE but never production at all (verified by direct inspection of
+    env.steps) - PLACE's real handler consumes the animal from the
+    acting unit's own inventory, not the shed BUY_ANIMAL delivers to, so
+    every placed animal just starved and escaped. Fixed via a PICKUP
+    step (tasks.py) plus a wheat-sale reservation (market.py) and two
+    "don't keep re-buying" guards (decide.py) - see those modules' own
+    docstrings for the full story. This test is the regression guard
+    against ever silently losing that pipeline again.
+    """
+    env = make(
+        "kaggriculture",
+        configuration={"episodeSteps": 720, "seed": 1},
+        debug=False,
+    )
+    env.run([AGENT_MAIN_PATH, "pass"])
+    reached_production = any(
+        step[0]["observation"]["private"].get("shed", {}).get(product, 0) > 0
+        for step in env.steps
+        for product in ("MILK", "WOOL", "EGG")
+    )
+    assert reached_production
