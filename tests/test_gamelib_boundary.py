@@ -6,30 +6,22 @@ the standard library there (see SPEC.md "Rule compliance").
 Promoted from an ad-hoc AST scan run by hand after every gamelib task
 (T0.1-T1.6) into a real test, so it runs with the rest of the suite
 instead of relying on someone remembering to check.
+
+The AST walk itself now lives in tools/boundary_check.py (extracted
+during T5.1) so tools/build_submission.py's bundle audit can reuse it
+instead of drifting apart from this test's own copy. Scope note (not yet
+addressed here - see tasks/plan.md T6.6): this test still only scans
+gamelib/, not policy/ or agent_main.py, even though both ship too.
 """
 
-import ast
+import os
 import pathlib
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+from boundary_check import kaggle_environments_imports as _kaggle_environments_imports  # noqa: E402
 
 _GAMELIB_ROOT = pathlib.Path(__file__).parent.parent / "src" / "kagg" / "gamelib"
-
-
-def _kaggle_environments_imports(source: str) -> list[str]:
-    """Dotted module names of any real `import`/`from ... import`
-    statement in `source` naming kaggle_environments - never a plain text
-    match, which would also flag a comment or docstring mentioning it
-    (exactly the false positive an ad-hoc `grep` produced during T0.1)."""
-    tree = ast.parse(source)
-    found = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                if alias.name.split(".")[0] == "kaggle_environments":
-                    found.append(alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            if node.module and node.module.split(".")[0] == "kaggle_environments":
-                found.append(node.module)
-    return found
 
 
 def test_no_gamelib_file_imports_kaggle_environments():

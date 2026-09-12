@@ -60,7 +60,7 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 
 ## Phase 5 — `ops`: prove the bundle path, get a baseline live
 
-- [ ] T5.1 — `tools/build_submission.py`: bundle, audit (reuse gamelib boundary check), smoke-test, tar
+- [x] T5.1 — `tools/build_submission.py`: bundle, audit (reuse gamelib boundary check), smoke-test, tar
 - [ ] T5.2 — Submission workflow script (`tools/submit.py`) + `--no-submit` dry run + submissions.jsonl log
 - [ ] T5.3 — First real submission (ask-first, human-approved at execution time)
 - [ ] **Checkpoint 5** — bundle builds/audits/smoke-tests clean; first real submission live and
