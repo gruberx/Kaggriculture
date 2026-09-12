@@ -78,7 +78,10 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 
 - [ ] T6.1 — Unified investment choice: `decide.py`'s crop-only filter → full crop+animal ranking
       (generalize `_crop_has_time_to_mature` to animals via `forecast_animal_schedule`)
-- [ ] T6.2 — Acquisition pipeline in `tasks.py`: `BUILD_COOP`/`BUILD_PASTURE`/`PLACE` task generation
+- [ ] T6.2 — Acquisition pipeline in `tasks.py`: `BUILD_COOP`/`BUILD_PASTURE`/`PLACE` task generation,
+      + fix a verified movement inefficiency: PLANT picks the first empty tile in scan order
+      (farthest from the spawn point at board center) instead of the nearest one — make tile
+      selection distance-aware and account for `LAND_ORDER`'s unlock sequence
 - [ ] T6.3 — `BUY_ANIMAL` market order in `decide.py` (mirrors `BUY_SEED`, gated on `shed_room()`)
 - [ ] T6.4 — Real-episode integration + re-measurement (document any timing/deadlock bug found)
 - [ ] T6.5 — Fix documented `BUY_SEED` gap: don't buy without an empty tile to plant on

@@ -350,7 +350,7 @@ matching structure, place it, and collect its production — the largest measure
     the animal; an animal too close to season-end is skipped, mirroring
     `test_top_crop_choice_returns_none_once_nothing_can_mature`.
 
-- **T6.2 — Acquisition pipeline (`tasks.py`)**
+- **T6.2 — Acquisition pipeline (`tasks.py`) + distance-aware tile selection**
   Extend `build_task_list()`'s `plant_crop` parameter into a general "desired investment" concept.
   Design decision: structure-building does not wait on already owning the animal (build
   proactively so the structure and the `BUY_ANIMAL` order complete in parallel across turns);
@@ -358,8 +358,26 @@ matching structure, place it, and collect its production — the largest measure
   `{PLANT, BUILD_COOP, BUILD_PASTURE, PLACE}` per call, same invariant `PLANT` already has.
   `action_for_unit` needs `BUILD_COOP`/`BUILD_PASTURE` (no target beyond standing on the tile) and
   `PLACE` (`["PLACE", animal]`).
+
+  **Fold in a real, verified movement inefficiency found while explaining the game's geometry to
+  the user** (not previously noticed): the board is 10x10, quadrants split at `half=5`
+  (`_quadrant_of` in `kaggriculture.py`), and the shed sits at the exact board center - the four
+  "shed-access" tiles are `(4,4),(5,4),(4,5),(5,5)`, one per quadrant's innermost corner
+  (`_shed_access_tiles`). The farmer spawns at `(4,4)` (`_default_spawn`) - NW's own corner
+  touching the center, i.e. the *far* corner of the only visible area (NW alone, 5x5) at game
+  start. `build_task_list()` currently picks the **first empty tile in row-major scan order**
+  (`(0,0)` first) for `PLANT` - the tile *farthest* from the actual spawn point, not the nearest
+  one. `assign_units()` already uses `tile_distance` to pick which *unit* goes to an already-chosen
+  task, but the task's own tile is never reconsidered for distance. Most competitors reportedly
+  work near the spawn/shed first (user's observation from watching real games). Fix as part of
+  this task: choose the new-investment tile (PLANT and the new BUILD_*/PLACE tasks) by distance
+  to an available unit (or to the shed) rather than scan order, and take `LAND_ORDER`'s unlock
+  sequence (`["NE", "SW", "SE"]`, confirmed) into account when a quadrant newly opens - work should
+  expand outward from that quadrant's own shed-access corner, not restart a row-major scan.
   - **Verify:** empty tile + desired animal + no matching structure → `BUILD_*` task; matching
-    empty structure + animal held in shed → `PLACE` task; neither condition → neither task.
+    empty structure + animal held in shed → `PLACE` task; neither condition → neither task; a unit
+    test with multiple empty tiles at different distances from the farmer confirms the nearest one
+    is chosen for `PLANT`, not the first one in scan order.
 
 - **T6.3 — `BUY_ANIMAL` market order (`decide.py`)**
   Mirrors the existing `BUY_SEED` block: desired investment is an animal not yet held, money
