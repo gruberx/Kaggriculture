@@ -62,6 +62,33 @@ _DEFAULT_SHED_CAPACITY = 100
 # market.sell_orders's own docstring for the real deadlock this avoids.
 _WHEAT_FEED_RESERVE = 10
 
+# T8.3d (the user's own observed defect): shed stock left unsold at the
+# episode's last step scores exactly zero (confirmed directly in the
+# real kaggriculture.py engine - reward is final money only, no
+# auto-liquidation), so the last few days of the season switch
+# market.sell_orders into `liquidate` mode - see its own docstring for
+# why. Accepted at 2 via direct self-play against the same code with the
+# mechanism disabled (liquidation_days_before_end=0): 50/50 on both the
+# working block (seeds 100-149) and the held-out block (seeds 900-949) -
+# a clean, decisive win, expected: this is close to free money the old
+# code was leaving on the table. 2 days x 24 turns/day is also
+# comfortably more than enough turns to drain the whole shed even with
+# the drip cap lifted (shedCapacity=100 vs a >2-turn drain at 50 units/
+# order), so the value has a real mechanical justification, not just a
+# swept number.
+#
+# A real, deliberately NOT chased lead found while sweeping candidate
+# values (1/2/3/5/7/10/15/30, working block only, head-to-head): win
+# rate keeps climbing the larger the window gets, all the way up to
+# effectively disabling the PREMIUM_GOODS drip cap for the *entire*
+# season (30). That is a materially different, unreviewed change (an
+# always-on anti-price-crash protection turning out not to earn its
+# keep at all under current single-farmer conditions) than "liquidate
+# near the end", and deserves its own dedicated investigation rather
+# than smuggling it in under this task's scope - see tasks/todo.md's
+# T8.3d entry.
+_DEFAULT_LIQUIDATION_DAYS_BEFORE_END = 2
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -379,6 +406,12 @@ def decide(obs: dict, params: dict) -> dict:
     # either changes.
     wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_types else 0
 
+    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+    liquidation_days_before_end = params.get(
+        "liquidation_days_before_end", _DEFAULT_LIQUIDATION_DAYS_BEFORE_END
+    )
+    liquidate = current_day >= season_length_days - liquidation_days_before_end
+
     market = market_orders(
         shed,
         obs["market"]["inventory"],
@@ -387,6 +420,7 @@ def decide(obs: dict, params: dict) -> dict:
         params=params,
         max_orders=_MAX_MARKET_ORDERS,
         wheat_reserve=wheat_reserve,
+        liquidate=liquidate,
     )
 
     # Seed/animal purchase: arrives next turn (market orders resolve

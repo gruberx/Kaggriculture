@@ -55,6 +55,7 @@ def sell_orders(
     params: dict | None = None,
     max_orders: int = 10,
     wheat_reserve: int = 0,
+    liquidate: bool = False,
 ) -> list[list]:
     """Sell orders for this turn, one per sellable item with stock and a
     price that clears its margin, capped at `max_orders` (kept as an
@@ -80,6 +81,19 @@ def sell_orders(
     placed COW starved and escaped. `decide()` sets this to a positive
     reserve once any animal exists on the farm - the arbitrage still
     runs on whatever's left above the reserve.
+
+    `liquidate` (T8.3d, the user's own observed defect): both the margin
+    check and the premium-goods drip cap exist to protect *future*
+    turns - refusing a below-cost sale in case the price recovers later,
+    or spreading a big sale out so it doesn't crater tomorrow's price.
+    Neither protection makes sense once there is no future turn left to
+    sell into: confirmed directly in the real kaggriculture.py engine
+    that the episode's reward is final money only, with no
+    auto-liquidation of leftover shed stock - anything still unsold at
+    the last step scores exactly zero, which is strictly worse than
+    selling it at any positive price (PRICE_FLOOR guarantees > 0).
+    `decide()` sets this once the season is within its configured
+    liquidation window of ending.
     """
     params = params or {}
     margin = params.get("sell_margin", _DEFAULT_SELL_MARGIN)
@@ -94,10 +108,11 @@ def sell_orders(
             count = max(0, count - wheat_reserve)
         if count <= 0:
             continue
-        current_price = price(item, market_inventory.get(item, MARKET_I0))
-        if current_price <= _cost_basis(item) + margin:
-            continue
-        qty = min(count, drip_cap) if item in PREMIUM_GOODS else count
+        if not liquidate:
+            current_price = price(item, market_inventory.get(item, MARKET_I0))
+            if current_price <= _cost_basis(item) + margin:
+                continue
+        qty = count if liquidate or item not in PREMIUM_GOODS else min(count, drip_cap)
         if qty > 0:
             orders.append(["SELL", item, qty])
     return orders[:max_orders]
@@ -136,15 +151,18 @@ def market_orders(
     params: dict | None = None,
     max_orders: int = 10,
     wheat_reserve: int = 0,
+    liquidate: bool = False,
 ) -> list[list]:
     """This turn's full market-layer order list: sells first, then a
     wheat restock if there's still room under `max_orders` - never more
     than `max_orders` total, matching `maxMarketOrdersPerTurn`.
 
-    `wheat_reserve` is passed straight through to `sell_orders` - see its
-    own docstring for why it exists.
+    `wheat_reserve` and `liquidate` are passed straight through to
+    `sell_orders` - see its own docstring for why they exist.
     """
-    orders = sell_orders(shed, market_inventory, params, max_orders=max_orders, wheat_reserve=wheat_reserve)
+    orders = sell_orders(
+        shed, market_inventory, params, max_orders=max_orders, wheat_reserve=wheat_reserve, liquidate=liquidate
+    )
     if len(orders) < max_orders:
         wheat_order = buy_wheat_order(wheat_on_hand, market_prices.get("WHEAT", 0), params)
         if wheat_order is not None:

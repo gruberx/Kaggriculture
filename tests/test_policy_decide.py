@@ -108,6 +108,29 @@ def test_decide_passes_investment_anchor_param_to_build_task_list(monkeypatch):
     assert captured.get("anchor") == "UNIT"
 
 
+def test_decide_liquidates_the_shed_near_the_end_of_the_season():
+    # T8.3d: the user's own observed defect - a real end-of-episode SELL is
+    # the last chance to realize any value from shed stock (confirmed in
+    # the real kaggriculture.py engine: reward is final money only, no
+    # auto-liquidation of leftover inventory), so the margin/drip-cap
+    # protections that make sense mid-season must not strand it unsold.
+    obs = _obs()
+    obs["day"] = 29  # last day of the default 30-day season
+    obs["private"]["shed"]["MELON"] = 50
+    action = decide(obs, DEFAULT_PARAMS)
+    sell_melon = [o for o in action["market"] if o[0] == "SELL" and o[1] == "MELON"]
+    assert sell_melon == [["SELL", "MELON", 50]]
+
+
+def test_decide_does_not_liquidate_early_in_the_season():
+    obs = _obs()
+    obs["day"] = 0
+    obs["private"]["shed"]["MELON"] = 50
+    action = decide(obs, DEFAULT_PARAMS)
+    sell_melon = [o for o in action["market"] if o[0] == "SELL" and o[1] == "MELON"]
+    assert sell_melon == [["SELL", "MELON", 5]]  # default drip_sell_max_per_turn still applies
+
+
 def test_decide_defaults_investment_anchor_to_unit_toward_shed_when_unset():
     # T8.3c accepted "UNIT_TOWARD_SHED" as the default (50/50 on both
     # self-play blocks against the previously-shipped plain "UNIT") -

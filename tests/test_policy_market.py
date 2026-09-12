@@ -119,6 +119,50 @@ def test_sell_orders_default_margin_sells_whenever_price_is_positive():
     assert orders == [["SELL", "EGG", 4]]
 
 
+def test_sell_orders_sells_below_margin_when_liquidating():
+    # T8.3d: near season end, holding out for a price recovery that will
+    # never arrive is strictly worse than selling now at any positive
+    # price (PRICE_FLOOR guarantees > 0) - unsold shed stock scores zero
+    # at episode end (confirmed in the real kaggriculture.py engine:
+    # reward is final money only, no auto-liquidation). liquidate=True
+    # overrides the margin check entirely.
+    shed = {p: 0 for p in PRODUCTS}
+    shed["WHEAT"] = 5
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, params={"sell_margin": 20}, liquidate=True)
+    assert orders == [["SELL", "WHEAT", 5]]
+
+
+def test_sell_orders_ignores_the_drip_cap_when_liquidating():
+    # Same reasoning as above, applied to PREMIUM_GOODS: the drip cap
+    # exists to protect *future* price levels, which don't matter once
+    # there's no future turn left to sell into.
+    shed = {p: 0 for p in PRODUCTS}
+    shed["MELON"] = 50
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, params={"drip_sell_max_per_turn": 5}, liquidate=True)
+    assert orders == [["SELL", "MELON", 50]]
+
+
+def test_sell_orders_liquidate_defaults_to_false():
+    shed = {p: 0 for p in PRODUCTS}
+    shed["MELON"] = 50
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, params={"drip_sell_max_per_turn": 5})
+    assert orders == [["SELL", "MELON", 5]]
+
+
+def test_market_orders_passes_liquidate_through_to_sell_orders():
+    shed = {p: 0 for p in PRODUCTS}
+    shed["MELON"] = 50
+    orders = market_orders(
+        shed,
+        _BASE_MARKET_INVENTORY,
+        market_prices={"WHEAT": 25},
+        wheat_on_hand=0,
+        params={"drip_sell_max_per_turn": 5, "wheat_restock_threshold": 0},
+        liquidate=True,
+    )
+    assert ["SELL", "MELON", 50] in orders
+
+
 def test_buy_wheat_order_returns_none_when_stock_is_sufficient():
     assert buy_wheat_order(wheat_on_hand=10, wheat_price=25, params={"wheat_restock_threshold": 5}) is None
 

@@ -67,6 +67,22 @@ DEFAULT_PARAMS = {
     # No evidence yet this second gate is needed once the fraction gate
     # above already prevents nearly all land purchases - stays disabled.
     "land_buy_min_frontier_distance": 99,
+    # T8.3d: the user's own observed defect - unsold shed stock scores
+    # zero at episode end (confirmed directly in the real
+    # kaggriculture.py engine: reward is final money only, no
+    # auto-liquidation), so the last `liquidation_days_before_end` days
+    # of the season lift market.sell_orders's margin check and premium-
+    # goods drip cap entirely. Accepted at 2 via direct self-play (2 vs
+    # the mechanism disabled/0): 50/50 on both the working and held-out
+    # blocks - see kagg.policy.decide's _DEFAULT_LIQUIDATION_DAYS_BEFORE_END
+    # comment for the full story, including a real, deliberately NOT
+    # chased lead: a follow-up sweep found win rate keeps climbing all
+    # the way up to disabling the drip cap for the *entire* season, which
+    # would be a materially different, unreviewed change (removing an
+    # anti-price-crash protection outright, not just liquidating near the
+    # end) - out of scope for this task, flagged in tasks/todo.md for a
+    # dedicated follow-up.
+    "liquidation_days_before_end": 2,
 }
 
 

@@ -325,6 +325,35 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       this time (e.g. starter/seed3: 21486 → 25422), unlike T8.3b's conditional fix: this is a
       structural travel-efficiency improvement that applies in every game. 251/251 full suite (3 new
       tests), compileall clean, boundary check green.
+- [x] T8.3d — The user's own observed defect from watching real Checkpoint 8A replays: shed stock
+      still unsold when the episode ends is a total loss, not a deferred sale. Confirmed directly in
+      the real `kaggriculture.py` engine (not assumed): the episode's `reward` is final money only
+      (`s.reward = float(obs0.farms[...]["money"])`), and there is no auto-liquidation of leftover
+      shed inventory anywhere in `interpreter()`. `market.sell_orders`'s margin check and
+      `PREMIUM_GOODS` drip cap both exist to protect *future* turns (holding out for a price recovery;
+      not crashing tomorrow's price) - neither protection makes sense once there is no future turn
+      left to sell into.
+      **Fix:** a new `liquidate: bool` parameter threading through `market.sell_orders` →
+      `market.market_orders`, set by `decide()` once `current_day >= season_length_days -
+      liquidation_days_before_end` (new `params["liquidation_days_before_end"]`, default 2). When
+      true, the margin check is skipped entirely (sell at any positive price - `PRICE_FLOOR`
+      guarantees > 0) and the drip cap is lifted (full shed count in one order instead of 5/turn).
+      **Measured:** 2 (mechanism on) vs 0 (mechanism off, i.e. yesterday's shipped behavior) - **50/50
+      on both the working block (seeds 100-149) and the held-out block (seeds 900-949)**, a clean,
+      expected win (this is close to free money the old code was leaving on the table). 2 days is also
+      mechanically justified on its own: `shedCapacity=100` fully drains in well under a day even at
+      a much smaller order size, so 2 days x 24 turns/day is a comfortable buffer, not a number fit to
+      the self-play seeds.
+      **A real lead found but deliberately NOT chased here:** a follow-up head-to-head sweep over
+      `liquidation_days_before_end` in {1, 2, 3, 5, 7, 10, 15, 30} (working block only) found win rate
+      keeps climbing the larger the window gets, all the way up to 30 (i.e. the drip cap effectively
+      disabled for the *entire* season, not just the end). That is a materially different, unreviewed
+      change - the `PREMIUM_GOODS` drip cap turning out not to earn its keep at all under current
+      single-farmer conditions, vs. the narrow "liquidate near the end" fix actually asked for here -
+      and deserves its own dedicated investigation (candidate: T8.3e or later), not scope creep into
+      this task. Golden table unchanged (none of the 6 recorded seeds happened to hit a
+      margin-blocked or drip-capped sale in the last 2 days under these exact params). 257/257 full
+      suite (7 new tests), compileall clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).
