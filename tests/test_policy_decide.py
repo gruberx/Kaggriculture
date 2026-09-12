@@ -10,7 +10,12 @@ and the overall action shape/order cap.
 """
 
 from kagg.gamelib.constants import CROPS, MARKET_I0, PRODUCTS
-from kagg.policy.decide import _crop_has_time_to_mature, _top_crop_choice, decide
+from kagg.policy.decide import (
+    _animal_has_time_to_mature,
+    _crop_has_time_to_mature,
+    _top_investment_choice,
+    decide,
+)
 from kagg.policy.params import DEFAULT_PARAMS
 
 _BASE_OBS = {
@@ -126,21 +131,75 @@ def test_crop_has_time_to_mature_only_needs_one_ongoing_production_to_fit():
     assert _crop_has_time_to_mature("TOMATO", current_day=22, season_length_days=30) is False
 
 
-def test_top_crop_choice_skips_crops_that_cannot_mature_in_time():
+def test_top_investment_choice_skips_crops_that_cannot_mature_in_time():
     # Force MELON to the top of the ranking (it wins at base price -
     # T3.1's own test data) but plant it too late for it to matter -
     # the next-best crop that still has time should win instead.
     market_inventory = {p: MARKET_I0 for p in PRODUCTS}
-    late_choice = _top_crop_choice(market_inventory, current_day=25, params=DEFAULT_PARAMS)
-    assert late_choice != "MELON"
-    assert late_choice is None or _crop_has_time_to_mature(late_choice, 25, 30)
+    late_choice = _top_investment_choice(market_inventory, current_day=25, params=DEFAULT_PARAMS)
+    assert late_choice is None or late_choice[0] != "MELON"
 
 
-def test_top_crop_choice_returns_none_once_nothing_can_mature():
+def test_top_investment_choice_returns_none_once_nothing_can_mature():
     market_inventory = {p: MARKET_I0 for p in PRODUCTS}
     # Day 29 (the last day of a 30-day season): even WHEAT (max_yield_day=4,
-    # the shortest cycle) can't complete.
-    assert _top_crop_choice(market_inventory, current_day=29, params=DEFAULT_PARAMS) is None
+    # the shortest cycle) can't complete - and neither can any animal
+    # (COW/SHEEP/GOOSE's first_yield_day all land past day 30 from here).
+    assert _top_investment_choice(market_inventory, current_day=29, params=DEFAULT_PARAMS) is None
+
+
+def test_animal_has_time_to_mature_rejects_an_animal_placed_too_late():
+    # COW's first_yield_day is 8; placed on day 22 its first production
+    # would land on day 30, which a 30-day season (days 0-29) doesn't have.
+    assert _animal_has_time_to_mature("COW", current_day=22, season_length_days=30) is False
+
+
+def test_animal_has_time_to_mature_only_needs_one_production_to_fit():
+    # SHEEP's first production from day 22 lands on day 28 - still fits,
+    # even though COW's (placed the same day) would not - verified via
+    # gamelib.growth.forecast_animal_schedule directly before writing this.
+    assert _animal_has_time_to_mature("SHEEP", current_day=22, season_length_days=30) is True
+
+
+def test_animal_has_time_to_mature_handles_an_empty_forecast():
+    # Late enough that forecast_animal_schedule returns nothing at all
+    # within the season horizon (not just a too-late single production) -
+    # must not raise on an empty list.
+    assert _animal_has_time_to_mature("COW", current_day=29, season_length_days=30) is False
+
+
+def test_top_investment_choice_picks_an_animal_when_it_outranks_every_crop():
+    # Crash MELON's own price (heavy oversupply) the same way
+    # test_rank_portfolio_reacts_to_a_crashed_price does - with MELON out
+    # of the running, COW ranks first overall (verified directly:
+    # rank_portfolio returns ['COW', 'SHEEP', 'GOOSE', ...] here).
+    crashed_melon_inventory = {"MELON": MARKET_I0 + 100_000}
+    choice = _top_investment_choice(crashed_melon_inventory, current_day=0, params=DEFAULT_PARAMS)
+    assert choice == ("COW", "animal")
+
+
+def test_top_investment_choice_skips_an_animal_that_cannot_mature_in_time():
+    # Same crashed-MELON ranking, but late enough that COW (first
+    # overall) can't mature - SHEEP (next in rank) still can (verified:
+    # forecast_animal_schedule("SHEEP", placed_day=22) starts at day 28).
+    crashed_melon_inventory = {"MELON": MARKET_I0 + 100_000}
+    choice = _top_investment_choice(crashed_melon_inventory, current_day=22, params=DEFAULT_PARAMS)
+    assert choice == ("SHEEP", "animal")
+
+
+def test_decide_falls_back_to_the_best_crop_when_an_animal_outranks_every_crop():
+    # The real regression found while implementing T6.1, not a
+    # hypothetical: a direct trace of a real "starter" episode showed
+    # the top choice flipping to COW at day 18 (our own MELON sales had
+    # depressed its price below COW's), after which decide() planted
+    # nothing for the rest of the season without this fallback - about
+    # 150-200 money lost per seed against the Checkpoint 5 baseline.
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # crashes MELON - COW ranks first overall
+    action = decide(obs, DEFAULT_PARAMS)
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert len(buy_seed_orders) == 1
+    assert buy_seed_orders[0][1] in CROPS  # not COW - tasks.py/market.py can't act on an animal yet
 
 
 def test_decide_plants_nothing_when_no_crop_can_mature_in_time():

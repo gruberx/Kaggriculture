@@ -8,25 +8,33 @@ module top level - see its own docstring on why that must happen at
 top level, not lazily), never inside decide() itself, which runs every
 turn.
 
-Known gap, not an oversight: only crop planting is wired in here. Animal
-acquisition (BUY_ANIMAL + BUILD_COOP/BUILD_PASTURE + PLACE) isn't
-implemented by tasks.py yet, so rank_portfolio's animal entries are
-filtered out when deciding what to plant - an animal ranking highest just
-means the next increment of work is building that acquisition path, not a
-bug in this integration. Also not handled: a BUY_SEED order doesn't check
-whether an empty tile actually exists to plant it on - a farm with no
-free land could accumulate unused seeds. Smaller and rarer than the
-season-maturity issue below (a full farm still has *some* replantable
-tile once something is harvested), left as a known limitation rather than
-fixed here.
+Known gap, not an oversight: `_top_investment_choice` below already
+ranks animals alongside crops (T6.1), but tasks.py/market.py can't yet
+*act* on an animal choice - BUY_ANIMAL + BUILD_COOP/BUILD_PASTURE +
+PLACE aren't implemented until T6.2/T6.3. `decide()` therefore falls
+back to `_top_crop_choice` (the old, crop-only ranking) for the actual
+PLANT/BUY_SEED decision whenever the overall top choice is an animal -
+found to matter for real, not just hypothetically, while implementing
+this: without the fallback, a direct trace of a real "starter" episode
+showed the top choice flipping to COW at day 18 (our own MELON sales
+had depressed its price below COW's), after which the episode planted
+nothing for the rest of the season - a real ~150-200 money loss per
+seed against the Checkpoint 5 baseline, not a contrived edge case. Once
+T6.2/T6.3 land, `decide()` should be revisited to act on the animal
+choice directly instead of falling back. Also not handled: a BUY_SEED
+order doesn't check whether an empty tile actually exists to plant it
+on - a farm with no free land could accumulate unused seeds. Smaller
+and rarer than the season-maturity issue (a full farm still has *some*
+replantable tile once something is harvested), left as a known
+limitation (tracked as T6.5).
 
 Standard library only - ships inside the submission bundle.
 """
 
 from __future__ import annotations
 
-from kagg.gamelib.constants import CROPS
-from kagg.gamelib.growth import forecast_ongoing_schedule
+from kagg.gamelib.constants import ANIMALS, CROPS
+from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.policy.market import market_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, should_buy_land
 from kagg.policy.tasks import action_for_unit, assign_units, build_task_list
@@ -71,16 +79,61 @@ def _crop_has_time_to_mature(crop: str, current_day: int, season_length_days: in
 
 
 def _top_crop_choice(market_inventory: dict, current_day: int, params: dict) -> str | None:
-    """The highest-ranked *crop* (not animal - see module docstring) that
-    still has time to mature this season. `None` if nothing does - late
-    enough in the season, forcing a choice would only ever waste capital
-    on something that can't pay off (see _crop_has_time_to_mature)."""
+    """The highest-ranked *crop* (not animal) that still has time to
+    mature this season. `None` if nothing does.
+
+    Kept alongside the general `_top_investment_choice` below
+    specifically as `decide()`'s fallback for the "top choice is an
+    animal, but nothing can act on that yet" case - see the module
+    docstring for the real regression this fallback avoids.
+    """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     for name in rank_portfolio(market_inventory):
         if name not in CROPS:
             continue
         if _crop_has_time_to_mature(name, current_day, season_length_days):
             return name
+    return None
+
+
+def _animal_has_time_to_mature(animal: str, current_day: int, season_length_days: int) -> bool:
+    """True if placing `animal` *today* still leaves enough season left
+    for at least one production before the episode ends.
+
+    Same reasoning as an ongoing crop's branch in
+    _crop_has_time_to_mature: an animal produces indefinitely once
+    placed (no max_yield cap on production count, unlike a one-time
+    crop), so only its *first* scheduled production needs to fit - later
+    ones missing the season end is not this animal's problem to avoid,
+    the same way a late ongoing-crop tick isn't.
+
+    forecast_animal_schedule can return an empty list (nothing scheduled
+    within season_length_days at all, not just a too-late single
+    production) - must not index into it blindly.
+    """
+    schedule = forecast_animal_schedule(animal, placed_day=current_day, horizon_days=season_length_days)
+    return bool(schedule) and schedule[0] < season_length_days
+
+
+def _top_investment_choice(market_inventory: dict, current_day: int, params: dict) -> tuple[str, str] | None:
+    """The highest-ranked crop-or-animal that still has time to mature
+    this season, as `(name, kind)` with `kind` "crop" or "animal". `None`
+    if nothing does - late enough in the season, forcing a choice would
+    only ever waste capital on something that can't pay off.
+
+    Generalizes the old crop-only `_top_crop_choice` (T3.5) to rank
+    animals too (T6.1) - see the module docstring for the real, temporary
+    gap this opens until T6.2/T6.3 wire actual animal acquisition into
+    tasks.py/market.py.
+    """
+    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+    for name in rank_portfolio(market_inventory):
+        if name in CROPS:
+            if _crop_has_time_to_mature(name, current_day, season_length_days):
+                return name, "crop"
+        elif name in ANIMALS:
+            if _animal_has_time_to_mature(name, current_day, season_length_days):
+                return name, "animal"
     return None
 
 
@@ -94,7 +147,17 @@ def decide(obs: dict, params: dict) -> dict:
     shed = private.get("shed", {})
 
     current_day = obs.get("day", 0)
-    desired_crop = _top_crop_choice(obs["market"]["inventory"], current_day, params)
+    investment = _top_investment_choice(obs["market"]["inventory"], current_day, params)
+    desired_name, desired_kind = investment if investment is not None else (None, None)
+    if desired_kind == "crop":
+        desired_crop = desired_name
+    else:
+        # Top choice is an animal (or nothing at all) - only a crop is
+        # actionable today (see module docstring's "Known gap"), so fall
+        # back to the best crop specifically rather than planting
+        # nothing - verified this fallback is load-bearing, not just
+        # defensive (see module docstring for the real episode trace).
+        desired_crop = _top_crop_choice(obs["market"]["inventory"], current_day, params)
     have_seed = desired_crop is not None and seeds.get(desired_crop, 0) > 0
     plant_crop = desired_crop if have_seed else None
 

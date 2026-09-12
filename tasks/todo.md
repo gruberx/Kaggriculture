@@ -76,8 +76,12 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 
 ## Phase 6 — `policy`: close the animal-acquisition gap
 
-- [ ] T6.1 — Unified investment choice: `decide.py`'s crop-only filter → full crop+animal ranking
-      (generalize `_crop_has_time_to_mature` to animals via `forecast_animal_schedule`)
+- [x] T6.1 — Unified investment choice: `decide.py`'s crop-only filter → full crop+animal ranking
+      (generalize `_crop_has_time_to_mature` to animals via `forecast_animal_schedule`).
+      Found+fixed a real regression during implementation: without a crop fallback for the
+      not-yet-actionable animal case, a real "starter" episode stalled all planting from day 18
+      onward (COW outranked MELON after our own sales), costing ~150-200 money/seed. Added a
+      `_top_crop_choice` fallback; golden episodes now match Checkpoint 5 exactly again.
 - [ ] T6.2 — Acquisition pipeline in `tasks.py`: `BUILD_COOP`/`BUILD_PASTURE`/`PLACE` task generation,
       + fix a verified movement inefficiency: PLANT picks the first empty tile in scan order
       (farthest from the spawn point at board center) instead of the nearest one — make tile
