@@ -63,8 +63,12 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 - [x] T5.1 — `tools/build_submission.py`: bundle, audit (reuse gamelib boundary check), smoke-test, tar
 - [x] T5.2 — Submission workflow script (`tools/submit.py`) + `--no-submit` dry run + submissions.jsonl log
 - [x] T5.3 — First real submission (ask-first, human-approved at execution time)
-      (submission ref 56175204, status COMPLETE, 1 validation episode COMPLETED,
-      reward 5578/5578, public_score 600.0 — matches local measurements)
+      (submission ref 56175204, status COMPLETE; 1 self-play validation episode
+      [5578/5578] plus 3 public episodes vs other teams, all losses: 5252 vs 24143,
+      5257 vs 66252, 5161 vs 45890, 4826 vs 201849; public_score 296.7. Real,
+      first-hand confirmation the field is well beyond our current policy — see
+      project memory "competitive_gap_first_submission" — strengthens Phase 6's
+      priority, doesn't change the plan)
 - [x] **Checkpoint 5** — bundle builds/audits/smoke-tests clean; first real submission live and
       scored (ref 56175204). Commit.
 
