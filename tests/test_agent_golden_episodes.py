@@ -89,6 +89,24 @@ and T8.2's smart servicing overlap rather than compose - see
 kagg.policy.decide's _DEFAULT_INVESTMENT_ANCHOR comment for the full
 story. Both toggles remain off by default.
 
+Re-recorded a sixth time for T8.3 (land purchase gating - tasks/plan.md,
+the user's own observed defect: land bought while plenty of free tiles
+remained). `should_buy_land` gained an occupancy-aware gate
+(`land_buy_max_free_tile_fraction`), and unlike T8.1/T8.9 this one was
+swept and accepted immediately, not shipped opt-in: every tested value
+(0.6, 0.4, 0.25, 0.1) beat the ungated default 50/50 on the working
+block, confirmed 50/50 again on the held-out block for the accepted
+value (0.25) - formally accepted by tuning.accept_candidate against an
+even-odds baseline on both. Traced directly, not just trusted: with the
+gate on, BUY_LAND stops firing almost entirely in real episodes and the
+farm stays on the 25-tile NW quadrant - confirms a single farmer cannot
+productively work even one full quadrant (one investment task per turn,
+one farmer to service it), so every dollar spent unlocking more land was
+pure waste. By far the largest single golden-table jump recorded so far
+(e.g. starter/seed2: 18821 [T8.2's number] -> 25726, +37%).
+Explicitly provisional (fit to a 1-unit farm) - must be re-swept once
+labor works (T8.8).
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -107,22 +125,21 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.2 policy (distance-aware tier-local task
-# servicing, the biggest accepted change of Phase 8 so far), reproduced
-# twice before being hardcoded here. Not yet the rigorous >=60% win rate
+# Recorded against the T8.3 policy (land purchase gated on occupancy,
+# accepted at land_buy_max_free_tile_fraction=0.25), reproduced twice
+# before being hardcoded here. Not yet the rigorous >=60% win rate
 # SPEC.md's success criteria call for (that needs Phase 4's paired-seed
 # harness, not three ad-hoc seeds), but a real improvement worth locking
-# in - 4 of 6 seeds improved substantially (e.g. pass/seed2: 10299 ->
-# 19168), 2 of 6 dipped slightly, consistent with the 49/50 and 48/50
-# self-play results this was accepted on (a large majority win, not a
-# unanimous one).
+# in - all 6 seeds improved substantially this time (e.g. starter/seed2:
+# 18821 -> 25726), consistent with the 50/50-on-both-blocks self-play
+# result this was accepted on.
 _GOLDEN = {
-    ("starter", 1): (11236.0, 3431.0),
-    ("starter", 2): (18821.0, 3630.0),
-    ("starter", 3): (17043.0, 3868.0),
-    ("pass", 1): (11054.0, 3000.0),
-    ("pass", 2): (19168.0, 3000.0),
-    ("pass", 3): (16544.0, 3000.0),
+    ("starter", 1): (18242.0, 3421.0),
+    ("starter", 2): (25726.0, 3569.0),
+    ("starter", 3): (21629.0, 3639.0),
+    ("pass", 1): (17970.0, 3000.0),
+    ("pass", 2): (25702.0, 3000.0),
+    ("pass", 3): (21637.0, 3000.0),
 }
 
 

@@ -247,8 +247,25 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       plot's shape, so T8.1's shed-anchored placement and T8.2's smart servicing overlap rather than
       compose. Both toggles stay off by default (documented in decide.py's own comments); this
       question is now closed, not deferred. 237/237 full suite, compileall clean.
-- [ ] T8.3 — Land purchase gating (`should_buy_land` gains occupancy-aware gates, both defaulting
-      to today's ungated behavior; swept values are explicitly provisional, pending Stage B).
+- [x] T8.3 — Land purchase gating. `should_buy_land` gains two OR'd, occupancy-aware gates
+      (`land_buy_max_free_tile_fraction`, `land_buy_min_frontier_distance`), both defaulting to a
+      no-op (1.0 / 99) so the mechanism alone is behavior-preserving - golden table unchanged at
+      defaults, confirmed. `decide()`'s existing tile scan extended to supply real
+      `free_tiles`/`unlocked_tiles`/`nearest_free_shed_distance`.
+      **Swept immediately (not deferred) - a decisive result, not a marginal one**: every tested
+      `land_buy_max_free_tile_fraction` value (0.6, 0.4, 0.25, 0.1) beat the ungated default **50/50**
+      on the working block; confirmed **50/50** again on the held-out block for the chosen value
+      (0.25), formally accepted by `tuning.accept_candidate` against an even-odds baseline. Traced the
+      mechanism directly (not just trusted the number): with the gate enabled, `BUY_LAND` never fires
+      at all in real episodes checked, the farm stays on the 25-tile NW quadrant, and final money
+      rises ~34-35% (e.g. seed 100: 18718 -> 25082). Confirms the plan's own reasoning precisely - a
+      single farmer cannot productively work even one full 25-tile quadrant (one investment task per
+      turn, one farmer to service it), so every dollar spent unlocking more land is pure waste right
+      now. **Accepted**: `land_buy_max_free_tile_fraction` 1.0 → 0.25 (explicitly provisional per the
+      plan - fit to a 1-unit farm, T8.8 must re-sweep once labor works). `land_buy_min_frontier_distance`
+      stays disabled (99) - no evidence yet it's needed once the fraction gate already prevents nearly
+      all land purchases. Golden table re-recorded for the accepted value. 242/242 full suite (13 new
+      tests total across strategy/decide), compileall clean.
 - [ ] **Checkpoint 8A** — suite green, golden table re-recorded, bundle built + submitted, real
       episode scores recorded.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to

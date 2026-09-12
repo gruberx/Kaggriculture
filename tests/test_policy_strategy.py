@@ -93,6 +93,95 @@ def test_should_buy_land_is_false_once_all_quadrants_bought():
     assert should_buy_land(money=1_000_000, n_unlocked_extra=3, params={}) is False
 
 
+def test_should_buy_land_ignores_occupancy_when_none_is_given():
+    # No occupancy info -> the old, ungated behavior (money-only) -
+    # decide() always supplies real occupancy in practice; this is a
+    # graceful default for callers that don't care, not the real-play path.
+    assert should_buy_land(money=1_000_000, n_unlocked_extra=0, params={}) is True
+
+
+def test_should_buy_land_declines_while_most_tiles_are_still_free():
+    # T8.3's real fix (tasks/plan.md): the user's own observation - land
+    # was sometimes bought while plenty of free tiles remained.
+    params = {"land_buy_max_free_tile_fraction": 0.25}
+    assert should_buy_land(
+        money=1_000_000, n_unlocked_extra=0, params=params,
+        free_tiles=20, unlocked_tiles=25, nearest_free_shed_distance=2,
+    ) is False
+
+
+def test_should_buy_land_buys_once_free_tiles_drop_below_the_fraction():
+    params = {"land_buy_max_free_tile_fraction": 0.25}
+    assert should_buy_land(
+        money=1_000_000, n_unlocked_extra=0, params=params,
+        free_tiles=5, unlocked_tiles=25, nearest_free_shed_distance=2,
+    ) is True
+
+
+def test_should_buy_land_buys_anyway_when_remaining_free_tiles_are_far_from_the_shed():
+    # The T8.1 interaction: a newly unlocked quadrant always contributes
+    # tiles at shed-distance 1, so if our own remaining free tiles are
+    # already farther than that, the new land is genuinely better, even
+    # though we technically still have free tiles.
+    params = {"land_buy_max_free_tile_fraction": 0.25, "land_buy_min_frontier_distance": 4}
+    assert should_buy_land(
+        money=1_000_000, n_unlocked_extra=0, params=params,
+        free_tiles=20, unlocked_tiles=25, nearest_free_shed_distance=5,
+    ) is True
+
+
+def test_should_buy_land_frontier_gate_is_disabled_by_default():
+    params = {"land_buy_max_free_tile_fraction": 0.25}
+    assert should_buy_land(
+        money=1_000_000, n_unlocked_extra=0, params=params,
+        free_tiles=20, unlocked_tiles=25, nearest_free_shed_distance=8,
+    ) is False
+
+
+def test_should_buy_land_frontier_gate_defaults_to_disabled():
+    # land_buy_min_frontier_distance alone stays an unswept no-op (99 -
+    # never triggered by any real board) even with the fraction gate at
+    # its own (now non-default) accepted value.
+    assert should_buy_land(
+        money=1_000_000, n_unlocked_extra=0, params={},
+        free_tiles=20, unlocked_tiles=25, nearest_free_shed_distance=8,
+    ) is False  # fraction gate (0.25 default) blocks; frontier (99 default) can't override it
+
+
+def test_should_buy_land_fraction_1_0_reproduces_the_fully_ungated_behavior():
+    # T8.3's mechanism itself (as opposed to the accepted 0.25 default)
+    # is still reachable by passing the fully-ungated value explicitly.
+    for free_tiles in (0, 1, 12, 24, 25):
+        assert should_buy_land(
+            money=1_000_000, n_unlocked_extra=0, params={"land_buy_max_free_tile_fraction": 1.0},
+            free_tiles=free_tiles, unlocked_tiles=25, nearest_free_shed_distance=8,
+        ) is True
+
+
+def test_should_buy_land_default_matches_the_accepted_fraction():
+    # The module-level fallback constant is kept in sync with the
+    # accepted params.py default, per this project's established
+    # convention (see _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY) - so
+    # params={} and an explicit accepted value behave identically.
+    for free_tiles, unlocked_tiles in [(20, 25), (5, 25), (6, 25)]:
+        assert should_buy_land(
+            money=1_000_000, n_unlocked_extra=0, params={},
+            free_tiles=free_tiles, unlocked_tiles=unlocked_tiles, nearest_free_shed_distance=8,
+        ) == should_buy_land(
+            money=1_000_000, n_unlocked_extra=0,
+            params={"land_buy_max_free_tile_fraction": 0.25},
+            free_tiles=free_tiles, unlocked_tiles=unlocked_tiles, nearest_free_shed_distance=8,
+        )
+
+
+def test_should_buy_land_still_respects_money_threshold_with_occupancy_given():
+    params = {"land_buy_max_free_tile_fraction": 1.0}
+    assert should_buy_land(
+        money=100, n_unlocked_extra=0, params=params,
+        free_tiles=1, unlocked_tiles=25, nearest_free_shed_distance=8,
+    ) is False
+
+
 def test_hires_per_day_reads_the_named_parameter_with_a_conservative_default():
     # Deliberately conservative default (SPEC-policy.md: the "hire many
     # hands" intuition was contradicted by a forum measurement) - never

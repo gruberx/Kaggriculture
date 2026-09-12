@@ -110,8 +110,33 @@ def rank_portfolio(market_inventory: dict) -> list[str]:
 _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 10000
 _DEFAULT_HIRES_PER_DAY = 0
 
+# T8.3 (tasks/plan.md): the user's own observed defect - a quadrant
+# sometimes bought while plenty of free tiles remained, because the old
+# should_buy_land looked at money alone. The fraction gate's mechanism
+# shipped at 1.0 (a no-op, ungated) but was swept and accepted in the
+# same task, not left unswept: every tested value (0.6, 0.4, 0.25, 0.1)
+# beat the ungated default 50/50 in direct self-play on the working
+# block, confirmed 50/50 again on the held-out block for 0.25 - traced
+# directly, not just trusted: with the gate on, BUY_LAND stops firing
+# almost entirely and final money rises ~34-35%, confirming a single
+# farmer cannot productively work even one 25-tile quadrant, so land
+# beyond it is currently pure waste. Explicitly provisional - fit to a
+# 1-unit farm, must be re-swept once labor works (T8.8).
+_DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION = 0.25
+# No evidence yet this second gate is needed once the fraction gate above
+# already prevents nearly all land purchases - stays disabled (99 is
+# unreachable on any real board).
+_DEFAULT_LAND_BUY_MIN_FRONTIER_DISTANCE = 99
 
-def should_buy_land(money: float, n_unlocked_extra: int, params: dict | None = None) -> bool:
+
+def should_buy_land(
+    money: float,
+    n_unlocked_extra: int,
+    params: dict | None = None,
+    free_tiles: int | None = None,
+    unlocked_tiles: int | None = None,
+    nearest_free_shed_distance: int | None = None,
+) -> bool:
     """True if the farm should buy the next quadrant right now.
 
     `land_purchase_threshold_money` (a named parameter) is how much money
@@ -120,6 +145,35 @@ def should_buy_land(money: float, n_unlocked_extra: int, params: dict | None = N
     land purchase never strands the farm without operating cash. Returns
     False once all quadrants are already bought (land_price returns None)
     - there's nothing left to buy, not a threshold failure.
+
+    `free_tiles`/`unlocked_tiles`/`nearest_free_shed_distance` (T8.3) gate
+    the purchase on actual occupancy, not just cash - the direct fix for a
+    real, user-observed defect (land bought while most of the farm was
+    still empty). `None`/falsy `unlocked_tiles` (the caller has no
+    occupancy info) skips both gates entirely, reproducing the pre-T8.3
+    money-only behavior - decide() always supplies real occupancy in
+    practice, so this is a graceful default, not the intended real-play
+    path. Two independent, OR'd gates once occupancy is given:
+
+    - `land_buy_max_free_tile_fraction`: buy once the free-tile fraction
+      of what we already own drops to or below this - "we're running out
+      of land."
+    - `land_buy_min_frontier_distance`: buy anyway once our own nearest
+      free tile is at least this far from the shed - "the land we'd get
+      is closer than the land we have left." Matters because of T8.1's
+      finding: a newly unlocked quadrant always contributes a tile at
+      shed-distance 1 (one of its corners touches the shed), so a farm
+      whose remaining free tiles are all farther out than that is
+      genuinely better served by expanding than by using up the far
+      corners of what it already has.
+
+    `land_buy_min_frontier_distance` still defaults to a no-op (99 - see
+    `_DEFAULT_LAND_BUY_MIN_FRONTIER_DISTANCE`), unswept so far.
+    `land_buy_max_free_tile_fraction` defaults to 0.25, not the
+    mechanism's original 1.0 no-op - see that constant's own comment for
+    the real, decisive self-play result it was accepted on. Pass
+    `land_buy_max_free_tile_fraction=1.0` explicitly to get the fully
+    ungated, pre-T8.3 money-only decision back.
     """
     params = params or {}
     cost = land_price(n_unlocked_extra)
@@ -128,7 +182,19 @@ def should_buy_land(money: float, n_unlocked_extra: int, params: dict | None = N
     threshold = params.get(
         "land_purchase_threshold_money", _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY
     )
-    return money >= cost + threshold
+    if money < cost + threshold:
+        return False
+    if not unlocked_tiles:
+        return True
+    max_free_fraction = params.get(
+        "land_buy_max_free_tile_fraction", _DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION
+    )
+    if (free_tiles or 0) / unlocked_tiles <= max_free_fraction:
+        return True
+    min_frontier = params.get(
+        "land_buy_min_frontier_distance", _DEFAULT_LAND_BUY_MIN_FRONTIER_DISTANCE
+    )
+    return nearest_free_shed_distance is not None and nearest_free_shed_distance >= min_frontier
 
 
 def hires_per_day(params: dict | None = None) -> int:

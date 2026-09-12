@@ -34,6 +34,7 @@ Standard library only - ships inside the submission bundle.
 from __future__ import annotations
 
 from kagg.gamelib.constants import ANIMALS, CROPS
+from kagg.gamelib.farm import shed_distance
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
 from kagg.policy.market import market_orders
@@ -187,10 +188,14 @@ def _top_crop_choice(market_inventory: dict, current_day: int, params: dict) -> 
     survive the held-out block (0.56, Wilson [0.423, 0.689], rejected by
     `tuning.accept_candidate` against an even-odds baseline) - exactly
     the kind of gap SPEC-tuning.md's regression gate exists to catch.
-    Left here as a tested, real bug fix and a tunable the arena can
-    properly sweep later (ideally after T8.2's distance-aware assignment,
-    which may be what the combination is actually waiting on), not
-    shipped as a silent default change on a working-block result alone.
+    Re-tested again after T8.2 (distance-aware task servicing) landed, on
+    the hypothesis that T8.2 was what the combination was waiting on -
+    it wasn't: with T8.2 in place, the SHED+plant_while_pursuing_animal
+    combination *lost decisively* (working 0.28, holdout 0.18) to plain
+    UNIT/False - see `_DEFAULT_INVESTMENT_ANCHOR`'s own comment for the
+    full story. Left here as a tested, real bug fix and a tunable the
+    arena can sweep in its own right, not shipped as a silent default
+    change on a working-block result alone.
 
     Mirrors T3.5's original `_top_crop_choice` (removed in T6.3 once
     nothing called it - see the module docstring's revision history) -
@@ -255,23 +260,34 @@ def decide(obs: dict, params: dict) -> dict:
     stuck_animal = next(
         (a for a in ANIMALS if shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0), None
     )
-    # One scan covers three questions at once: which animal types are
+    # One scan covers five questions at once: which animal types are
     # already placed (stuck/already-have-one logic above), whether any
-    # empty tile exists at all, and which structure kinds already sit
-    # empty (T6.5: BUY_SEED/BUY_ANIMAL shouldn't fire with nowhere to
-    # use them - a full farm just accumulates unused seeds/animals).
+    # empty tile exists at all, which structure kinds already sit empty
+    # (T6.5: BUY_SEED/BUY_ANIMAL shouldn't fire with nowhere to use them -
+    # a full farm just accumulates unused seeds/animals), and (T8.3) how
+    # much unlocked land is free and how far the nearest free tile is
+    # from the shed - should_buy_land's occupancy-aware gates.
     placed_animal_types: set[str] = set()
-    has_empty_tile = False
+    free_tiles = 0
+    unlocked_tiles = 0
+    nearest_free_shed_distance: int | None = None
     empty_structure_kinds: set[str] = set()
-    for row in me["tiles"]:
-        for tile in row:
+    board_size = len(me["tiles"])
+    for y, row in enumerate(me["tiles"]):
+        for x, tile in enumerate(row):
             if tile is None:
-                has_empty_tile = True
+                free_tiles += 1
+                unlocked_tiles += 1
+                d = shed_distance((x, y), board_size)
+                if nearest_free_shed_distance is None or d < nearest_free_shed_distance:
+                    nearest_free_shed_distance = d
             elif isinstance(tile, dict):
+                unlocked_tiles += 1
                 if "animal" in tile:
                     placed_animal_types.add(tile["animal"])
                 elif tile.get("kind") in ("COOP", "PASTURE"):
                     empty_structure_kinds.add(tile["kind"])
+    has_empty_tile = free_tiles > 0
     if stuck_animal is not None:
         acquisition_animal = stuck_animal
         plant_crop = None  # finish the paid-for animal before starting a new crop too
@@ -370,11 +386,16 @@ def decide(obs: dict, params: dict) -> dict:
             market.append(["BUY_ANIMAL", acquisition_animal, 1])
 
     # Land purchase, per the strategic layer's tunable threshold
-    # (SPEC-policy.md "1. Strategic layer"). One order per turn - if
-    # affordable for more than one quadrant at once, the next turn's
-    # observation re-evaluates and queues the next purchase then.
+    # (SPEC-policy.md "1. Strategic layer") plus T8.3's occupancy gates.
+    # One order per turn - if affordable for more than one quadrant at
+    # once, the next turn's observation re-evaluates and queues the next
+    # purchase then.
     n_unlocked_extra = len(me.get("unlocked_quadrants", ["NW"])) - 1
-    if len(market) < _MAX_MARKET_ORDERS and should_buy_land(me["money"], n_unlocked_extra, params):
+    if len(market) < _MAX_MARKET_ORDERS and should_buy_land(
+        me["money"], n_unlocked_extra, params,
+        free_tiles=free_tiles, unlocked_tiles=unlocked_tiles,
+        nearest_free_shed_distance=nearest_free_shed_distance,
+    ):
         market.append(["BUY_LAND"])
 
     # Hiring: queues the remaining hires needed to reach this day's

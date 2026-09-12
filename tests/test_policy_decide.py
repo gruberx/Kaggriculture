@@ -128,9 +128,15 @@ def test_decide_does_not_hire_past_the_daily_target():
 
 
 def test_decide_queues_land_purchase_when_affordable_and_over_threshold():
+    # Isolates the money/threshold logic from T8.3's occupancy gate
+    # (_obs()'s fixture farm is a fully-empty, fully-unlocked 100-tile
+    # board - under T8.3's now-accepted default the occupancy gate would
+    # correctly decline here, since a fully-empty farm is exactly the
+    # "don't buy more land yet" case; land_buy_max_free_tile_fraction=1.0
+    # opts back into the fully-ungated mechanism to test threshold alone).
     obs = _obs()
     obs["farms"][0]["money"] = 10_000
-    params = dict(DEFAULT_PARAMS, land_purchase_threshold_money=0)
+    params = dict(DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=1.0)
     action = decide(obs, params)
     assert ["BUY_LAND"] in action["market"]
 
@@ -140,6 +146,28 @@ def test_decide_does_not_queue_land_purchase_below_threshold():
     obs["farms"][0]["money"] = 500
     action = decide(obs, DEFAULT_PARAMS)  # default threshold is 10000 (T7.4)
     assert ["BUY_LAND"] not in action["market"]
+
+
+def test_decide_does_not_buy_land_while_most_tiles_are_free_when_the_gate_is_enabled():
+    # T8.3: decide() must pass real occupancy through, not just money -
+    # the direct fix for the user's own observed defect.
+    obs = _obs()  # _BASE_OBS's tiles are a fully-empty 10x10 board
+    obs["farms"][0]["money"] = 1_000_000
+    params = dict(DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=0.5)
+    action = decide(obs, params)
+    assert ["BUY_LAND"] not in action["market"]
+
+
+def test_decide_buys_land_when_the_gate_is_enabled_and_few_free_tiles_remain():
+    obs = _obs()
+    obs["farms"][0]["money"] = 1_000_000
+    for y in range(10):
+        for x in range(10):
+            if not (x < 2 and y < 2):  # leave only a 2x2 corner free
+                obs["farms"][0]["tiles"][y][x] = {"kind": "WEED"}
+    params = dict(DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=0.5)
+    action = decide(obs, params)
+    assert ["BUY_LAND"] in action["market"]
 
 
 def test_crop_has_time_to_mature_rejects_a_one_time_crop_planted_too_late():

@@ -46,6 +46,19 @@ DEFAULT_PARAMS = {
     # block crop planting for the rest of the game) but measured to lose
     # in isolation - see kagg.policy.decide._top_crop_choice's docstring.
     "plant_while_pursuing_animal": False,
+    # T8.3: occupancy-aware land-purchase gate. Accepted 1.0 -> 0.25 via
+    # direct self-play immediately after the mechanism landed: every
+    # tested value (0.6, 0.4, 0.25, 0.1) beat the ungated default 50/50 on
+    # the working block, confirmed 50/50 again on the held-out block for
+    # 0.25 - see kagg.policy.strategy.should_buy_land's own docstring for
+    # the mechanism and tasks/todo.md's T8.3 entry for the full story.
+    # Explicitly provisional: fit to a 1-unit farm (a single farmer
+    # cannot productively work even one 25-tile quadrant), so T8.8 must
+    # re-sweep once labor actually works.
+    "land_buy_max_free_tile_fraction": 0.25,
+    # No evidence yet this second gate is needed once the fraction gate
+    # above already prevents nearly all land purchases - stays disabled.
+    "land_buy_min_frontier_distance": 99,
 }
 
 
