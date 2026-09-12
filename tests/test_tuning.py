@@ -260,3 +260,58 @@ def test_resolve_opponent_writes_a_params_dict_to_a_real_agent(tmp_path):
     resolved = tuning.resolve_opponent(DEFAULT_PARAMS, str(tmp_path))
     assert resolved != "starter"
     assert os.path.isfile(resolved)
+
+
+# --- evaluate_against_panel (T7.4) ----------------------------------------
+
+
+def test_evaluate_against_panel_aggregates_wins_across_every_opponent(monkeypatch, tmp_path):
+    # SPEC-tuning.md: "the best Wilson-interval-adjusted win rate against
+    # a fixed opponent panel" - one combined score, not a separate one
+    # per opponent. Fast, monkeypatched arithmetic check (no real
+    # episodes) - the real wiring is covered by the next test.
+    calls = []
+
+    def fake_run_block(agent_a, agent_b, seeds, jobs=None):
+        calls.append((agent_a, agent_b))
+        wins = {"starter": 3, "random": 4}[agent_b]
+        return _block(wins, n=5)
+
+    monkeypatch.setattr(harness, "run_block", fake_run_block)
+
+    result = tuning.evaluate_against_panel(
+        "agent_path", ["starter", "random"], seeds=[1, 2, 3, 4, 5], workdir=str(tmp_path)
+    )
+
+    assert [c[1] for c in calls] == ["starter", "random"]
+    assert result.n == 10
+    assert result.wins_a == 7
+    assert result.win_rate_a == 0.7
+    assert result.wilson_interval_a == harness.wilson_interval(7, 10)
+
+
+def test_evaluate_against_panel_resolves_dict_opponents(monkeypatch, tmp_path):
+    from kagg.policy.params import DEFAULT_PARAMS
+
+    resolved_opponents = []
+
+    def fake_run_block(agent_a, agent_b, seeds, jobs=None):
+        resolved_opponents.append(agent_b)
+        return _block(3, n=5)
+
+    monkeypatch.setattr(harness, "run_block", fake_run_block)
+
+    tuning.evaluate_against_panel(
+        "agent_path", ["starter", DEFAULT_PARAMS], seeds=[1, 2, 3, 4, 5], workdir=str(tmp_path)
+    )
+
+    assert resolved_opponents[0] == "starter"
+    assert resolved_opponents[1] != "starter"  # a real generated agent path
+    assert os.path.isfile(resolved_opponents[1])
+
+
+def test_evaluate_against_panel_real_end_to_end(tmp_path):
+    result = tuning.evaluate_against_panel(
+        tuning._AGENT_MAIN_PATH, ["pass", "pass"], seeds=[1], workdir=str(tmp_path)
+    )
+    assert result.n == 2  # 2 opponents x 1 seed each

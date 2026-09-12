@@ -21,6 +21,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import diskguard  # noqa: E402
+import harness  # noqa: E402
 from harness import BlockResult  # noqa: E402
 
 _ACCEPTED_RUNS_LOG_RELATIVE_PATH = os.path.join("data", "arena", "accepted_runs.jsonl")
@@ -231,3 +232,39 @@ def build_opponent_panel(previous_best_params: dict | None = None) -> list:
     if previous_best_params is not None:
         panel.append(previous_best_params)
     return panel
+
+
+def evaluate_against_panel(
+    agent_path: str,
+    panel: list,
+    seeds: list[int],
+    workdir: str,
+    jobs: int | None = None,
+) -> BlockResult:
+    """Run `agent_path` (a real or write_candidate_agent-generated agent
+    file) against every opponent in `panel` on `seeds`, and combine the
+    results into one aggregate BlockResult - SPEC-tuning.md: "the best
+    Wilson-interval-adjusted win rate against a fixed opponent panel" is
+    one combined score, not a separate number per opponent. Uses
+    `harness.run_block` (module-level call, not a direct import) so
+    callers/tests can monkeypatch `harness.run_block` itself.
+    """
+    total_n = total_wins_a = total_wins_b = total_ties = 0
+    all_paired_results: list = []
+    for opponent in panel:
+        opponent_path = resolve_opponent(opponent, workdir)
+        block = harness.run_block(agent_path, opponent_path, seeds, jobs=jobs)
+        total_n += block.n
+        total_wins_a += block.wins_a
+        total_wins_b += block.wins_b
+        total_ties += block.ties
+        all_paired_results.extend(block.paired_results)
+    return BlockResult(
+        n=total_n,
+        wins_a=total_wins_a,
+        wins_b=total_wins_b,
+        ties=total_ties,
+        win_rate_a=total_wins_a / total_n,
+        wilson_interval_a=harness.wilson_interval(total_wins_a, total_n),
+        paired_results=tuple(all_paired_results),
+    )
