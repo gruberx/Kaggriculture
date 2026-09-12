@@ -61,6 +61,23 @@ _DEFAULT_SHED_CAPACITY = 100
 # market.sell_orders's own docstring for the real deadlock this avoids.
 _WHEAT_FEED_RESERVE = 10
 
+# T8.1: anchors new-investment tile placement to the shed rather than the
+# farmer's current position - see tasks.build_task_list's own docstring
+# and the `_ANCHOR_*` constants there for the full story. Default kept at
+# "UNIT" (the pre-T8.1 behavior) deliberately, not "SHED": measured via
+# direct self-play, SHED alone *lost* to UNIT (0.26 win rate, working
+# block) due to a real interaction with the animal/crop choice gap
+# _top_crop_choice documents; combined with that fix it won the working
+# block (0.72) but not the held-out one (0.56, rejected by
+# tuning.accept_candidate) - not yet a properly arena-accepted change.
+# The mechanism (anchor="SHED") is real, tested, and available for a
+# future tuning sweep, not shipped as the default on unconfirmed evidence.
+_DEFAULT_INVESTMENT_ANCHOR = "UNIT"
+
+# T8.9 - see _top_crop_choice's own docstring for the real bug this
+# fixes and why, despite that, it defaults to off.
+_DEFAULT_PLANT_WHILE_PURSUING_ANIMAL = False
+
 
 def _crop_has_time_to_mature(crop: str, current_day: int, season_length_days: int) -> bool:
     """True if planting `crop` *today* still leaves enough season left to
@@ -132,6 +149,51 @@ def _top_investment_choice(market_inventory: dict, current_day: int, params: dic
     return None
 
 
+def _top_crop_choice(market_inventory: dict, current_day: int, params: dict) -> str | None:
+    """Best CROP alone, ignoring animals entirely - an opt-in fallback
+    (`params["plant_while_pursuing_animal"]`, default off) used
+    *alongside* (not instead of) `_top_investment_choice`'s single
+    overall pick, for a real gap that pick can't express (T8.9, tasks/
+    plan.md): `rank_portfolio` has no notion of ownership, so an animal
+    type that's already fully placed and simply producing can keep
+    ranking #1 forever, exactly as if it still needed buying - and
+    without this fallback, `plant_crop` is derived solely from the single
+    overall top choice, so that animal silently blocks crop planting for
+    the rest of the game the moment it ranks first. Directly observed:
+    one representative episode spent 47 of its farmer's 719 turns on PASS
+    once an animal locked in as the permanent #1 choice.
+
+    Deliberately NOT the default, despite fixing a real, demonstrated
+    defect - found by measuring, not assumed safe: enabling it (with
+    placement otherwise unchanged) lost a direct 50-seed self-play block
+    against the pre-fix baseline 13/50 (Wilson [0.159, 0.396], a real
+    loss, not noise). The likely mechanism - not fully confirmed -
+    is that the extra BUY_SEED spends cash that would otherwise go
+    toward the animal purchase sooner, delaying a materially better
+    investment even though the turns it fills were otherwise pure waste.
+    Combined with T8.1's shed anchor, the pair *did* show a strong
+    working-block win (0.72, Wilson [0.583, 0.825]) - but that did not
+    survive the held-out block (0.56, Wilson [0.423, 0.689], rejected by
+    `tuning.accept_candidate` against an even-odds baseline) - exactly
+    the kind of gap SPEC-tuning.md's regression gate exists to catch.
+    Left here as a tested, real bug fix and a tunable the arena can
+    properly sweep later (ideally after T8.2's distance-aware assignment,
+    which may be what the combination is actually waiting on), not
+    shipped as a silent default change on a working-block result alone.
+
+    Mirrors T3.5's original `_top_crop_choice` (removed in T6.3 once
+    nothing called it - see the module docstring's revision history) -
+    reintroduced for a different role: not decide()'s only investment
+    signal, but a second, independent one that can run alongside the
+    animal pipeline instead of being pre-empted by it.
+    """
+    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+    for name in rank_portfolio(market_inventory):
+        if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
+            return name
+    return None
+
+
 def decide(obs: dict, params: dict) -> dict:
     """This turn's full action dict, combining the strategic, task, and
     market layers."""
@@ -147,8 +209,21 @@ def decide(obs: dict, params: dict) -> dict:
     desired_crop = desired_name if desired_kind == "crop" else None
     desired_animal = desired_name if desired_kind == "animal" else None
 
-    have_seed = desired_crop is not None and seeds.get(desired_crop, 0) > 0
-    plant_crop = desired_crop if have_seed else None
+    # T8.9, opt-in (see _top_crop_choice's own docstring for why this
+    # isn't the default despite fixing a real bug): when enabled, the
+    # crop to plant/buy-seed-for is the best crop the market supports
+    # *regardless* of whether an animal separately ranks first overall.
+    # Only re-ranks crops alone when the overall top choice is itself an
+    # animal; when it's already a crop, `desired_crop` IS the best crop,
+    # so there's nothing to recompute either way.
+    if desired_crop is not None:
+        fallback_crop = desired_crop
+    elif params.get("plant_while_pursuing_animal", _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL):
+        fallback_crop = _top_crop_choice(obs["market"]["inventory"], current_day, params)
+    else:
+        fallback_crop = None
+    have_seed = fallback_crop is not None and seeds.get(fallback_crop, 0) > 0
+    plant_crop = fallback_crop if have_seed else None
     # Index 0 is always the farmer's own inventory (_farmer_inventory's
     # own indexing convention - hands are index 1+). PLACE/FEED's real
     # handlers consume from here, never the shed directly - see
@@ -215,6 +290,7 @@ def decide(obs: dict, params: dict) -> dict:
         plant_crop=plant_crop, desired_animal=acquisition_animal,
         shed=shed, farmer_inventory=farmer_inventory,
         current_day=current_day,
+        anchor=params.get("investment_anchor", _DEFAULT_INVESTMENT_ANCHOR),
     )
     assignment = assign_units(tasks, unit_positions)
 
@@ -247,27 +323,31 @@ def decide(obs: dict, params: dict) -> dict:
     # Seed/animal purchase: arrives next turn (market orders resolve
     # after this turn's unit actions) - the PLANT/PLACE task above
     # naturally starts firing once the seed/animal shows up in a future
-    # observation, no extra state needed here. Mutually exclusive by
-    # construction (desired_crop and desired_animal can't both be set -
-    # _top_investment_choice returns a single top pick). Both gated on
-    # `stuck_animal is None` too - finish placing what's already bought
-    # (see the stuck_animal comment above) before spending on anything
-    # else, seed or animal. Also gated on somewhere to actually use the
-    # purchase (T6.5): a seed needs an empty tile; an animal needs either
-    # an empty tile (to build a fresh structure on) or an existing empty
-    # matching structure - it doesn't need free land specifically, just
-    # somewhere to eventually stand.
+    # observation, no extra state needed here. No longer mutually
+    # exclusive as of T8.9: they used to be, "by construction," when both
+    # came from `_top_investment_choice`'s single top pick - but
+    # `fallback_crop` is now a genuinely independent second signal (see
+    # its own docstring), so both purchases fire whenever both are
+    # warranted, sharing the same 10-order cap via `len(market) <
+    # _MAX_MARKET_ORDERS` on each. Both still gated on `stuck_animal is
+    # None` - finish placing what's already bought (see the stuck_animal
+    # comment above) before spending on anything else, seed or animal.
+    # Also gated on somewhere to actually use the purchase (T6.5): a seed
+    # needs an empty tile; an animal needs either an empty tile (to build
+    # a fresh structure on) or an existing empty matching structure - it
+    # doesn't need free land specifically, just somewhere to eventually
+    # stand.
     if (
         stuck_animal is None
-        and desired_crop is not None
+        and fallback_crop is not None
         and not have_seed
         and has_empty_tile
         and len(market) < _MAX_MARKET_ORDERS
     ):
-        seed_cost = CROPS[desired_crop]["seed"]
+        seed_cost = CROPS[fallback_crop]["seed"]
         if me["money"] >= seed_cost:
-            market.append(["BUY_SEED", desired_crop, 1])
-    elif (
+            market.append(["BUY_SEED", fallback_crop, 1])
+    if (
         acquisition_animal is not None
         and not have_animal_anywhere
         and (has_empty_tile or ANIMALS[acquisition_animal]["structure"] in empty_structure_kinds)

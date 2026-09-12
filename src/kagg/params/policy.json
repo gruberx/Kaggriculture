@@ -5,5 +5,7 @@
   "drip_sell_max_per_turn": 5,
   "wheat_restock_threshold": 5,
   "wheat_restock_qty": 10,
-  "wheat_max_buy_price": 40
+  "wheat_max_buy_price": 40,
+  "investment_anchor": "UNIT",
+  "plant_while_pursuing_animal": false
 }

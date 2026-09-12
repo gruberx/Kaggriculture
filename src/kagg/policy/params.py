@@ -38,6 +38,14 @@ DEFAULT_PARAMS = {
     "wheat_restock_threshold": 5,
     "wheat_restock_qty": 10,
     "wheat_max_buy_price": 40,
+    # T8.1: "SHED" (shed-anchored placement) is implemented and tested but
+    # not yet arena-accepted as the default - see kagg.policy.decide's
+    # _DEFAULT_INVESTMENT_ANCHOR comment for the measured story.
+    "investment_anchor": "UNIT",
+    # T8.9: fixes a real bug (an animal ranking #1 forever can otherwise
+    # block crop planting for the rest of the game) but measured to lose
+    # in isolation - see kagg.policy.decide._top_crop_choice's docstring.
+    "plant_while_pursuing_animal": False,
 }
 
 

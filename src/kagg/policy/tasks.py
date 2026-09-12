@@ -21,7 +21,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from kagg.gamelib.constants import ANIMALS, CROPS
-from kagg.gamelib.farm import shed_access_tiles, tile_distance
+from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
+
+# investment_anchor values (params.py's DEFAULT_PARAMS["investment_anchor"]):
+# SHED anchors new-investment placement to the board's shed center - the
+# T8.1 fix (tasks/plan.md) for a real, measured defect: anchoring to the
+# farmer's *current* position instead made the planted plot grow as a
+# runaway line away from the shed, and kaggriculture.py's own _end_of_day
+# teleports the farmer back to spawn (a shed-access tile) and despawns
+# every hand every single day, so travel-from-shed is what's actually
+# repaid daily. UNIT restores the pre-T8.1 behavior exactly, kept as a
+# real, arena-checkable alternative rather than deleted outright - never
+# hardcode a judgment call here that the arena can settle instead.
+_ANCHOR_SHED = "SHED"
+_ANCHOR_UNIT = "UNIT"
 
 PRIORITY_PREVENT_LOSS = 0
 PRIORITY_HARVEST = 1
@@ -71,6 +84,39 @@ def _closest_pos(candidates: list[tuple[int, int]], unit_positions) -> tuple[int
     return min(candidates, key=lambda pos: min(tile_distance(pos, u) for u in unit_positions))
 
 
+def _compact_position(candidates, board_size: int, anchor: str, unit_positions) -> tuple[int, int] | None:
+    """The single best candidate position for new investment work - see
+    the `_ANCHOR_*` constants above.
+
+    `anchor="UNIT"` delegates to `_closest_pos` verbatim (not a
+    reimplementation) specifically to preserve its exact tie-break
+    behavior (first-in-scan-order among equidistant candidates, since
+    `min()` with no secondary key keeps the first element it encounters
+    that ties the best). Found the hard way, not anticipated: an earlier
+    version of this function used a `(distance, pos)` key for *both*
+    anchors, which ties equidistant candidates by (x, y) tuple order
+    instead - a *different* order than `empty_tiles`' actual append order
+    (row-major, i.e. (y, x)) - and that alone silently changed two golden
+    episodes' outcomes even with `anchor="UNIT"`, which is supposed to be
+    indistinguishable from the pre-T8.1 code. Confirmed by reproducing
+    the golden table with `anchor="UNIT"` forced and finding exactly
+    those two mismatches before this fix.
+
+    `anchor="SHED"` uses a real `(shed_distance, pos)` key instead: unlike
+    the UNIT case, there is no "original order" to preserve here, and a
+    deterministic tie-break is genuinely needed - the four shed-access
+    tiles are always tied at distance 0. The pos tie-break also makes the
+    SHED key totally independent of unit positions, which is what makes
+    tier-local task *servicing* order stable turn to turn once units have
+    no memory (T8.2 relies on task positions never chasing a moving
+    unit - see that task's stability argument in the plan file)."""
+    if not candidates:
+        return None
+    if anchor == _ANCHOR_UNIT:
+        return _closest_pos(candidates, unit_positions)
+    return min(candidates, key=lambda pos: (shed_distance(pos, board_size), pos))
+
+
 def build_task_list(
     tiles,
     unit_positions=(),
@@ -79,6 +125,7 @@ def build_task_list(
     shed: dict | None = None,
     farmer_inventory: dict | None = None,
     current_day: int = 0,
+    anchor: str = _ANCHOR_SHED,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -121,6 +168,11 @@ def build_task_list(
     docstring for the full story). Defaults to 0 for callers that don't
     pass it (e.g. existing tests using `planted_day=0` fixtures), not the
     intended real-play path - `decide()` always supplies the real day.
+
+    `anchor` (T8.1) controls where new-investment work (PLANT/BUILD_*/
+    PLACE's target tile) gets placed - see `_ANCHOR_*` and
+    `_placement_key` above. Defaults to `"SHED"`, a real fix for a real,
+    measured defect (tasks/plan.md T8.1), not the old `"UNIT"` behavior.
     """
     shed = shed or {}
     farmer_inventory = farmer_inventory or {}
@@ -158,13 +210,19 @@ def build_task_list(
             # nothing to do.
 
     if wheat_pickup_priority is not None and shed.get("WHEAT", 0) > 0:
-        pos = _closest_pos(shed_access_tiles(len(tiles)), unit_positions)
+        # unit_positions[:1] (the farmer only), not every unit: this
+        # PICKUP is pinned to the farmer regardless of which unit is
+        # nearest (T8.4 pins the task itself; here, picking the shed tile
+        # nearest to a *hand* instead would make the target flip as hands
+        # move, which is exactly the kind of unit-position dependence
+        # T8.2's stability argument needs this module to avoid).
+        pos = _closest_pos(shed_access_tiles(len(tiles)), unit_positions[:1])
         qty = min(shed["WHEAT"], _WHEAT_PICKUP_BATCH)
         tasks.append(Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty))
 
     investment_task = _new_investment_task(
         empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
-        plant_crop, desired_animal, desired_structure, shed, farmer_inventory,
+        plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor,
     )
     if investment_task is not None:
         tasks.append(investment_task)
@@ -175,7 +233,7 @@ def build_task_list(
 
 def _new_investment_task(
     empty_tiles, matching_structure_tiles, unit_positions, board_size,
-    plant_crop, desired_animal, desired_structure, shed, farmer_inventory,
+    plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor=_ANCHOR_SHED,
 ) -> Task | None:
     """T6.4's real finding, not anticipated when T6.2 first wrote this
     pipeline: PLACE's real handler (kaggriculture.py) consumes the animal
@@ -183,23 +241,31 @@ def _new_investment_task(
     delivers to the shed (verified directly: a real episode showed PLACE
     silently failing forever, the animal just sitting in the shed).
     A PICKUP step (standing on a real shed-access tile - see
-    gamelib.farm.shed_access_tiles) is required in between."""
+    gamelib.farm.shed_access_tiles) is required in between.
+
+    `anchor` (T8.1) governs where PLANT/BUILD_*/PLACE's *target* tile is
+    chosen from among `empty_tiles`/`matching_structure_tiles` - see
+    `_compact_position`. The PICKUP steps below choose which *shed*-
+    access tile to stand on instead, always anchored to the farmer alone
+    (`unit_positions[:1]`) regardless of `anchor` - see build_task_list's
+    matching comment for why.
+    """
     if desired_animal is not None:
         animal_in_hand = farmer_inventory.get(desired_animal, 0) > 0
         animal_in_shed = shed.get(desired_animal, 0) > 0
         if animal_in_hand and matching_structure_tiles:
-            pos = _closest_pos(matching_structure_tiles, unit_positions)
+            pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
             return Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal)
         if not matching_structure_tiles and empty_tiles:
-            pos = _closest_pos(empty_tiles, unit_positions)
+            pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
             build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
             return Task(PRIORITY_PLANT, pos, build_op)
         if matching_structure_tiles and animal_in_shed and not animal_in_hand:
-            pos = _closest_pos(shed_access_tiles(board_size), unit_positions)
+            pos = _closest_pos(shed_access_tiles(board_size), unit_positions[:1])
             return Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1)
         return None
     if plant_crop is not None and empty_tiles:
-        pos = _closest_pos(empty_tiles, unit_positions)
+        pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
         return Task(PRIORITY_PLANT, pos, "PLANT", crop=plant_crop)
     return None
 

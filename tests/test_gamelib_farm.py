@@ -8,7 +8,7 @@ since that costs nothing extra and catches an off-by-one for free.
 
 from kaggle_environments.envs.kaggriculture import kaggriculture as real
 
-from kagg.gamelib.farm import land_price, shed_access_tiles, tile_distance
+from kagg.gamelib.farm import land_price, shed_access_tiles, shed_distance, tile_distance
 
 
 def test_tile_distance_is_zero_on_identity():
@@ -60,3 +60,25 @@ def test_shed_access_tiles_matches_the_real_interpreter():
 
 def test_shed_access_tiles_are_the_board_center():
     assert set(shed_access_tiles(10)) == {(4, 4), (5, 4), (4, 5), (5, 5)}
+
+
+def test_shed_distance_is_zero_on_a_shed_access_tile():
+    for tile in shed_access_tiles(10):
+        assert shed_distance(tile, 10) == 0
+
+
+def test_shed_distance_is_the_min_over_all_four_access_tiles():
+    # (0, 4) is distance 4 from (4,4) but distance 5 from (5,4)/(4,5)/(5,5)
+    # - must pick the nearest one, not e.g. always (4,4).
+    assert shed_distance((0, 4), 10) == 4
+
+
+def test_shed_distance_of_the_farthest_nw_corner():
+    assert shed_distance((0, 0), 10) == 8
+
+
+def test_shed_distance_matches_tile_distance_to_the_nearest_access_tile():
+    pos = (2, 7)
+    board_size = 10
+    expected = min(tile_distance(pos, s) for s in shed_access_tiles(board_size))
+    assert shed_distance(pos, board_size) == expected

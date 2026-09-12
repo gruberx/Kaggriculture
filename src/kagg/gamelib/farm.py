@@ -32,6 +32,16 @@ def shed_access_tiles(board_size: int) -> list[tuple[int, int]]:
     return [(half - 1, half - 1), (half, half - 1), (half - 1, half), (half, half)]
 
 
+def shed_distance(pos: tuple[int, int], board_size: int) -> int:
+    """Manhattan distance from `pos` to the nearest shed-access tile - the
+    travel cost that actually recurs turn over turn: kaggriculture.py's
+    _end_of_day teleports the farmer back to spawn (one of these tiles)
+    and despawns every hand every single day, so distance-from-shed is
+    repaid daily, unlike distance from wherever a unit happens to be
+    standing right now (T8.1 - see tasks/plan.md)."""
+    return min(tile_distance(pos, s) for s in shed_access_tiles(board_size))
+
+
 def land_price(n_unlocked_extra: int) -> int | None:
     """Cost of the next quadrant beyond NW, given how many extra quadrants
     (NE/SW/SE) are already unlocked. `None` once all three are bought -

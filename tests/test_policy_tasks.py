@@ -11,7 +11,7 @@ isn't at risk today even if not yet watered, unlike one already at
 consecutive_unwatered>=1 (SPEC-gamelib.md: 2 consecutive misses -> weed).
 """
 
-from kagg.gamelib.farm import tile_distance
+from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
 from kagg.policy.tasks import (
     PRIORITY_HARVEST,
     PRIORITY_MAINTENANCE,
@@ -211,26 +211,63 @@ def test_build_task_list_plants_the_nearest_empty_tile_not_the_first_scanned():
     # geometry to the user): the farm spawns near the board center
     # (4,4), not (0,0) - picking the first empty tile in row-major scan
     # order previously meant walking to the far corner every time.
+    # (4,4) is also a shed-access tile, so this holds under T8.1's new
+    # shed-anchored default too, not just the old unit-anchored one.
     tiles = _empty_tiles()
     tasks = build_task_list(tiles, unit_positions=[(4, 4)], plant_crop="CARROT")
     assert len(tasks) == 1
     assert tasks[0].pos == (4, 4)  # farmer's own tile is empty and nearest possible
 
 
-def test_build_task_list_plants_the_tile_closest_to_any_unit_among_several_empty():
+def test_build_task_list_plants_next_to_the_shed_not_next_to_the_farmer():
+    # T8.1's real fix: the old default anchored placement to the
+    # farmer's *current* position, which made the planted plot grow as a
+    # runaway line away from the shed every time the farmer moved
+    # (verified directly: (4,4)->(4,3)->(4,2)->... starting from a
+    # farmer standing away from spawn). Placement must be anchored to
+    # the shed instead, since kaggriculture.py's _end_of_day teleports
+    # the farmer back there and despawns every hand every single day -
+    # travel-from-shed is what's actually repaid daily, not travel from
+    # wherever a unit happened to be standing.
     tiles = _empty_tiles()
-    tasks = build_task_list(tiles, unit_positions=[(9, 9)], plant_crop="CARROT")
-    assert tasks[0].pos == (9, 9)  # nearest to the given unit, not (0, 0)
+    tasks = build_task_list(tiles, unit_positions=[(4, 0)], plant_crop="CARROT")
+    assert tasks[0].pos == (4, 4)  # nearest the shed, not nearest the farmer at (4, 0)
 
 
-def test_build_task_list_falls_back_to_scan_order_without_unit_positions():
-    # No unit_positions given - preserves the old, simpler behavior
-    # rather than guessing (decide() always supplies real positions in
-    # practice; this is a graceful default, not the intended real-play
-    # path).
+def test_build_task_list_plants_the_tile_closest_to_any_unit_when_anchor_is_unit():
+    # anchor="UNIT" is a deliberate escape hatch restoring the old
+    # behavior exactly, for a clean arena A/B against the new default
+    # rather than a hardcoded judgment call (tasks/plan.md T8.1).
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(9, 9)], plant_crop="CARROT", anchor="UNIT")
+    assert tasks[0].pos == (9, 9)  # nearest to the given unit, not the shed
+
+
+def test_build_task_list_falls_back_to_the_shed_nearest_tile_without_unit_positions():
+    # No unit_positions given. Unlike the pre-T8.1 behavior (row-major
+    # scan order -> (0,0)), the shed-anchored key doesn't depend on unit
+    # positions at all, so there's nothing to "fall back" from - the
+    # shed-nearest tile is always well-defined.
     tiles = _empty_tiles()
     tasks = build_task_list(tiles, plant_crop="CARROT")
-    assert tasks[0].pos == (0, 0)
+    assert tasks[0].pos == (4, 4)
+
+
+def test_build_task_list_prefers_a_newly_unlocked_quadrant_tile_over_a_far_nw_tile():
+    # The consequence T8.1's design relies on: once a new quadrant
+    # unlocks, its tiles nearest the shed (including, here, an actual
+    # shed-access tile at distance 0) beat whatever's left of the old
+    # quadrant's far corners, even though the old quadrant still has a
+    # free tile.
+    tiles = [[_plant_tile() for _ in range(10)] for _ in range(10)]
+    tiles[0][0] = None  # the one remaining free NW tile - shed distance 8
+    for y in range(5):
+        for x in range(5, 10):
+            tiles[y][x] = None  # NE quadrant just unlocked, entirely empty
+    tasks = build_task_list(tiles, plant_crop="CARROT")
+    plant_task = next(t for t in tasks if t.op == "PLANT")
+    assert plant_task.pos == (5, 4)  # NE's shed-access tile, distance 0
+    assert shed_distance(plant_task.pos, 10) < shed_distance((0, 0), 10)
 
 
 # --- animal acquisition pipeline (T6.2) ----------------------------------
@@ -319,12 +356,26 @@ def test_build_task_list_ignores_a_mismatched_empty_structure():
     assert tasks[0].op == "BUILD_PASTURE"  # builds a fresh PASTURE elsewhere, ignoring the COOP
 
 
-def test_build_task_list_places_on_the_nearest_matching_structure():
+def test_build_task_list_places_on_the_shed_nearest_matching_structure_by_default():
+    # T8.1: PLACE's target is shed-anchored, not farmer-anchored - here
+    # the farmer stands right next to one structure, but the *other*
+    # structure (at the shed) is still preferred.
+    tiles = _empty_tiles()
+    tiles[0][0] = _empty_structure("PASTURE")
+    tiles[4][4] = _empty_structure("PASTURE")
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], desired_animal="COW", farmer_inventory={"COW": 1}
+    )
+    assert tasks[0].pos == (4, 4)
+
+
+def test_build_task_list_places_on_the_nearest_matching_structure_when_anchor_is_unit():
     tiles = _empty_tiles()
     tiles[0][0] = _empty_structure("PASTURE")
     tiles[9][9] = _empty_structure("PASTURE")
     tasks = build_task_list(
-        tiles, unit_positions=[(9, 8)], desired_animal="COW", farmer_inventory={"COW": 1}
+        tiles, unit_positions=[(9, 8)], desired_animal="COW", farmer_inventory={"COW": 1},
+        anchor="UNIT",
     )
     assert tasks[0].pos == (9, 9)
 

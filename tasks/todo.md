@@ -197,11 +197,42 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       and fixed by running the smoke episode in an isolated subprocess that strips the editable
       `src/` entry from `sys.path` and asserts the resolved `kagg.__file__` is actually under the
       bundle's own directory. 222/222 full suite (5 new tests), compileall clean.
-- [ ] T8.1 — Shed-anchored investment placement (`gamelib.farm.shed_distance`, new placement key in
-      `tasks.py`, `params["investment_anchor"]`).
+- [x] T8.1 — Shed-anchored investment placement. Added `gamelib.farm.shed_distance`, a
+      `_compact_position` placement key in `tasks.py`, and `params["investment_anchor"]`
+      (`"SHED"`/`"UNIT"`). Found and fixed a real bug in the implementation itself: an early version
+      used a `(distance, pos)` tie-break for BOTH anchors, but `"UNIT"` is meant to reproduce
+      `_closest_pos`'s exact old behavior (first-in-scan-order among ties) - the new tuple tie-break
+      silently changed 2/6 golden episodes even with the old anchor selected. Caught by re-verifying
+      golden reproduction under `anchor="UNIT"` before trusting the SHED-vs-UNIT comparison; fixed by
+      having `"UNIT"` delegate to `_closest_pos` verbatim instead of reimplementing it.
+      **Major deviation from the plan, found by measuring rather than assumed away**: a real direct
+      self-play block (SHED vs UNIT, 50 working seeds) showed SHED *losing* 13/50 (Wilson
+      [0.159, 0.396]). Traced (turn-by-turn action-count diagnostic, not guessed) to a real,
+      pre-existing bug SHED's efficiency gains amplified: `_top_investment_choice` returns one
+      overall pick, so an animal that's already fully placed and simply producing can keep ranking
+      #1 forever (`rank_portfolio` has no notion of ownership) - `plant_crop` stayed `None` the whole
+      time, and one representative episode spent 47/719 turns on PASS once this triggered. This is
+      exactly the gap the plan's own T8.9 (originally scheduled for Stage B) describes - pulled
+      forward and fixed now (`_top_crop_choice` reintroduced as an independent second signal
+      alongside `_top_investment_choice`; `BUY_SEED`/`BUY_ANIMAL` decoupled from an `elif` into two
+      independent `if`s; new `params["plant_while_pursuing_animal"]`). With that fix, SHED+T8.9
+      *won* the working block decisively (0.72, Wilson [0.583, 0.825]) - but did **not** survive the
+      held-out block (0.56, Wilson [0.423, 0.689], formally **rejected** by `tuning.accept_candidate`
+      against an even-odds baseline) - SPEC-tuning.md's regression gate doing exactly its job.
+      Measured T8.9 in isolation too (UNIT anchor, no placement change): also a real loss on its own
+      (0.26 working / 0.46 holdout) despite fixing a genuine, demonstrated defect - the working
+      hypothesis (not fully confirmed) is that the extra seed purchase competes for cash against a
+      more valuable animal purchase. **Decision**: both `investment_anchor="SHED"` and
+      `plant_while_pursuing_animal=True` are real, fully tested capabilities, shipped as opt-in
+      params defaulting to today's exact behavior (`"UNIT"` / `False`) - not flipped as the default
+      on working-block evidence alone, matching this project's core discipline. Shipped agent
+      behavior is unchanged (golden table reproduces bit-identical, no re-record needed). Revisit
+      after T8.2 (distance-aware assignment), which may be what the combination is actually waiting
+      on - noted in decide.py's own comments. 234/234 full suite, compileall clean.
 - [ ] T8.2 — Distance-aware, tier-local task assignment (`tasks.py` sort + `assign_units`
       rewritten as tier-by-tier greedy nearest-match; stability under statelessness proved in the
-      plan file, not just asserted).
+      plan file, not just asserted). Re-measure `investment_anchor`/`plant_while_pursuing_animal`
+      together with this once landed - T8.1's held-out rejection may be exactly what this fixes.
 - [ ] T8.3 — Land purchase gating (`should_buy_land` gains occupancy-aware gates, both defaulting
       to today's ungated behavior; swept values are explicitly provisional, pending Stage B).
 - [ ] **Checkpoint 8A** — suite green, golden table re-recorded, bundle built + submitted, real
@@ -219,8 +250,10 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       that's the most informative possible negative result here.
 - [ ] T8.8 — Re-sweep land (`land_purchase_threshold_money` and T8.3's gates) now that labor works
       — the Phase 7 value was fit to a 1-unit farm and is likely stale.
-- [ ] T8.9 — (stretch) decouple plant-crop choice from animal-acquisition choice, so hands can keep
-      planting while unit 0 pursues an animal.
+- [x] T8.9 — Pulled forward into T8.1 above (found to be tightly coupled to it, not a separable
+      stretch goal after all). Decouples plant-crop choice from animal-acquisition choice via
+      `params["plant_while_pursuing_animal"]`; shipped as opt-in, not the default - see T8.1's entry
+      for the full measured story.
 - [ ] **Checkpoint 8B** — suite green, bundle built + submitted, real episode scores recorded.
 
 ## Not planned yet (see plan.md)
