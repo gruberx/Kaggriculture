@@ -9,9 +9,12 @@ BUY_SEED), queuing HIRE/BUY_LAND from the strategic layer's decisions,
 and the overall action shape/order cap.
 """
 
+import copy
+
 from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0, PRODUCTS
 from kagg.policy.decide import (
     _animal_has_time_to_mature,
+    _combined_crop_tile_counts,
     _crop_has_time_to_mature,
     _crop_tile_counts,
     _top_investment_choice,
@@ -172,6 +175,59 @@ def test_decide_stops_recommending_a_crop_the_farm_has_already_committed_many_ti
     for i in range(30):
         obs["farms"][0]["tiles"][i % 10][i // 10] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
     action = decide(obs, DEFAULT_PARAMS)
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert buy_seed_orders and buy_seed_orders[0][1] != "MELON"
+
+
+def test_combined_crop_tile_counts_sums_across_multiple_farms():
+    # T8.3g: the market doesn't care whose tile it was - only quantity.
+    my_tiles = [[None] * 10 for _ in range(10)]
+    my_tiles[0][0] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    opponent_tiles = [[None] * 10 for _ in range(10)]
+    opponent_tiles[0][0] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    opponent_tiles[0][1] = {"kind": "PLANT", "crop": "WHEAT", "planted_day": 0}
+    farms = [{"tiles": my_tiles}, {"tiles": opponent_tiles}]
+    assert _combined_crop_tile_counts(farms) == {"MELON": 2, "WHEAT": 1}
+
+
+def test_decide_defaults_crop_self_impact_include_opponent_to_false_when_unset():
+    # T8.3g: built and tested, but measured a clean, total loss in direct
+    # self-play (0/50 both blocks) - see decide.py's own
+    # _DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT comment for the full
+    # story. Kept available, like "SHED" and use_fertilizer, not the
+    # default.
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("crop_self_impact_include_opponent") is False
+    assert decide_module._DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT is False
+
+
+def test_decide_ignores_the_opponent_by_default():
+    # My own farm is empty, but the OPPONENT (fully visible via
+    # obs["farms"] - see _combined_crop_tile_counts's own docstring)
+    # already has 30 MELON tiles growing. By default this must NOT
+    # change anything - MELON stays recommended, since
+    # crop_self_impact_include_opponent is off by default.
+    obs = _obs()
+    opponent_farm = copy.deepcopy(obs["farms"][0])
+    for i in range(30):
+        opponent_farm["tiles"][i % 10][i // 10] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    obs["farms"].append(opponent_farm)
+    action = decide(obs, DEFAULT_PARAMS)
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert buy_seed_orders and buy_seed_orders[0][1] == "MELON"
+
+
+def test_decide_demotes_a_crop_the_opponent_has_already_committed_many_tiles_to_when_explicitly_enabled():
+    # T8.3g, the user's own follow-up: the mechanism itself works exactly
+    # as designed when explicitly turned on - it's just measured a net
+    # loss in practice (see the rejection comment above), not broken.
+    obs = _obs()
+    opponent_farm = copy.deepcopy(obs["farms"][0])
+    for i in range(30):
+        opponent_farm["tiles"][i % 10][i // 10] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    obs["farms"].append(opponent_farm)
+    action = decide(obs, dict(DEFAULT_PARAMS, crop_self_impact_include_opponent=True))
     buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
     assert buy_seed_orders and buy_seed_orders[0][1] != "MELON"
 

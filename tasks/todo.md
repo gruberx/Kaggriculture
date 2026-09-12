@@ -418,6 +418,33 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       **Accepted** as the default (`crop_self_impact_aware=True`). Golden table re-recorded - 4 of 6
       seeds changed (both directions, since this changes *what* gets planted). 272/272 full suite (11
       new tests), compileall clean, boundary check green.
+- [x] T8.3g — The user's direct follow-up to T8.3f: extend the same self-impact model to also
+      count the OPPONENT's already-planted tiles, not just our own - confirmed feasible first
+      (`_combined_crop_tile_counts`'s own docstring): `obs["farms"]` is one shared list object,
+      verified directly in `kaggriculture.py` to be assigned identically to both players (only
+      `private` shed/seeds are genuinely per-player), so the opponent's crop tiles are exactly as
+      visible as our own, at zero extra cost to reuse T8.3f's existing `crop_tile_counts` machinery
+      (sum both farms' counts before ranking, no `strategy.py` changes needed at all).
+      **Measured — a real, decisive rejection, not an acceptance:** a clean, total loss (0/50 on the
+      working block, 0/50 on the held-out block) - worse than T8.3e's FERTILIZE rejection, which at
+      least tied most episodes. Traced, not just trusted (seed 100): the opponent-aware agent switched
+      from MELON to STRAWBERRY after only 14 MELON plantings (vs the unaware agent's 17), ending with
+      *less* money ($19463 vs $23092) despite "diversifying more correctly" by the model's own logic.
+      The underlying idea is real (the market genuinely is shared - confirmed directly, not assumed) -
+      the flaw is in this implementation's crude size estimate: it prices every visible opponent tile
+      at its full remaining `total_yield`, exactly like T8.3f does for our own tiles, but that
+      approximation only worked for our own tiles because we directly control our own planting
+      schedule (naturally time-clustered); an opponent's tile carries no timing information at all
+      (real age or expected harvest day) in this model, so it overcounts an opponent's tile as fully
+      overlapping with our own upcoming harvest regardless of real overlap - double-penalizing shared
+      popular crops into premature abandonment.
+      **Shipped default: `crop_self_impact_include_opponent=False`** (`DEFAULT_PARAMS`,
+      `params/policy.json`, `decide.py`'s `_DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT`) - the
+      mechanism stays in the codebase, tested and available, kept for a real, not-yet-built refinement
+      (weighting an opponent's tile by its own forecasted remaining yield/timing instead of a flat
+      full `total_yield`) rather than deleted outright. Golden table unchanged (default behavior is
+      bit-identical to T8.3f). 276/276 full suite (7 new tests), compileall clean, boundary check
+      green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

@@ -145,6 +145,43 @@ _DEFAULT_USE_FERTILIZER = False
 # stay high) rather than a marginal tuning gain.
 _DEFAULT_CROP_SELF_IMPACT_AWARE = True
 
+# T8.3g: extends T8.3f's self-impact model to also count the opponent's
+# already-planted tiles, not just our own - the market is shared, so a
+# tile the opponent already has growing pushes the same price down just
+# as surely as ours does (see `_combined_crop_tile_counts`'s own
+# docstring for why this is fully visible, not a private-data leak).
+# Gated separately from `crop_self_impact_aware` (a real, deliberately
+# distinct lever, not folded into it) since it's a materially different
+# mechanism (reading the opponent's board) that could plausibly help or
+# hurt independently of whether self-impact alone already helps.
+#
+# **Rejected as the default** - measured a clean, total loss: 0/50 on
+# the working block and 0/50 on the held-out block, worse than T8.3e's
+# FERTILIZE rejection (which at least tied most episodes). Traced (seed
+# 100): the opponent-aware agent switched from MELON to STRAWBERRY after
+# only 14 MELON plantings, versus the unaware agent's 17 - ending with
+# *less* money ($19463 vs $23092) despite diversifying "more correctly"
+# by the model's own logic. The underlying idea (a shared market is
+# genuinely affected by the opponent's production) is real and confirmed
+# (kaggriculture.py's market inventory is one object, not per-player) -
+# the flaw is in this implementation's crude size estimate: it prices
+# *every* visible opponent tile at its full remaining `total_yield`,
+# exactly like T8.3f already does for our own tiles, but a tile of ours
+# was already a good approximation only because our own planting
+# schedule and target crop are things we directly control and cluster in
+# time; the opponent's tiles carry no timing information at all (real
+# age or expected harvest day), so this overcounts an opponent's
+# tile as fully overlapping with our own upcoming harvest regardless of
+# whether their production window has any real overlap with ours -
+# double-penalizing shared popular crops and triggering premature
+# abandonment. A genuine, not-yet-built refinement (weighting an
+# opponent's tile by its own forecasted remaining yield/timing rather
+# than a flat full `total_yield`) is a real candidate for a future
+# attempt, not ruled out - but this flat version does not clear the bar.
+# Kept available (like "SHED" and `use_fertilizer`) for that future
+# refinement to build on, not deleted outright.
+_DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT = False
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -280,6 +317,31 @@ def _crop_tile_counts(tiles) -> dict[str, int]:
     return counts
 
 
+def _combined_crop_tile_counts(farms) -> dict[str, int]:
+    """Sums `_crop_tile_counts` across every farm given - T8.3g extends
+    T8.3f's own-farm-only scan to include the opponent's farm too.
+
+    Verified directly in kaggriculture.py (not assumed): `obs["farms"]`
+    is one shared list object, assigned identically to every player's
+    observation (`_initialize`/`interpreter` both copy the *same* list,
+    never a per-player copy) - so the opponent's tiles (crop, planted
+    day, watered status, everything) are exactly as visible as our own.
+    Only `private` (shed/seeds) is genuinely per-player and stays out of
+    reach. A tile the opponent already has growing pushes the same
+    shared market inventory down just as surely as one of our own once
+    it's harvested and sold (`kagg.gamelib.market.price` and the real
+    market don't distinguish whose SELL order moved the inventory) - so
+    for the purpose of "how much of this crop is already committed
+    before my next tile's own yield lands," ownership doesn't matter,
+    only quantity.
+    """
+    combined: dict[str, int] = {}
+    for farm in farms:
+        for crop, n in _crop_tile_counts(farm["tiles"]).items():
+            combined[crop] = combined.get(crop, 0) + n
+    return combined
+
+
 def _top_investment_choice(
     market_inventory: dict, current_day: int, params: dict, crop_tile_counts: dict | None = None
 ) -> tuple[str, str] | None:
@@ -368,11 +430,15 @@ def decide(obs: dict, params: dict) -> dict:
     shed = private.get("shed", {})
 
     current_day = obs.get("day", 0)
-    crop_tile_counts = (
-        _crop_tile_counts(me["tiles"])
-        if params.get("crop_self_impact_aware", _DEFAULT_CROP_SELF_IMPACT_AWARE)
-        else None
-    )
+    if params.get("crop_self_impact_aware", _DEFAULT_CROP_SELF_IMPACT_AWARE):
+        farms_to_scan = (
+            obs["farms"]
+            if params.get("crop_self_impact_include_opponent", _DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT)
+            else [me]
+        )
+        crop_tile_counts = _combined_crop_tile_counts(farms_to_scan)
+    else:
+        crop_tile_counts = None
     investment = _top_investment_choice(obs["market"]["inventory"], current_day, params, crop_tile_counts)
     desired_name, desired_kind = investment if investment is not None else (None, None)
     desired_crop = desired_name if desired_kind == "crop" else None

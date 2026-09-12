@@ -12,5 +12,6 @@
   "land_buy_min_frontier_distance": 99,
   "liquidation_days_before_end": 2,
   "use_fertilizer": false,
-  "crop_self_impact_aware": true
+  "crop_self_impact_aware": true,
+  "crop_self_impact_include_opponent": false
 }

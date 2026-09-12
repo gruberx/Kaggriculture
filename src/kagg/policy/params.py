@@ -110,6 +110,18 @@ DEFAULT_PARAMS = {
     # kagg.policy.strategy.rank_portfolio's own docstring for the
     # mechanism.
     "crop_self_impact_aware": True,
+    # T8.3g: extends T8.3f to also count the opponent's already-planted
+    # tiles (obs["farms"] is shared, fully visible - see
+    # kagg.policy.decide._combined_crop_tile_counts's own docstring).
+    # Built and tested, but **rejected as the default** after direct
+    # self-play measurement: a clean, total loss (0/50 both blocks),
+    # traced to premature crop abandonment - pricing every visible
+    # opponent tile at its full remaining yield, with no timing
+    # information about when their harvest actually lands, badly
+    # overestimates real market overlap. See kagg.policy.decide's
+    # _DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT comment for the full
+    # story and a real, not-yet-built refinement idea.
+    "crop_self_impact_include_opponent": False,
 }
 
 
