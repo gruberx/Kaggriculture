@@ -266,8 +266,10 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       stays disabled (99) - no evidence yet it's needed once the fraction gate already prevents nearly
       all land purchases. Golden table re-recorded for the accepted value. 242/242 full suite (13 new
       tests total across strategy/decide), compileall clean.
-- [ ] **Checkpoint 8A** — suite green, golden table re-recorded, bundle built + submitted, real
-      episode scores recorded.
+- [ ] **Checkpoint 8A** — 248/248 suite green, golden table re-recorded, bundle built and audited
+      clean (`build/submission.tar.gz`, verified shipping `investment_anchor: "UNIT"`,
+      `plant_while_pursuing_animal: false`, `land_buy_max_free_tile_fraction: 0.25`). Submission
+      itself: ask the user first (established discipline, every submission, not just the first).
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).
