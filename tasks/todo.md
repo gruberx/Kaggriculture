@@ -295,6 +295,36 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       not yet built or scoped). Golden table re-recorded (conditional fix - 2/6 seeds jumped
       substantially where an animal actually locked in as top choice, e.g. starter/seed1: 18242 →
       25204; the rest near-unchanged). 248/248 full suite, compileall clean.
+- [x] T8.3c — Designed together with the user in direct response to T8.3b's honest "SHED doesn't
+      pay for itself" finding, and to their own follow-up proposal for a better placement rule.
+      Traced the actual root cause precisely: `_closest_pos` (what `anchor="UNIT"` delegates to)
+      already picks the tile nearest the farmer correctly, but breaks ties among equidistant
+      candidates by **row-major scan order** - which has no relationship to the shed and is exactly
+      what drove the marching-line pattern. SHED's mistake (T8.1) was replacing the whole primary
+      key, not just the tie-break, which is what cost it real travel efficiency.
+      **New anchor `"UNIT_TOWARD_SHED"`**: keeps distance-to-farmer as the primary key (identical to
+      plain UNIT - provably never a worse detour, since tied candidates share the same
+      farmer-distance by construction) and only changes the tie-break to `shed_distance` instead of
+      scan order. A user-proposed continuous-coordinate formula (`|4.5-x|+|4.5-y|`) turned out to be
+      algebraically identical to the already-implemented `shed_distance` up to an irrelevant +1
+      constant - confirmed before writing any code, so no new geometry was needed. Two other
+      refinements agreed with the user before implementing: no new state (the user's original design
+      used each unit's "last movement direction," which `decide()` deliberately never tracks - a
+      turn-number-based stateless rotation was considered and explicitly dropped in favor of a
+      simple final `(x,y)` tie-break, since a rotating direction doesn't classify cleanly for a
+      *global* argmin the way it does for immediate neighbors); and reused the existing global
+      `empty_tiles`/`_compact_position` machinery rather than writing new local ring-expansion
+      pathfinding, since nothing in this game blocks movement (units can walk through
+      occupied/LOCKED tiles), so a local greedy walk and a global argmin converge to the same result.
+      **Measured: 50/50 wins on BOTH self-play blocks** against the previously-shipped default - the
+      single cleanest result of this whole investigation. Traced, not just trusted: every seed
+      checked did strictly more WATER/PLANT/HARVEST and fewer PASS turns than the old default in the
+      same episode (e.g. seed 100: 24862 → 26507 money). **Accepted** as the new
+      `investment_anchor` default (kept in sync across `decide.py`'s module constant,
+      `DEFAULT_PARAMS`, and `params/policy.json`). Golden table re-recorded - all 6 seeds improved
+      this time (e.g. starter/seed3: 21486 → 25422), unlike T8.3b's conditional fix: this is a
+      structural travel-efficiency improvement that applies in every game. 251/251 full suite (3 new
+      tests), compileall clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

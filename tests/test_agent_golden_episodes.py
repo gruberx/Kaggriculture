@@ -130,6 +130,31 @@ starter/seed1: 18242 -> 25204, pass/seed1: 17970 -> 24979); seeds where
 that never happened are close to unchanged, consistent with this being
 a conditional bug fix, not a universal multiplier.
 
+Re-recorded an eighth time for T8.3c (tasks/plan.md) - designed together
+with the user in direct response to T8.3b's honest "SHED doesn't pay for
+itself" finding. Traced the actual root cause precisely, not just
+"SHED vs UNIT": UNIT's tie-break among candidates *equally* close to the
+farmer is row-major scan order (`tasks._closest_pos`), which has no
+relationship to the shed and is what drove the marching-line pattern -
+not the nearest-to-farmer primary criterion itself, which SHED wrongly
+replaced entirely (that replacement is exactly what cost it real travel
+efficiency in T8.3b's measurements). The fix keeps distance-to-farmer as
+the primary key (a new anchor, "UNIT_TOWARD_SHED") and only changes the
+tie-break to `shed_distance` - provably never a worse detour than plain
+UNIT for that specific choice, since tied candidates share the same
+farmer-distance by definition. A user-proposed continuous-coordinate
+distance formula (`|4.5-x|+|4.5-y|`) turned out to be algebraically
+identical to the already-implemented `shed_distance` up to an irrelevant
++1 constant - confirmed before writing any code, so no new geometry was
+needed. Measured: 50/50 wins on BOTH self-play blocks against the
+previously-shipped default - the single cleanest result of this entire
+investigation. Traced, not just trusted: every seed checked did strictly
+more WATER/PLANT/HARVEST and fewer PASS turns than the old default in
+the same episode. All 6 golden seeds improved this time (e.g.
+starter/seed3: 21486 -> 25422), unlike T8.3b's conditional fix - this
+one is a structural travel-efficiency improvement that applies in every
+game, not just ones where a specific animal-lock-in scenario occurs.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -148,23 +173,22 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.3b policy (plant_while_pursuing_animal accepted
-# as the default), reproduced twice before being hardcoded here. Not yet
-# the rigorous >=60% win rate SPEC.md's success criteria call for (that
-# needs Phase 4's paired-seed harness, not three ad-hoc seeds), but a
-# real improvement worth locking in - two of six seeds jumped
-# substantially (an animal locked in as the long-term top choice in
-# those games: starter/seed1 18242 -> 25204, pass/seed1 17970 -> 24979),
-# the rest close to unchanged (this fix is conditional on that scenario
-# actually occurring), consistent with the 50/50-on-both-blocks self-play
-# result this was accepted on.
+# Recorded against the T8.3c policy (investment_anchor="UNIT_TOWARD_SHED"
+# accepted as the default), reproduced twice before being hardcoded here.
+# Not yet the rigorous >=60% win rate SPEC.md's success criteria call for
+# (that needs Phase 4's paired-seed harness, not three ad-hoc seeds), but
+# a real improvement worth locking in - all 6 seeds improved this time
+# (e.g. starter/seed3: 21486 -> 25422), consistent with this being a
+# structural travel-efficiency fix that applies every game, not a
+# conditional one like T8.3b's - and with the 50/50-on-both-blocks
+# self-play result this was accepted on.
 _GOLDEN = {
-    ("starter", 1): (25204.0, 3431.0),
-    ("starter", 2): (25599.0, 3569.0),
-    ("starter", 3): (21486.0, 3639.0),
-    ("pass", 1): (24979.0, 3000.0),
-    ("pass", 2): (25702.0, 3000.0),
-    ("pass", 3): (21499.0, 3000.0),
+    ("starter", 1): (26366.0, 3421.0),
+    ("starter", 2): (26541.0, 3569.0),
+    ("starter", 3): (25422.0, 3661.0),
+    ("pass", 1): (26156.0, 3000.0),
+    ("pass", 2): (26017.0, 3000.0),
+    ("pass", 3): (25639.0, 3000.0),
 }
 
 

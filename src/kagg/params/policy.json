@@ -6,7 +6,7 @@
   "wheat_restock_threshold": 5,
   "wheat_restock_qty": 10,
   "wheat_max_buy_price": 40,
-  "investment_anchor": "UNIT",
+  "investment_anchor": "UNIT_TOWARD_SHED",
   "plant_while_pursuing_animal": true,
   "land_buy_max_free_tile_fraction": 0.25,
   "land_buy_min_frontier_distance": 99

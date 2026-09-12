@@ -40,10 +40,13 @@ DEFAULT_PARAMS = {
     "wheat_max_buy_price": 40,
     # T8.1: "SHED" (shed-anchored placement) is implemented and tested,
     # but T8.3b's clean, isolated re-measurement (on top of T8.2+T8.3)
-    # found it a real net loss even combined with the fallback below -
-    # see kagg.policy.decide's _DEFAULT_INVESTMENT_ANCHOR comment for the
-    # full four-way comparison.
-    "investment_anchor": "UNIT",
+    # found it a real net loss even combined with the fallback below.
+    # T8.3c found the actual fix instead: "UNIT_TOWARD_SHED" keeps
+    # distance-to-farmer as the primary key (never a worse detour than
+    # plain UNIT) and only breaks ties toward the shed - accepted after
+    # winning 50/50 on both self-play blocks - see kagg.policy.decide's
+    # _DEFAULT_INVESTMENT_ANCHOR comment for the full story.
+    "investment_anchor": "UNIT_TOWARD_SHED",
     # T8.9: fixes a real bug (an animal ranking #1 forever can otherwise
     # block crop planting for the rest of the game). Accepted as the
     # default in T8.3b after a clean, isolated re-measurement on top of

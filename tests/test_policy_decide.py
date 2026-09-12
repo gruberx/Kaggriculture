@@ -108,15 +108,16 @@ def test_decide_passes_investment_anchor_param_to_build_task_list(monkeypatch):
     assert captured.get("anchor") == "UNIT"
 
 
-def test_decide_defaults_investment_anchor_to_unit_when_unset():
-    # T8.1's SHED anchor is implemented and tested but not yet
-    # arena-accepted as the default - see decide.py's own
-    # _DEFAULT_INVESTMENT_ANCHOR comment for the measured story (a real
-    # working-block win that didn't survive the held-out block).
+def test_decide_defaults_investment_anchor_to_unit_toward_shed_when_unset():
+    # T8.3c accepted "UNIT_TOWARD_SHED" as the default (50/50 on both
+    # self-play blocks against the previously-shipped plain "UNIT") -
+    # see decide.py's own _DEFAULT_INVESTMENT_ANCHOR comment for the full
+    # story, including why plain "SHED" (T8.1) was tried and rejected
+    # first.
     import kagg.policy.decide as decide_module
 
-    assert DEFAULT_PARAMS.get("investment_anchor") == "UNIT"
-    assert decide_module._DEFAULT_INVESTMENT_ANCHOR == "UNIT"
+    assert DEFAULT_PARAMS.get("investment_anchor") == "UNIT_TOWARD_SHED"
+    assert decide_module._DEFAULT_INVESTMENT_ANCHOR == "UNIT_TOWARD_SHED"
 
 
 def test_decide_does_not_hire_past_the_daily_target():

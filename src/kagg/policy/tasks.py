@@ -35,6 +35,16 @@ from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
 # hardcode a judgment call here that the arena can settle instead.
 _ANCHOR_SHED = "SHED"
 _ANCHOR_UNIT = "UNIT"
+# T8.3c (tasks/plan.md), designed together with the user after T8.3b found
+# plain SHED loses even combined with the accepted T8.9 fix: keeps
+# distance-to-farmer as the *primary* key (SHED's mistake was replacing
+# it entirely, which can force a real detour) and only changes the
+# *tie-break* among candidates exactly as close to the farmer, toward
+# shed_distance - attacking the actual traced cause of the runaway-line
+# pathology (UNIT's own tie-break is row-major scan order, unrelated to
+# the shed) without ever costing more travel than plain UNIT already
+# does for that specific choice. See `_compact_position`'s docstring.
+_ANCHOR_UNIT_TOWARD_SHED = "UNIT_TOWARD_SHED"
 
 PRIORITY_PREVENT_LOSS = 0
 PRIORITY_HARVEST = 1
@@ -109,11 +119,28 @@ def _compact_position(candidates, board_size: int, anchor: str, unit_positions) 
     SHED key totally independent of unit positions, which is what makes
     tier-local task *servicing* order stable turn to turn once units have
     no memory (T8.2 relies on task positions never chasing a moving
-    unit - see that task's stability argument in the plan file)."""
+    unit - see that task's stability argument in the plan file).
+
+    `anchor="UNIT_TOWARD_SHED"` (T8.3c) keeps distance-to-farmer as the
+    *primary* key - identical to plain UNIT's own primary criterion, so
+    this never picks a candidate with a worse farmer-distance than plain
+    UNIT would for the same board - and only uses `shed_distance` to
+    break ties among candidates exactly as close to the farmer, with
+    `pos` as the final tie-break (kept simple - a directional/rotating
+    tie-break would need classifying an arbitrary global candidate's
+    direction from the farmer, real added complexity for a third-level
+    tie-break expected to rarely fire; revisit only if self-play or a
+    real episode shows an actual lopsided-growth problem from this)."""
     if not candidates:
         return None
     if anchor == _ANCHOR_UNIT:
         return _closest_pos(candidates, unit_positions)
+    if anchor == _ANCHOR_UNIT_TOWARD_SHED:
+        return min(candidates, key=lambda pos: (
+            min(tile_distance(pos, u) for u in unit_positions) if unit_positions else 0,
+            shed_distance(pos, board_size),
+            pos,
+        ))
     return min(candidates, key=lambda pos: (shed_distance(pos, board_size), pos))
 
 

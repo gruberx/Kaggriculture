@@ -91,15 +91,31 @@ _WHEAT_FEED_RESERVE = 10
 #     fewer crop tiles than UNIT achieved in the same episode - a real,
 #     if modest, net trade against crops, which are still the larger
 #     income source at this labor level.
-# Net: with the real T8.9 fix in place, UNIT anchor is the *best*
-# measured option, not merely "still not disproven" - a clean rejection
-# of SHED, not an absence of evidence. The runaway-line placement the
-# user observed is real and still present; T8.1's mechanism just isn't
-# the fix that pays for itself once T8.9 is fixed properly. Left as a
-# tested, real capability (anchor="SHED") for a future, differently-
-# shaped fix (e.g. anchoring animal structures and crop plants
-# independently) rather than deleted.
-_DEFAULT_INVESTMENT_ANCHOR = "UNIT"
+# Net at that point: with the real T8.9 fix in place, plain UNIT anchor
+# was the *best* measured option - a clean rejection of SHED, not an
+# absence of evidence. But the runaway-line placement the user observed
+# was real and still present; T8.1's SHED mechanism just wasn't the fix
+# that pays for itself once T8.9 is fixed properly.
+#
+# T8.3c (tasks/plan.md), designed together with the user in response to
+# that honest gap, found the actual fix: the traced root cause was never
+# "anchor to the farmer instead of the shed" per se - it was that UNIT's
+# tie-break among candidates *equally* close to the farmer is row-major
+# scan order (see tasks.py's `_closest_pos`), which has no relationship
+# to the shed and is what drove the marching-line pattern. "UNIT_TOWARD_
+# SHED" keeps distance-to-farmer as the *primary* key (identical to
+# plain UNIT - never a worse detour for that reason alone) and only
+# breaks ties toward `shed_distance` instead of scan order. Measured
+# clean self-play against the shipped default (UNIT + plant_while_
+# pursuing_animal=True): 50/50 on BOTH the working and held-out blocks -
+# the single cleanest win in this whole investigation. Traced, not just
+# trusted: every seed checked did strictly more WATER/PLANT/HARVEST and
+# fewer PASS turns than plain UNIT in the same episode, confirming the
+# structural "never a worse detour" argument translates into a real
+# efficiency gain, not just a differently-shaped equally-costly walk.
+# Accepted as the new default. Plain "SHED" (T8.1) stays available and
+# documented above as a real, tested, but rejected alternative.
+_DEFAULT_INVESTMENT_ANCHOR = "UNIT_TOWARD_SHED"
 
 # T8.3b (tasks/plan.md): ACCEPTED as the default, correcting the earlier
 # "measured to lose" conclusion, which was itself measured on stale, pre-

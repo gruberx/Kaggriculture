@@ -270,6 +270,70 @@ def test_build_task_list_prefers_a_newly_unlocked_quadrant_tile_over_a_far_nw_ti
     assert shed_distance(plant_task.pos, 10) < shed_distance((0, 0), 10)
 
 
+def test_build_task_list_breaks_a_farmer_distance_tie_toward_the_shed():
+    # T8.3c (tasks/plan.md, designed together with the user): SHED alone
+    # (anchor="SHED") was measured to lose in isolated self-play even
+    # after the T8.9 fix (T8.3b) - it replaces the *primary* nearest-to-
+    # farmer key entirely, which can force a real detour. UNIT_TOWARD_
+    # SHED keeps distance-to-farmer as the primary key (never a worse
+    # detour than plain "UNIT") and only changes the *tie-break* among
+    # candidates that are exactly as close to the farmer - attacking the
+    # actual traced cause of the runaway-line pathology (UNIT's tie-break
+    # is row-major scan order, unrelated to the shed).
+    #
+    # Farmer at (0, 4). (1, 3) and (1, 5) are both at Manhattan distance
+    # 2 from the farmer - a genuine tie. shed_distance((1,3), 10) == 4,
+    # shed_distance((1,5), 10) == 3 (nearer) - verified by hand before
+    # writing this test. Under anchor="UNIT" (row-major scan order,
+    # y-then-x-ascending), (1,3) is encountered first and wins today.
+    #
+    # A third candidate, (4, 4) - the shed tile itself, shed_distance=0,
+    # but farmer-distance 4 - is included specifically to distinguish
+    # this from plain anchor="SHED" (which would wrongly prefer (4,4),
+    # the real detour cost T8.3b measured SHED losing on): the *primary*
+    # key must reject it for being farther from the farmer, regardless of
+    # its better shed-distance.
+    tiles = _empty_tiles()
+    for y in range(10):
+        for x in range(10):
+            if (x, y) not in {(1, 3), (1, 5), (4, 4)}:
+                tiles[y][x] = _plant_tile()  # occupy everything else
+    tasks = build_task_list(tiles, unit_positions=[(0, 4)], plant_crop="CARROT", anchor="UNIT_TOWARD_SHED")
+    plant_task = next(t for t in tasks if t.op == "PLANT")
+    assert plant_task.pos == (1, 5)  # shed-nearer of the two farmer-distance-2 ties, not the farther shed tile
+
+
+def test_build_task_list_unit_toward_shed_matches_unit_when_no_tie():
+    # Same scenario as the plain-UNIT test above, but with the new
+    # anchor - when there's a single unique nearest-to-farmer tile (no
+    # tie to break), UNIT_TOWARD_SHED must agree with plain UNIT exactly.
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(9, 9)], plant_crop="CARROT", anchor="UNIT_TOWARD_SHED")
+    assert tasks[0].pos == (9, 9)
+
+
+def test_build_task_list_unit_toward_shed_never_costs_more_travel_than_unit():
+    # The structural guarantee T8.3c's design relies on, made concrete
+    # rather than left as prose: UNIT_TOWARD_SHED shares UNIT's primary
+    # key (distance to the nearest unit), so across any board it must
+    # pick a tile at exactly the same farmer-distance plain UNIT would -
+    # never a worse (longer) walk, only a different choice among ties.
+    boards = [
+        (_empty_tiles(), [(0, 0)]),
+        (_empty_tiles(), [(9, 9)]),
+        (_empty_tiles(), [(3, 7)]),
+        (_empty_tiles(), [(5, 5)]),
+    ]
+    for tiles, unit_positions in boards:
+        unit_tasks = build_task_list(tiles, unit_positions=unit_positions, plant_crop="CARROT", anchor="UNIT")
+        hybrid_tasks = build_task_list(
+            tiles, unit_positions=unit_positions, plant_crop="CARROT", anchor="UNIT_TOWARD_SHED"
+        )
+        unit_dist = tile_distance(unit_tasks[0].pos, unit_positions[0])
+        hybrid_dist = tile_distance(hybrid_tasks[0].pos, unit_positions[0])
+        assert hybrid_dist == unit_dist, (unit_positions, unit_dist, hybrid_dist)
+
+
 # --- animal acquisition pipeline (T6.2) ----------------------------------
 
 
