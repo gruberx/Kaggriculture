@@ -438,13 +438,52 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       (real age or expected harvest day) in this model, so it overcounts an opponent's tile as fully
       overlapping with our own upcoming harvest regardless of real overlap - double-penalizing shared
       popular crops into premature abandonment.
-      **Shipped default: `crop_self_impact_include_opponent=False`** (`DEFAULT_PARAMS`,
-      `params/policy.json`, `decide.py`'s `_DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT`) - the
+      **Shipped default: opponent contribution ignored** (an all-or-nothing `crop_self_impact_
+      include_opponent` flag, superseded in T8.3h below by a graduated weight - see that entry) - the
       mechanism stays in the codebase, tested and available, kept for a real, not-yet-built refinement
       (weighting an opponent's tile by its own forecasted remaining yield/timing instead of a flat
       full `total_yield`) rather than deleted outright. Golden table unchanged (default behavior is
       bit-identical to T8.3f). 276/276 full suite (7 new tests), compileall clean, boundary check
       green.
+- [x] T8.3h — The user's own proposed refinement to T8.3g's rejection: instead of an all-or-
+      nothing opponent flag, graduate it - discount the opponent's tile-count contribution by a
+      continuous `crop_self_impact_opponent_weight` (0.0-1.0), on the theory that partial credit
+      for "the opponent probably will eventually sell some of this" might beat both the 0.0 and 1.0
+      extremes. The user also asked two grounding questions along the way, both answered directly
+      from the code rather than assumed: (1) current market prices ARE already the baseline for
+      every forecast (`sell_at_inventory` is the real, current `market_inventory` level; the self-
+      impact walk only adds *future*, not-yet-sold production on top of it) - no separate "current
+      price" gap existed to close; (2) the crop-switch decision was already a real $-vs-$
+      quantitative comparison (`rank_portfolio`'s scores are directly comparable dollar amounts), not
+      a naive "opponent planted something -> panic switch" heuristic, and reallocation across the
+      farm is already inherently gradual (one new tile decided per planting opportunity, existing
+      tiles never uprooted) - T8.3g's problem was mis-calibration of the estimate, not an all-or-
+      nothing switching *mechanism*. Also answered two side questions plainly: yes, animal products
+      are scored too (`rank_portfolio` includes `animal_revenue_per_tile_day`), but the self-impact
+      fix is scoped to crops only (documented gap, same reason as before - unbounded animal
+      production has no natural total to walk); and no, the policy does not read `obs["town"]` at
+      all currently, so town-shop-driven consumption boosts (`SHOPS` in `kaggriculture.py` - e.g.
+      YARN_STORE raises WOOL demand, PET_CAFE raises CARROT demand) are a real, completely unused
+      forward-looking signal - flagged as a genuine separate future opportunity, not attempted here.
+      **Built:** replaced T8.3g's boolean flag with `_combined_crop_tile_counts(my_tiles,
+      other_farms, opponent_weight)` - our own tiles always count at full weight; the opponent's
+      count is scaled by `opponent_weight` before being added in.
+      **Measured — still a rejection, and an informative one:** swept 0.1/0.25/0.5/0.75/1.0 against
+      the 0.0 baseline (working block, 50 seeds each). No weight wins outright: 0.1 -> win_rate 0.480
+      (24W/3L/23 ties, Wilson [0.35, 0.61], overlapping 0.5 - not even a point-estimate win); 0.25 ->
+      0.020 (1W/49L); 0.5 -> 0.200 (10W/40L); 0.75 -> 0.040 (2W/48L); 1.0 -> 0.000 (0W/50L, T8.3g's own
+      result). No clean U-shape where a small weight helps - graduating the discount only softens how
+      badly the mechanism loses, it doesn't rescue it, confirming the real flaw is the complete
+      absence of *timing* information about the opponent's tiles, not merely the *size* of the
+      discount applied to a timing-blind estimate.
+      **Shipped default: `crop_self_impact_opponent_weight=0.0`** (unchanged from T8.3f's own
+      behavior) - the graduated mechanism stays in the codebase, tested and available at any weight,
+      for a genuinely different future refinement: a signal-based approach (only trusting the
+      opponent term when the *observed* market price already shows movement unexplained by our own
+      activity - the user's own follow-up idea) that this sweep did not attempt, since it needs new
+      information this stateless `decide()` doesn't currently derive. Golden table unchanged (default
+      behavior is bit-identical to T8.3f/T8.3g). 278/278 full suite (renamed/added tests), compileall
+      clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

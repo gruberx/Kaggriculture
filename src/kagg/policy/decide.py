@@ -155,32 +155,67 @@ _DEFAULT_CROP_SELF_IMPACT_AWARE = True
 # mechanism (reading the opponent's board) that could plausibly help or
 # hurt independently of whether self-impact alone already helps.
 #
-# **Rejected as the default** - measured a clean, total loss: 0/50 on
-# the working block and 0/50 on the held-out block, worse than T8.3e's
-# FERTILIZE rejection (which at least tied most episodes). Traced (seed
-# 100): the opponent-aware agent switched from MELON to STRAWBERRY after
-# only 14 MELON plantings, versus the unaware agent's 17 - ending with
-# *less* money ($19463 vs $23092) despite diversifying "more correctly"
-# by the model's own logic. The underlying idea (a shared market is
-# genuinely affected by the opponent's production) is real and confirmed
-# (kaggriculture.py's market inventory is one object, not per-player) -
-# the flaw is in this implementation's crude size estimate: it prices
-# *every* visible opponent tile at its full remaining `total_yield`,
-# exactly like T8.3f already does for our own tiles, but a tile of ours
-# was already a good approximation only because our own planting
-# schedule and target crop are things we directly control and cluster in
-# time; the opponent's tiles carry no timing information at all (real
-# age or expected harvest day), so this overcounts an opponent's
-# tile as fully overlapping with our own upcoming harvest regardless of
-# whether their production window has any real overlap with ours -
-# double-penalizing shared popular crops and triggering premature
-# abandonment. A genuine, not-yet-built refinement (weighting an
-# opponent's tile by its own forecasted remaining yield/timing rather
-# than a flat full `total_yield`) is a real candidate for a future
-# attempt, not ruled out - but this flat version does not clear the bar.
-# Kept available (like "SHED" and `use_fertilizer`) for that future
-# refinement to build on, not deleted outright.
-_DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT = False
+# T8.3g measured full weight (1.0, i.e. an opponent's tile counts exactly
+# like one of our own) a clean, total loss: 0/50 on the working block and
+# 0/50 on the held-out block, worse than T8.3e's FERTILIZE rejection
+# (which at least tied most episodes). Traced (seed 100): the opponent-
+# aware agent switched from MELON to STRAWBERRY after only 14 MELON
+# plantings, versus the unaware agent's 17 - ending with *less* money
+# ($19463 vs $23092) despite diversifying "more correctly" by the model's
+# own logic. The underlying idea (a shared market is genuinely affected
+# by the opponent's production) is real and confirmed (kaggriculture.py's
+# market inventory is one object, not per-player) - the flaw was this
+# implementation's crude size estimate: it priced *every* visible
+# opponent tile at its full remaining `total_yield`, exactly like T8.3f
+# already does for our own tiles, but a tile of ours is only a good
+# approximation because our own planting schedule is something we
+# directly control and cluster in time; the opponent's tiles carry no
+# timing information at all (real age, expected harvest day), so full
+# weight overcounts an opponent's tile as fully overlapping with our own
+# upcoming harvest regardless of whether their production window has any
+# real overlap with ours - double-penalizing shared popular crops into
+# premature abandonment.
+#
+# T8.3h (the user's own proposed refinement) tried a *graduated* weight
+# instead of all-or-nothing, on the theory that some partial credit for
+# "the opponent probably will eventually sell some of this" might beat
+# both extremes. Replaces this all-or-nothing flag entirely (0.0 and 1.0
+# reproduce its two settings exactly) - see
+# `_DEFAULT_CROP_SELF_IMPACT_OPPONENT_WEIGHT` below for the measured
+# result.
+
+# T8.3h: how much weight (0.0-1.0) an opponent's already-planted tile
+# gets relative to one of our own (which always counts at full weight,
+# unconditionally) - see `_combined_crop_tile_counts`'s own docstring for
+# why a graduated weight, not the T8.3g all-or-nothing flag, is the right
+# shape for this now.
+#
+# **Still rejected at every nonzero weight tried** - the graduated shape
+# alone doesn't rescue the mechanism; it only softens how badly it loses.
+# Swept 0.1/0.25/0.5/0.75/1.0 head-to-head against 0.0 (the working
+# block, 50 seeds each):
+#   0.10 -> win_rate 0.480 (24W/3L/23 ties), Wilson [0.35, 0.61] -
+#           overlaps 0.5, not even a point-estimate win over 0.0
+#   0.25 -> win_rate 0.020 (1W/49L)  - decisive loss
+#   0.50 -> win_rate 0.200 (10W/40L) - decisive loss
+#   0.75 -> win_rate 0.040 (2W/48L)  - decisive loss
+#   1.00 -> win_rate 0.000 (0W/50L)  - decisive loss (T8.3g's own result)
+# No weight beats 0.0 outright; the best any nonzero weight manages is a
+# statistical tie at the smallest value tried (0.1), degrading sharply
+# from there - not the clean U-shaped "small weight helps" curve the
+# refinement hypothesized. Confirms the real flaw isn't merely *how much*
+# weight the opponent's tiles get, but the complete absence of timing
+# information in the estimate itself (see the T8.3g paragraph above) -
+# even a small, constant discount doesn't compensate for not knowing
+# *when* the opponent's tile will actually be sold. A signal-based
+# refinement (e.g. only trusting the opponent term when the *observed*
+# market price already shows movement unexplained by our own sales, the
+# user's own follow-up idea) remains untried and unrejected - it would
+# need new information this stateless decide() doesn't currently derive
+# (an estimate of "expected price from my own activity alone" to compare
+# the real price against), a genuinely bigger lift than this sweep, not
+# attempted here.
+_DEFAULT_CROP_SELF_IMPACT_OPPONENT_WEIGHT = 0.0
 
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
@@ -317,9 +352,11 @@ def _crop_tile_counts(tiles) -> dict[str, int]:
     return counts
 
 
-def _combined_crop_tile_counts(farms) -> dict[str, int]:
-    """Sums `_crop_tile_counts` across every farm given - T8.3g extends
-    T8.3f's own-farm-only scan to include the opponent's farm too.
+def _combined_crop_tile_counts(my_tiles, other_farms, opponent_weight: float = 1.0) -> dict[str, float]:
+    """`_crop_tile_counts(my_tiles)`, plus every farm in `other_farms`
+    counted at `opponent_weight` (T8.3g extends T8.3f's own-farm-only
+    scan to include the opponent; T8.3h makes that weight graduated
+    instead of all-or-nothing - see both modules' own history below).
 
     Verified directly in kaggriculture.py (not assumed): `obs["farms"]`
     is one shared list object, assigned identically to every player's
@@ -331,14 +368,25 @@ def _combined_crop_tile_counts(farms) -> dict[str, int]:
     shared market inventory down just as surely as one of our own once
     it's harvested and sold (`kagg.gamelib.market.price` and the real
     market don't distinguish whose SELL order moved the inventory) - so
-    for the purpose of "how much of this crop is already committed
-    before my next tile's own yield lands," ownership doesn't matter,
-    only quantity.
+    ownership wouldn't matter at all, only quantity, *if* we knew exactly
+    when the opponent's tile will actually be harvested and sold.
+
+    `opponent_weight` (T8.3h, the user's own proposed refinement) exists
+    precisely because we don't: T8.3g measured that treating a visible
+    opponent tile as if its full remaining yield stacks directly on top
+    of our own (`opponent_weight=1.0`) is a real, decisive net loss (0/50
+    both self-play blocks) - traced to premature crop abandonment, since
+    an opponent's tile carries no timing information (real age, expected
+    harvest day) the way our *own* tiles do (we control our own planting
+    schedule, so our own tiles are naturally time-clustered with our next
+    one; the opponent's aren't). Our own tiles always count at full
+    weight (1.0, unconditionally) - only the opponent's contribution is
+    ever discounted.
     """
-    combined: dict[str, int] = {}
-    for farm in farms:
+    combined: dict[str, float] = dict(_crop_tile_counts(my_tiles))
+    for farm in other_farms:
         for crop, n in _crop_tile_counts(farm["tiles"]).items():
-            combined[crop] = combined.get(crop, 0) + n
+            combined[crop] = combined.get(crop, 0) + opponent_weight * n
     return combined
 
 
@@ -431,12 +479,11 @@ def decide(obs: dict, params: dict) -> dict:
 
     current_day = obs.get("day", 0)
     if params.get("crop_self_impact_aware", _DEFAULT_CROP_SELF_IMPACT_AWARE):
-        farms_to_scan = (
-            obs["farms"]
-            if params.get("crop_self_impact_include_opponent", _DEFAULT_CROP_SELF_IMPACT_INCLUDE_OPPONENT)
-            else [me]
+        other_farms = [f for i, f in enumerate(obs["farms"]) if i != player]
+        opponent_weight = params.get(
+            "crop_self_impact_opponent_weight", _DEFAULT_CROP_SELF_IMPACT_OPPONENT_WEIGHT
         )
-        crop_tile_counts = _combined_crop_tile_counts(farms_to_scan)
+        crop_tile_counts = _combined_crop_tile_counts(me["tiles"], other_farms, opponent_weight)
     else:
         crop_tile_counts = None
     investment = _top_investment_choice(obs["market"]["inventory"], current_day, params, crop_tile_counts)
