@@ -273,15 +273,170 @@ that actually matters. Commit.
 
 ---
 
-## What's not planned yet
+## Phase 5–7: follow-up planning pass (ops → policy capability → tuning)
 
-- **`tuning`** (coordinate ascent, opponent panel, regression gate) — deliberately left for a
-  follow-up `/agent-skills:plan` pass once Phase 4 produces a real working-block win rate to
-  improve on. Planning its parameter sweep now would mean guessing ranges before Phase 3's actual
-  parameter surface (`params/policy.json`'s real keys) exists.
-- **`ops`** (`build_submission.py`, the bundle audit, the actual submit-to-Kaggle workflow) —
-  needed before the first real Kaggle submission, but not before Phase 0–4 land; also a natural
-  follow-up planning pass.
+Written after Phase 4 landed (Checkpoint 4: 50/50 paired wins vs `starter`/`random` on the full
+tuning block) and re-grounded directly against the codebase and `kaggriculture.py` before writing
+any task below — see each task's own citations. Two things drove re-scoping past the original
+"tuning + ops" placeholder below: (1) `SPEC.md`'s own forum citations put strong/RL agents at
+~90-122K final money against our measured ~5.4-7.0K — a gap tuning alone (measured ceiling: hiring
+alone is worth +27%) cannot plausibly close, traced to a real implementation gap (animal
+acquisition was never built, even though `strategy.rank_portfolio()` already ranks animals
+correctly and COW/SHEEP beat every crop but MELON at base pricing); (2) the submission bundle path
+has never been exercised against real Kaggle with 19 days left before the deadline, and a weak
+submission proving the path today is worth more than a stronger one arriving too late to fix a
+loader surprise. Full reasoning: see the plan file referenced in the corresponding commits.
+
+`tuning`'s Stage 2 (search-generated value targets, `SPEC-tuning.md`) is deliberately **not**
+broken into tasks — its own spec text gates it behind a checked-in Stage-1 baseline that beats
+`starter`/`random`, which doesn't exist yet, and it's an open-ended research task that doesn't fit
+the remaining runway once Phase 5/6 land. Revisit only if Stage 1 finishes early.
+
+## Phase 5 — `ops`: prove the bundle path, get a baseline live
+
+**Goal:** the current agent, exactly as it stands today, packaged and submitted for real —
+deliberately *not* gated on Phase 6/7 (`ops` has zero code dependency on `policy`'s internals
+beyond whatever it currently does).
+
+- **T5.1 — `tools/build_submission.py`: bundle, audit, smoke-test**
+  Copies `agent_main.py`→`build/main.py`, `gamelib/`/`policy/`→`build/kagg/{gamelib,policy}/`
+  (with their existing `__init__.py`s), `src/kagg/params/policy.json`→`build/kagg/params/`. Does
+  **not** copy `params/seed_blocks.json` — confirmed by grep only `tools/harness.py` reads it,
+  `policy/params.py` never does (resolves `SPEC-ops.md`'s own open conditional on this). Runs the
+  bundle audit (reuse `_kaggle_environments_imports` from `tests/test_gamelib_boundary.py` against
+  the *built* tree — covers `agent_main.py` too, not just `gamelib`/`policy`) — **fails the build,
+  not a warning**, on any violation — then a real smoke episode
+  (`kaggle_environments.make(...).run(["build/main.py", "random"])` must reach `DONE`/`DONE`), then
+  `tar -czf build/submission.tar.gz -C build main.py kagg` (`main.py` at tar root, matching
+  `AGENTS.md` — already confirmed reproducible by hand: a from-scratch bundle assembled in a
+  scratch dir with no dev-tree `sys.path` tricks ran a real episode to completion).
+  - **Verify:** the script produces `build/submission.tar.gz`; extracting and smoke-testing it
+    independently reaches `DONE`/`DONE`; a deliberately reintroduced `kaggle_environments` import
+    in a scratch copy of a shipped file makes the script exit nonzero with no tarball produced.
+
+- **T5.2 — Submission workflow script + `--no-submit` dry run**
+  `start_competition_submission_upload` → PUT bytes to the returned URL → `submit_to_competition`
+  → poll `get_competition_submission` (`SPEC-ops.md`'s exact sequence). Logs every attempted
+  submission (message, timestamp, `policy` git commit, arena win-rate that justified it) to
+  `data/arena/submissions.jsonl` *before* the API call — exempt from `diskguard.ensure_budget()`
+  per `SPEC-ops.md` (kilobyte-scale, not one of the disk-hungry paths `diskguard` exists for).
+  `--no-submit` stops after the upload step.
+  - **Verify:** `--no-submit` completes an upload and logs would-be-submission details without
+    ever calling `submit_to_competition`; the log schema is asserted by a test.
+
+- **T5.3 — First real submission (ask-first, human-approved at execution time)**
+  Not a coding task. **Must pause for an explicit, real-time go-ahead immediately before the
+  `submit_to_competition` call** regardless of single-task/`auto` build mode — a scarce (5/day,
+  2 scored), hard-to-reverse resource per `SPEC.md`/`SPEC-ops.md`'s "ask first" boundary.
+  - **Verify:** `list_submission_episodes` shows a scored episode; `submissions.jsonl` has a
+    matching entry logged before the call.
+
+**Checkpoint 5:** `build/submission.tar.gz` builds clean and passes its own audit/smoke test; the
+first real Kaggle submission is live and confirmed scored; commit (note the submission id/
+description in the commit message).
+
+## Phase 6 — `policy`: close the animal-acquisition gap
+
+**Goal:** the farm can choose an animal, not just a crop, as its top investment, buy it, build the
+matching structure, place it, and collect its production — the largest measured lever available.
+
+- **T6.1 — Unified investment choice (`decide.py`)**
+  Replace `_top_crop_choice`'s `if name not in CROPS: continue` filter with a choice over
+  `rank_portfolio()`'s full crop-and-animal ranking, generalizing `_crop_has_time_to_mature`'s
+  season-fit check to animals via `gamelib.growth.forecast_animal_schedule` (same "first
+  production before `season_length_days`" logic already used for ongoing crops).
+  - **Verify:** a market state with crop prices depressed enough that an animal outranks every
+    crop (base `MARKET_I0` pricing alone isn't enough — MELON already beats every animal there) picks
+    the animal; an animal too close to season-end is skipped, mirroring
+    `test_top_crop_choice_returns_none_once_nothing_can_mature`.
+
+- **T6.2 — Acquisition pipeline (`tasks.py`)**
+  Extend `build_task_list()`'s `plant_crop` parameter into a general "desired investment" concept.
+  Design decision: structure-building does not wait on already owning the animal (build
+  proactively so the structure and the `BUY_ANIMAL` order complete in parallel across turns);
+  `PLACE` fires once both a held animal and a matching empty structure exist. At most one of
+  `{PLANT, BUILD_COOP, BUILD_PASTURE, PLACE}` per call, same invariant `PLANT` already has.
+  `action_for_unit` needs `BUILD_COOP`/`BUILD_PASTURE` (no target beyond standing on the tile) and
+  `PLACE` (`["PLACE", animal]`).
+  - **Verify:** empty tile + desired animal + no matching structure → `BUILD_*` task; matching
+    empty structure + animal held in shed → `PLACE` task; neither condition → neither task.
+
+- **T6.3 — `BUY_ANIMAL` market order (`decide.py`)**
+  Mirrors the existing `BUY_SEED` block: desired investment is an animal not yet held, money
+  allows, `gamelib.shed.shed_room()` confirms capacity → emit `["BUY_ANIMAL", animal, 1]` (verified
+  the real handler only reads the item, same as `BUY_SEED`).
+  - **Verify:** order emitted when conditions hold; shed full → no order, no error.
+
+- **T6.4 — Real-episode integration and re-measurement**
+  Run a real full episode and confirm, empirically, an animal gets bought, its structure built,
+  placed, and produces revenue within a season (this multi-turn pipeline is exactly the kind of
+  thing that can silently deadlock or land one day too late — the same class of bug T3.5 found
+  with melon timing). Document whatever's found precisely and fix in place. Re-run Checkpoint-5-
+  style measurement (`tools/arena.py --opponent starter --seeds 50 --jobs auto`, then `random`)
+  and record before/after numbers in the commit message.
+  - **Verify:** a golden/invariant test confirms at least one animal reaches production in a
+    representative episode; the baseline numbers hold or improve — a regression must be explained.
+
+- **T6.5 — Fix the documented `BUY_SEED` gap (`decide.py`)**
+  Don't emit `BUY_SEED` when there's no empty tile to plant it on (flagged in `decide.py`'s own
+  docstring since T3.5).
+  - **Verify:** fully-occupied farm, no seed on hand → no `BUY_SEED` order.
+
+- **T6.6 — Extend the `kaggle_environments`-import boundary check to `policy/`**
+  Closes a real gap: `tests/test_gamelib_boundary.py` only ever scanned `gamelib/`, though this
+  session's own commit messages claimed `policy/` was covered too (it wasn't — `policy/` in fact
+  contains no such import today, but the *test* never checked).
+  - **Verify:** generalized test scans `gamelib/` and `policy/` (ideally `agent_main.py` too); a
+    synthetic violation planted in a scratch copy of a `policy/` file is caught.
+
+**Checkpoint 6:** full suite green; `tools/arena.py` re-measurement vs `starter`/`random` on the
+full tuning block recorded in the commit message; commit.
+
+## Phase 7 — `tuning`: Stage 1 only (coordinate ascent + regression gate)
+
+**Goal:** turn `policy`'s named-but-unset parameters (now including whatever Phase 6 introduces)
+into numbers backed by the arena, never accepting a change the held-out block doesn't confirm.
+
+- **T7.1 — Regression gate (`tools/tuning.py`)**
+  Compares a candidate's held-out-block `BlockResult` against the checked-in baseline's, accepting
+  only if the win rate improves outside Wilson interval overlap. Logs the decision's full
+  configuration to `data/arena/` — **does** call `diskguard.ensure_budget()` first (unlike T5.2's
+  submission log — this write accumulates over a full tuning run, per `SPEC-tuning.md`).
+  - **Verify:** `SPEC-tuning.md`'s own Testing section exactly — a synthetic "worse" candidate
+    rejected; a synthetic "clearly better" one (e.g. an always-passing opponent) accepted.
+
+- **T7.2 — Coordinate-ascent loop (`tools/tuning.py`)**
+  Sweeps one parameter (or a correlated group — `hires_per_day` + `land_purchase_threshold_money`
+  per `SPEC-policy.md`'s hiring note) over a small grid via `harness.run_block` on the **working**
+  block only, keeping the best Wilson-adjusted win rate, iterating until no change improves beyond
+  noise.
+  - **Verify:** tested on a toy 2-parameter synthetic objective with a known optimum before ever
+    touching the real (expensive) arena, per `SPEC-tuning.md`.
+
+- **T7.3 — Opponent panel (`tools/tuning.py`)**
+  Panel: `starter`, `random`, previous-best `policy` snapshot. Open design point: `agent_main.py`
+  loads `params/policy.json` unconditionally at import with no override — recommend a narrow
+  eval-only env-var hook (e.g. `KAGG_POLICY_PARAMS_PATH`, read once at import, never used by the
+  shipped bundle) over a temp-copy-per-candidate approach. `yhay81/shop-router-0909` joins once
+  `ops` downloads it (not blocking Stage 1's start).
+  - **Verify:** `run_block` can compare two parameter sets for the same `agent_main.py` codebase
+    without mutating the checked-in `params/policy.json`.
+
+- **T7.4 — Run the sweep, prioritizing the hiring-count question first**
+  An ongoing activity, not a one-shot task — `SPEC-tuning.md` names hiring-count first priority
+  since it gates a large fraction of the rest of the parameter space, and this session's own
+  measurement already shows signal (0→3 hires: +27% against `"pass"`). Each accepted change is its
+  own described commit (never squashed into "tuning wip") and triggers a fresh `ops` submission.
+  - **Verify:** at least one parameter change accepted through the T7.1 gate on the held-out block,
+    before/after held-out numbers in the commit message.
+
+**Checkpoint 7:** `SPEC-tuning.md`'s Testing section passes; at least one accepted, held-out-gated
+`params/policy.json` update exists; commit.
+
+## What's still not planned
+
 - **`fastsim`** — not built per `SPEC.md`'s own decision (measured episode speed makes it
   unnecessary); no task exists for it and none should be added unless `tuning`'s actual sweep
   proves the arena is the bottleneck.
+- **`tuning` Stage 2** (search-generated value targets) — see above; gated behind a Stage-1
+  baseline that doesn't exist yet.

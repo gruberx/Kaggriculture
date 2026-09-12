@@ -58,6 +58,38 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       seeds = 200 episodes each), win rate 1.0000, 95% Wilson interval [0.9286, 1.0000]
       both times. Commit.
 
+## Phase 5 — `ops`: prove the bundle path, get a baseline live
+
+- [ ] T5.1 — `tools/build_submission.py`: bundle, audit (reuse gamelib boundary check), smoke-test, tar
+- [ ] T5.2 — Submission workflow script (`tools/submit.py`) + `--no-submit` dry run + submissions.jsonl log
+- [ ] T5.3 — First real submission (ask-first, human-approved at execution time)
+- [ ] **Checkpoint 5** — bundle builds/audits/smoke-tests clean; first real submission live and
+      scored; commit (note submission id/description in the message).
+
+## Phase 6 — `policy`: close the animal-acquisition gap
+
+- [ ] T6.1 — Unified investment choice: `decide.py`'s crop-only filter → full crop+animal ranking
+      (generalize `_crop_has_time_to_mature` to animals via `forecast_animal_schedule`)
+- [ ] T6.2 — Acquisition pipeline in `tasks.py`: `BUILD_COOP`/`BUILD_PASTURE`/`PLACE` task generation
+- [ ] T6.3 — `BUY_ANIMAL` market order in `decide.py` (mirrors `BUY_SEED`, gated on `shed_room()`)
+- [ ] T6.4 — Real-episode integration + re-measurement (document any timing/deadlock bug found)
+- [ ] T6.5 — Fix documented `BUY_SEED` gap: don't buy without an empty tile to plant on
+- [ ] T6.6 — Extend `kaggle_environments`-import boundary check to `policy/` (+ `agent_main.py`)
+- [ ] **Checkpoint 6** — full suite green; arena re-measurement vs starter/random recorded in the
+      commit message. Commit.
+
+## Phase 7 — `tuning`: Stage 1 only (coordinate ascent + regression gate)
+
+- [ ] T7.1 — Regression gate (`tools/tuning.py`): held-out Wilson-interval accept/reject, tested
+      against a synthetic worse/better candidate
+- [ ] T7.2 — Coordinate-ascent loop, tested on a toy 2-parameter objective before the real arena
+- [ ] T7.3 — Opponent panel (starter/random/previous-best snapshot) + eval-only params override hook
+- [ ] T7.4 — Run the sweep (hiring-count question first); each accepted change its own commit +
+      fresh `ops` submission
+- [ ] **Checkpoint 7** — `SPEC-tuning.md` Testing section passes; ≥1 accepted held-out-gated
+      `params/policy.json` update exists. Commit.
+
 ## Not planned yet (see plan.md)
 
-`tuning` and `ops` — follow-up `/agent-skills:plan` pass after Checkpoint 4.
+`fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
+targets — gated behind a Stage-1 baseline that doesn't exist yet).

@@ -33,6 +33,13 @@ No `fastsim` rewrite is needed to make this tractable (see `SPEC.md`'s rationale
 
 ## Stage 2 — search-generated value targets (only after Stage 1 has a working baseline)
 
+**Not broken into tasks in `tasks/plan.md`'s Phase 7** (the Phase 5-7 follow-up planning pass,
+written once Phase 4 measured a real working-block baseline): it's gated behind a checked-in
+Stage-1 baseline that beats `starter`/`random`, which doesn't exist yet, and is an open-ended
+research task that doesn't fit the remaining runway once `ops` (Phase 5) and the animal-
+acquisition policy gap (Phase 6) already consume real time before the deadline. Revisit only if
+Stage 1 finishes with days to spare.
+
 The one ML-flavored technique that fits a no-GPU, ~19-day budget (see `SPEC.md` "Why not RL"):
 from real game states encountered during arena play, branch the actual `kaggle_environments`
 simulator across a handful of *complete* strategic alternatives (e.g. "commit to the melon-heavy

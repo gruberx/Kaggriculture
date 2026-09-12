@@ -47,10 +47,13 @@ revisiting a CLI token — not "batch operations" in the abstract.
 `tools/build_submission.py`:
 1. Copies `src/kagg/agent_main.py` → `build/main.py`.
 2. Copies `src/kagg/gamelib/`, `src/kagg/policy/` → `build/kagg/gamelib/`, `build/kagg/policy/`.
-3. Copies `src/kagg/params/policy.json` (and `params/seed_blocks.json` only if `policy` actually
-   reads it at runtime — otherwise leave tuning-only files out of the bundle entirely, since
-   Official Rules §2.11 permits *using* only what's in the bundle, and a smaller bundle is a
-   smaller audit surface) → `build/kagg/params/policy.json`. `params/` lives inside `src/kagg/` in
+3. Copies `src/kagg/params/policy.json` → `build/kagg/params/policy.json`. Does **not** copy
+   `params/seed_blocks.json` (the repo-root one, distinct from `src/kagg/params/` — see `SPEC.md`
+   "Project structure") — resolved during the Phase 5-7 planning pass by checking directly: only
+   `tools/harness.py` (dev-only) reads `seed_blocks.json`; `kagg.policy.params.load_params` only
+   ever reads `policy.json`. Since Official Rules §2.11 permits *using* only what's in the bundle,
+   and a smaller bundle is a smaller audit surface, tuning-only files are left out entirely.
+   `params/` lives inside `src/kagg/` in
    the repo specifically so this step is a plain verbatim copy, not a reorganizing one — see
    `SPEC.md`'s "Project structure" correction (found during T3.4): a path relationship that only
    holds after bundling is exactly the kind of thing that goes untested in dev.
