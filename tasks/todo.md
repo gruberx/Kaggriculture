@@ -266,10 +266,35 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       stays disabled (99) - no evidence yet it's needed once the fraction gate already prevents nearly
       all land purchases. Golden table re-recorded for the accepted value. 242/242 full suite (13 new
       tests total across strategy/decide), compileall clean.
-- [ ] **Checkpoint 8A** — 248/248 suite green, golden table re-recorded, bundle built and audited
-      clean (`build/submission.tar.gz`, verified shipping `investment_anchor: "UNIT"`,
-      `plant_while_pursuing_animal: false`, `land_buy_max_free_tile_fraction: 0.25`). Submission
-      itself: ask the user first (established discipline, every submission, not just the first).
+- [x] **Checkpoint 8A** — 248/248 suite green (at the time), golden table re-recorded, bundle built
+      and audited clean. Submitted as ref `56186320` (commit `5bd0336`) after explicit user
+      go-ahead. Real public episodes: ~8,300-25,700 across 14 games (6 wins / 8 losses).
+- [x] T8.3b — Isolated `investment_anchor` and `plant_while_pursuing_animal` on top of T8.2+T8.3,
+      prompted directly by the user watching `56186320`'s real replays and reporting the exact two
+      symptoms these two disabled toggles were built to fix (animal structures built far from the
+      shed at the end of a long line; crop production stopping mid-game once animals appear).
+      Re-read the actual measurement history first and found the prior "both stay off" conclusion
+      was drawn from a **confounded** test (SHED+fallback tested only as a bundle after T8.2) plus a
+      **stale** one (the fallback alone was only ever tested before T8.2/T8.3 existed) - not clean
+      evidence against either mechanism on its own. Ran the real, isolated comparisons:
+      `investment_anchor="SHED"` alone lost **0/50 on both blocks** - *worse* than the original
+      pre-T8.2 result, traced directly (action-count diagnostic) to SHED re-triggering the exact
+      "animal ranks #1 forever" bug even harder, since it speeds the animal pipeline up enough to
+      lock it in as top choice sooner (one seed: PASS actions jumped to 266/719 turns).
+      `plant_while_pursuing_animal=True` alone **won 50/50 on both blocks** - a clean, decisive,
+      properly-isolated result the codebase never actually had before. Also checked the combination
+      one more time on current code: SHED+True beats doing nothing (0.78/0.80) but loses decisively
+      to UNIT+True (0.10/0.02) - traced to SHED trading away crop-tending efficiency for animal-
+      tending efficiency, a net loss since crops are still the bigger income source. **Accepted**:
+      `plant_while_pursuing_animal` False → **True** (kept in sync across `decide.py`'s module
+      constant, `DEFAULT_PARAMS`, and `params/policy.json`). `investment_anchor` stays `"UNIT"` - a
+      clean rejection of `"SHED"` now,
+      not "unproven." The user's placement/line-shaped-growth observation is confirmed real but
+      **not resolved** by the built mechanism - noted honestly as still open (a differently-shaped
+      fix, e.g. anchoring animal structures and crop plants independently, is the likely next idea,
+      not yet built or scoped). Golden table re-recorded (conditional fix - 2/6 seeds jumped
+      substantially where an animal actually locked in as top choice, e.g. starter/seed1: 18242 →
+      25204; the rest near-unchanged). 248/248 full suite, compileall clean.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

@@ -38,14 +38,19 @@ DEFAULT_PARAMS = {
     "wheat_restock_threshold": 5,
     "wheat_restock_qty": 10,
     "wheat_max_buy_price": 40,
-    # T8.1: "SHED" (shed-anchored placement) is implemented and tested but
-    # not yet arena-accepted as the default - see kagg.policy.decide's
-    # _DEFAULT_INVESTMENT_ANCHOR comment for the measured story.
+    # T8.1: "SHED" (shed-anchored placement) is implemented and tested,
+    # but T8.3b's clean, isolated re-measurement (on top of T8.2+T8.3)
+    # found it a real net loss even combined with the fallback below -
+    # see kagg.policy.decide's _DEFAULT_INVESTMENT_ANCHOR comment for the
+    # full four-way comparison.
     "investment_anchor": "UNIT",
     # T8.9: fixes a real bug (an animal ranking #1 forever can otherwise
-    # block crop planting for the rest of the game) but measured to lose
-    # in isolation - see kagg.policy.decide._top_crop_choice's docstring.
-    "plant_while_pursuing_animal": False,
+    # block crop planting for the rest of the game). Accepted as the
+    # default in T8.3b after a clean, isolated re-measurement on top of
+    # T8.2+T8.3 (50/50 on both self-play blocks) - the earlier "measured
+    # to lose" result was itself stale, pre-T8.2/T8.3 - see
+    # kagg.policy.decide._top_crop_choice's docstring for the full story.
+    "plant_while_pursuing_animal": True,
     # T8.3: occupancy-aware land-purchase gate. Accepted 1.0 -> 0.25 via
     # direct self-play immediately after the mechanism landed: every
     # tested value (0.6, 0.4, 0.25, 0.1) beat the ungated default 50/50 on

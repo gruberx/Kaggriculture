@@ -65,30 +65,56 @@ _WHEAT_FEED_RESERVE = 10
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
-# "UNIT" (the pre-T8.1 behavior) deliberately, not "SHED": measured via
-# direct self-play (pre-T8.2), SHED alone *lost* to UNIT (0.26 win rate,
-# working block) due to a real interaction with the animal/crop choice
-# gap _top_crop_choice documents; combined with that fix it won the
-# working block (0.72) but not the held-out one (0.56, rejected by
-# tuning.accept_candidate).
+# "UNIT" (the pre-T8.1 behavior), not "SHED".
 #
-# Re-tested after T8.2 landed (distance-aware task servicing), on the
-# hypothesis that SHED+plant_while_pursuing_animal was waiting on it -
-# it wasn't: with T8.2 in place, SHED+plant_while_pursuing_animal=True
-# *lost decisively* to plain UNIT (working 0.28, holdout 0.18 - a
-# reversal, not just "still not accepted"). T8.2's distance-aware
-# servicing already keeps the farmer working the nearest urgent tile
-# regardless of the plot's shape, so the runaway-line placement T8.1
-# targeted is far less costly once servicing order is smart - the two
-# fixes overlap rather than compose. The mechanism (anchor="SHED") stays
-# available as a tested, real capability for a future sweep, but there is
-# now real evidence it does not pair well with T8.2, not just "unproven."
+# T8.3b (tasks/plan.md) got the clean, unconfounded measurement this
+# needed - real Kaggle games from Checkpoint 8A's submission independently
+# reproduced the exact symptom SHED targets (animal structures built at
+# the far end of a long worked line), which prompted re-testing it
+# properly rather than trusting the prior bundled result. Findings, each
+# a real direct-self-play block on top of today's code (T8.2+T8.3), not
+# reasoning:
+#   - SHED alone (plant_while_pursuing_animal still False) lost 0/50 on
+#     BOTH blocks - worse than the original pre-T8.2 result (0.26), not
+#     better. Traced directly (action-count diagnostic, not guessed):
+#     SHED speeds up the animal pipeline enough that the animal reaches
+#     production fast and then ranks #1 forever (the exact
+#     _top_crop_choice gap below), spiking PASS from ~30-50 turns/episode
+#     to 266/719 in one traced seed - SHED alone re-triggers the T8.9 bug
+#     even harder than UNIT does, it doesn't avoid it.
+#   - SHED + plant_while_pursuing_animal=True (i.e. with the T8.9 bug
+#     actually fixed) beats the plain shipped default 0.78/0.80 - a real
+#     win over doing nothing - but loses decisively to UNIT +
+#     plant_while_pursuing_animal=True, 0.10 working / 0.02 holdout.
+#     Traced: SHED clusters animal-related PICKUP/FEED near the shed
+#     (more of them fire) but each seed checked planted and watered
+#     fewer crop tiles than UNIT achieved in the same episode - a real,
+#     if modest, net trade against crops, which are still the larger
+#     income source at this labor level.
+# Net: with the real T8.9 fix in place, UNIT anchor is the *best*
+# measured option, not merely "still not disproven" - a clean rejection
+# of SHED, not an absence of evidence. The runaway-line placement the
+# user observed is real and still present; T8.1's mechanism just isn't
+# the fix that pays for itself once T8.9 is fixed properly. Left as a
+# tested, real capability (anchor="SHED") for a future, differently-
+# shaped fix (e.g. anchoring animal structures and crop plants
+# independently) rather than deleted.
 _DEFAULT_INVESTMENT_ANCHOR = "UNIT"
 
-# T8.9 - see _top_crop_choice's own docstring for the real bug this
-# fixes and why, despite that, it defaults to off. Same re-test after
-# T8.2 as investment_anchor above, same reversal - see that comment.
-_DEFAULT_PLANT_WHILE_PURSUING_ANIMAL = False
+# T8.3b (tasks/plan.md): ACCEPTED as the default, correcting the earlier
+# "measured to lose" conclusion, which was itself measured on stale, pre-
+# T8.2/T8.3 code (0.26 working / 0.46 holdout) and never re-checked
+# afterward. Real Kaggle games from Checkpoint 8A's submission
+# independently reproduced the exact symptom this fixes (crop production
+# stopping in the second half of the game once an animal locks in as
+# _top_investment_choice's permanent #1 pick - see _top_crop_choice's own
+# docstring for the mechanism). Re-measured cleanly, alone (investment_
+# anchor held at "UNIT"), on top of today's code: 50/50 wins on BOTH the
+# working and held-out blocks - the single cleanest accepted result in
+# Phase 8 so far. Also the best of all four anchor/fallback combinations
+# tested (see _DEFAULT_INVESTMENT_ANCHOR's comment above for the other
+# three) - UNIT + True beat SHED + True 0.90/0.98 head-to-head.
+_DEFAULT_PLANT_WHILE_PURSUING_ANIMAL = True
 
 
 def _crop_has_time_to_mature(crop: str, current_day: int, season_length_days: int) -> bool:
@@ -162,46 +188,46 @@ def _top_investment_choice(market_inventory: dict, current_day: int, params: dic
 
 
 def _top_crop_choice(market_inventory: dict, current_day: int, params: dict) -> str | None:
-    """Best CROP alone, ignoring animals entirely - an opt-in fallback
-    (`params["plant_while_pursuing_animal"]`, default off) used
-    *alongside* (not instead of) `_top_investment_choice`'s single
-    overall pick, for a real gap that pick can't express (T8.9, tasks/
-    plan.md): `rank_portfolio` has no notion of ownership, so an animal
-    type that's already fully placed and simply producing can keep
+    """Best CROP alone, ignoring animals entirely - a fallback
+    (`params["plant_while_pursuing_animal"]`, default **on** since
+    T8.3b) used *alongside* (not instead of) `_top_investment_choice`'s
+    single overall pick, for a real gap that pick can't express (T8.9,
+    tasks/plan.md): `rank_portfolio` has no notion of ownership, so an
+    animal type that's already fully placed and simply producing can keep
     ranking #1 forever, exactly as if it still needed buying - and
     without this fallback, `plant_crop` is derived solely from the single
     overall top choice, so that animal silently blocks crop planting for
     the rest of the game the moment it ranks first. Directly observed:
     one representative episode spent 47 of its farmer's 719 turns on PASS
-    once an animal locked in as the permanent #1 choice.
+    once an animal locked in as the permanent #1 choice - and a real
+    Kaggle submission built on Checkpoint 8A (before this fix was
+    accepted) independently reproduced the same symptom: the user
+    reported crop production stopping mid-game once animals appeared.
 
-    Deliberately NOT the default, despite fixing a real, demonstrated
-    defect - found by measuring, not assumed safe: enabling it (with
-    placement otherwise unchanged) lost a direct 50-seed self-play block
-    against the pre-fix baseline 13/50 (Wilson [0.159, 0.396], a real
-    loss, not noise). The likely mechanism - not fully confirmed -
-    is that the extra BUY_SEED spends cash that would otherwise go
-    toward the animal purchase sooner, delaying a materially better
-    investment even though the turns it fills were otherwise pure waste.
-    Combined with T8.1's shed anchor, the pair *did* show a strong
-    working-block win (0.72, Wilson [0.583, 0.825]) - but that did not
-    survive the held-out block (0.56, Wilson [0.423, 0.689], rejected by
-    `tuning.accept_candidate` against an even-odds baseline) - exactly
-    the kind of gap SPEC-tuning.md's regression gate exists to catch.
-    Re-tested again after T8.2 (distance-aware task servicing) landed, on
-    the hypothesis that T8.2 was what the combination was waiting on -
-    it wasn't: with T8.2 in place, the SHED+plant_while_pursuing_animal
-    combination *lost decisively* (working 0.28, holdout 0.18) to plain
-    UNIT/False - see `_DEFAULT_INVESTMENT_ANCHOR`'s own comment for the
-    full story. Left here as a tested, real bug fix and a tunable the
-    arena can sweep in its own right, not shipped as a silent default
-    change on a working-block result alone.
+    Accepted as the default in T8.3b (tasks/plan.md), correcting an
+    earlier, real mistake - not silently overwritten, stated plainly:
+    this WAS measured to lose (13/50, Wilson [0.159, 0.396]) and shipped
+    off, then combined with T8.1's shed anchor it won the working block
+    (0.72) but not the held-out one (0.56) - but every one of those
+    measurements ran on stale, pre-T8.2/T8.3 code, and after T8.2 landed
+    only the SHED+this-fallback *bundle* was ever re-tested (0.28/0.18
+    loss), never this fallback in isolation. T8.3b finally ran the clean,
+    unconfounded test: `plant_while_pursuing_animal=True` ALONE (anchor
+    left at "UNIT") against today's code (T8.2+T8.3) won 50/50 on BOTH
+    the working and held-out blocks - and separately beat the SHED-
+    anchored combination head-to-head, 0.90/0.98. T8.2's much higher
+    baseline throughput plausibly changes the earlier "extra BUY_SEED
+    competes for cash" tradeoff enough to flip the sign, though the
+    mechanism isn't independently reconfirmed, only the result. See
+    `_DEFAULT_INVESTMENT_ANCHOR`'s own comment for the full four-way
+    comparison and why `investment_anchor` itself stays at "UNIT" even
+    though this fallback is now on.
 
     Mirrors T3.5's original `_top_crop_choice` (removed in T6.3 once
     nothing called it - see the module docstring's revision history) -
     reintroduced for a different role: not decide()'s only investment
-    signal, but a second, independent one that can run alongside the
-    animal pipeline instead of being pre-empted by it.
+    signal, but a second, independent one that runs alongside the animal
+    pipeline instead of being pre-empted by it.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     for name in rank_portfolio(market_inventory):

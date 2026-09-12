@@ -245,38 +245,41 @@ def test_top_investment_choice_skips_an_animal_that_cannot_mature_in_time():
     assert choice == ("SHEEP", "animal")
 
 
-def test_decide_buys_the_top_animal_instead_of_falling_back_to_a_crop_by_default():
+def test_decide_buys_a_seed_for_the_top_crop_alongside_the_top_animal_by_default():
     # T6.3 closes the gap T6.1 opened: now that tasks.py (T6.2) and
     # BUY_ANIMAL (T6.3) both exist, decide() acts on the animal choice
     # directly instead of falling back to a crop - see the module
     # docstring's revision history.
     #
-    # T8.9 (tasks/plan.md) added an opt-in fallback that WOULD also buy a
-    # seed here (params["plant_while_pursuing_animal"] - see
-    # test_decide_buys_a_seed_for_the_top_crop_when_pursuing_an_animal_is_enabled
-    # below) but measured to lose in isolation via direct self-play - see
-    # kagg.policy.decide._top_crop_choice's docstring for the numbers.
-    # This test guards the *default* (off) behavior, unchanged since T6.3.
+    # T8.9 (tasks/plan.md) added a fallback that also buys a seed here
+    # (params["plant_while_pursuing_animal"]) - shipped off at first
+    # (measured to lose in isolation, pre-T8.2/T8.3), then accepted as
+    # the default in T8.3b once cleanly re-measured on top of T8.2's
+    # distance-aware servicing and T8.3's land gating: 50/50 wins on both
+    # the working and held-out blocks - see
+    # kagg.policy.decide._top_crop_choice's docstring for the full,
+    # corrected story (the earlier "measured to lose" result was itself
+    # measured on stale, pre-T8.2/T8.3 code).
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # crashes MELON - COW ranks first overall
     action = decide(obs, DEFAULT_PARAMS)
-    assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert len(buy_seed_orders) == 1
+    assert buy_seed_orders[0][1] in CROPS
     buy_animal_orders = [o for o in action["market"] if o[0] == "BUY_ANIMAL"]
     assert buy_animal_orders == [["BUY_ANIMAL", "COW", 1]]
 
 
-def test_decide_buys_a_seed_for_the_top_crop_when_pursuing_an_animal_is_enabled():
-    # The opt-in T8.9 fallback itself, mirroring T8.1's anchor pattern:
+def test_decide_can_still_disable_the_crop_fallback_explicitly():
+    # The pre-T8.3b behavior stays reachable via an explicit override -
     # both purchases are independent market orders with no structural
-    # reason to be exclusive - see the module's plant_while_pursuing_animal
-    # wiring and _top_crop_choice's docstring for why it's opt-in.
+    # reason to be exclusive, so disabling the fallback alone is enough
+    # to reproduce the old "animal only" behavior.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
-    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=True)
+    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=False)
     action = decide(obs, params)
-    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
-    assert len(buy_seed_orders) == 1
-    assert buy_seed_orders[0][1] in CROPS
+    assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
     buy_animal_orders = [o for o in action["market"] if o[0] == "BUY_ANIMAL"]
     assert buy_animal_orders == [["BUY_ANIMAL", "COW", 1]]
 
@@ -297,36 +300,38 @@ def _placed_cow_tile() -> dict:
     }
 
 
-def test_decide_stays_idle_by_default_when_the_top_ranked_animal_is_already_placed():
+def test_decide_keeps_working_by_default_when_the_top_ranked_animal_is_already_placed_and_idle():
     # T8.9 found this real bug (tasks/plan.md): COW keeps ranking first
     # overall forever once it's the best animal type, regardless of
     # whether we already own and are producing from one -
     # rank_portfolio has no notion of ownership - so plant_crop (derived
-    # solely from the single overall top choice) stays None and the
-    # farmer can end up idling (PASS) despite a plantable seed on hand.
-    # This is the *documented default* (opt-in fix below) - see
-    # kagg.policy.decide._top_crop_choice's docstring for why the fix
-    # measured worse in isolation and isn't shipped as the default yet.
+    # solely from the single overall top choice) used to stay None and
+    # the farmer could idle (PASS) despite a plantable seed on hand. This
+    # is exactly the real-game symptom the user reported after Checkpoint
+    # 8A ("crop production stops once animals appear") - confirmed and
+    # fixed in T8.3b by shipping this fallback as the default (50/50 on
+    # both self-play blocks, cleanly isolated from investment_anchor).
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW ranks first overall
     obs["farms"][0]["tiles"][4][4] = _placed_cow_tile()  # already placed and alive
     obs["farms"][0]["farmer"] = [0, 0]
     obs["private"]["seeds"]["STRAWBERRY"] = 1  # the top-ranked crop under this inventory
     action = decide(obs, DEFAULT_PARAMS)
-    assert action["farmer"] == ["PASS"]
-    assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
+    assert action["farmer"] != ["PASS"]
 
 
-def test_decide_keeps_working_when_pursuing_an_animal_is_enabled_and_the_animal_is_idle():
-    # The opt-in fix actually closing the gap above.
+def test_decide_idles_when_the_crop_fallback_is_disabled_explicitly():
+    # The pre-T8.3b behavior (the real bug) stays reachable and correct
+    # via an explicit override, mirroring investment_anchor's own pattern.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
     obs["farms"][0]["tiles"][4][4] = _placed_cow_tile()
     obs["farms"][0]["farmer"] = [0, 0]
     obs["private"]["seeds"]["STRAWBERRY"] = 1
-    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=True)
+    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=False)
     action = decide(obs, params)
-    assert action["farmer"] != ["PASS"]
+    assert action["farmer"] == ["PASS"]
+    assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
 
 
 def test_decide_does_not_buy_an_animal_when_money_is_insufficient():

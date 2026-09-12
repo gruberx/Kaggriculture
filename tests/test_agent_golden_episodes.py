@@ -107,6 +107,29 @@ pure waste. By far the largest single golden-table jump recorded so far
 Explicitly provisional (fit to a 1-unit farm) - must be re-swept once
 labor works (T8.8).
 
+Re-recorded a seventh time for T8.3b (tasks/plan.md) - a real correction
+of a prior confounded/stale conclusion, not a new capability. Real
+Kaggle games from Checkpoint 8A's submission independently reproduced
+two symptoms the T8.1/T8.9 work had already built (but shipped off)
+fixes for: animal structures ending up far from the shed (investment_
+anchor="SHED"), and crop production stopping mid-game once an animal
+locks in as the permanent top-ranked choice (plant_while_pursuing_
+animal). Re-tested both cleanly in isolation on top of today's code
+(T8.2+T8.3), which had never actually been done - the prior rejection
+bundled both variables together and/or ran on stale pre-T8.2/T8.3 code.
+Result: plant_while_pursuing_animal=True ALONE won 50/50 on both
+self-play blocks and is now the default; investment_anchor="SHED" still
+lost even in isolation (0/50 both blocks - worse than before, since it
+now re-triggers the same animal-locks-in bug even harder) and combined
+with the accepted fallback still lost to plain UNIT (0.10/0.02) - so
+investment_anchor stays "UNIT". See kagg.policy.decide's
+_DEFAULT_INVESTMENT_ANCHOR and _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL
+comments for the full four-way comparison. Money moved for the seeds
+where an animal actually locked in as the long-term top choice (e.g.
+starter/seed1: 18242 -> 25204, pass/seed1: 17970 -> 24979); seeds where
+that never happened are close to unchanged, consistent with this being
+a conditional bug fix, not a universal multiplier.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -125,21 +148,23 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.3 policy (land purchase gated on occupancy,
-# accepted at land_buy_max_free_tile_fraction=0.25), reproduced twice
-# before being hardcoded here. Not yet the rigorous >=60% win rate
-# SPEC.md's success criteria call for (that needs Phase 4's paired-seed
-# harness, not three ad-hoc seeds), but a real improvement worth locking
-# in - all 6 seeds improved substantially this time (e.g. starter/seed2:
-# 18821 -> 25726), consistent with the 50/50-on-both-blocks self-play
+# Recorded against the T8.3b policy (plant_while_pursuing_animal accepted
+# as the default), reproduced twice before being hardcoded here. Not yet
+# the rigorous >=60% win rate SPEC.md's success criteria call for (that
+# needs Phase 4's paired-seed harness, not three ad-hoc seeds), but a
+# real improvement worth locking in - two of six seeds jumped
+# substantially (an animal locked in as the long-term top choice in
+# those games: starter/seed1 18242 -> 25204, pass/seed1 17970 -> 24979),
+# the rest close to unchanged (this fix is conditional on that scenario
+# actually occurring), consistent with the 50/50-on-both-blocks self-play
 # result this was accepted on.
 _GOLDEN = {
-    ("starter", 1): (18242.0, 3421.0),
-    ("starter", 2): (25726.0, 3569.0),
-    ("starter", 3): (21629.0, 3639.0),
-    ("pass", 1): (17970.0, 3000.0),
+    ("starter", 1): (25204.0, 3431.0),
+    ("starter", 2): (25599.0, 3569.0),
+    ("starter", 3): (21486.0, 3639.0),
+    ("pass", 1): (24979.0, 3000.0),
     ("pass", 2): (25702.0, 3000.0),
-    ("pass", 3): (21637.0, 3000.0),
+    ("pass", 3): (21499.0, 3000.0),
 }
 
 
