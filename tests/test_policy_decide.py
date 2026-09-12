@@ -9,7 +9,7 @@ BUY_SEED), queuing HIRE/BUY_LAND from the strategic layer's decisions,
 and the overall action shape/order cap.
 """
 
-from kagg.gamelib.constants import CROPS, MARKET_I0, PRODUCTS
+from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0, PRODUCTS
 from kagg.policy.decide import (
     _animal_has_time_to_mature,
     _crop_has_time_to_mature,
@@ -187,19 +187,51 @@ def test_top_investment_choice_skips_an_animal_that_cannot_mature_in_time():
     assert choice == ("SHEEP", "animal")
 
 
-def test_decide_falls_back_to_the_best_crop_when_an_animal_outranks_every_crop():
-    # The real regression found while implementing T6.1, not a
-    # hypothetical: a direct trace of a real "starter" episode showed
-    # the top choice flipping to COW at day 18 (our own MELON sales had
-    # depressed its price below COW's), after which decide() planted
-    # nothing for the rest of the season without this fallback - about
-    # 150-200 money lost per seed against the Checkpoint 5 baseline.
+def test_decide_buys_the_top_animal_instead_of_falling_back_to_a_crop():
+    # T6.3 closes the gap T6.1 opened: now that tasks.py (T6.2) and
+    # BUY_ANIMAL (T6.3) both exist, decide() acts on the animal choice
+    # directly instead of falling back to a crop - see the module
+    # docstring's revision history.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # crashes MELON - COW ranks first overall
     action = decide(obs, DEFAULT_PARAMS)
-    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
-    assert len(buy_seed_orders) == 1
-    assert buy_seed_orders[0][1] in CROPS  # not COW - tasks.py/market.py can't act on an animal yet
+    assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
+    buy_animal_orders = [o for o in action["market"] if o[0] == "BUY_ANIMAL"]
+    assert buy_animal_orders == [["BUY_ANIMAL", "COW", 1]]
+
+
+def test_decide_does_not_rebuy_an_animal_already_held():
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    obs["private"]["shed"]["COW"] = 1
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
+def test_decide_does_not_buy_an_animal_when_money_is_insufficient():
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    obs["farms"][0]["money"] = ANIMALS["COW"]["cost"] - 1
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
+def test_decide_does_not_buy_an_animal_when_the_shed_is_full():
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    obs["private"]["shed"] = {"WHEAT": 100}  # full at the real default shedCapacity=100
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
+def test_decide_emits_a_build_task_when_animal_is_the_top_choice():
+    # The base fixture's farmer already stands at (4, 4) - the nearest
+    # (in fact, occupied) empty tile - so no movement step is needed to
+    # exercise the BUILD op itself in a single decide() call.
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    action = decide(obs, DEFAULT_PARAMS)
+    assert action["farmer"] == ["BUILD_PASTURE"]  # COW's structure
 
 
 def test_decide_plants_nothing_when_no_crop_can_mature_in_time():

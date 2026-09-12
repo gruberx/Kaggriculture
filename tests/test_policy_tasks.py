@@ -29,11 +29,11 @@ def _empty_tiles(size: int = 10) -> list:
     return [[None] * size for _ in range(size)]
 
 
-def _plant_tile(consecutive_unwatered=0, watered_today=False, yield_units=0) -> dict:
+def _plant_tile(consecutive_unwatered=0, watered_today=False, yield_units=0, planted_day=0) -> dict:
     return {
         "kind": "PLANT",
         "crop": "WHEAT",
-        "planted_day": 0,
+        "planted_day": planted_day,
         "watered_today": watered_today,
         "consecutive_unwatered": consecutive_unwatered,
         "yield_units": yield_units,
@@ -90,9 +90,43 @@ def test_build_task_list_flags_prevent_loss_feeding():
 
 def test_build_task_list_flags_harvest_ready_tiles():
     tiles = _empty_tiles()
-    tiles[4][4] = _plant_tile(yield_units=3, watered_today=True)  # already watered - no water task
-    tasks = build_task_list(tiles)
+    # WHEAT's first_yield_day is 2 - planted day 0, current day 2: legitimately harvestable.
+    tiles[4][4] = _plant_tile(yield_units=3, watered_today=True, planted_day=0)
+    tasks = build_task_list(tiles, current_day=2)
     assert tasks == [Task(priority=PRIORITY_HARVEST, pos=(4, 4), op="HARVEST")]
+
+
+def test_build_task_list_does_not_harvest_a_one_time_crop_before_first_yield_day():
+    # The real bug found while implementing T6.3, not a hypothetical:
+    # kaggriculture.py's _new_plant() sets yield_units=1 immediately at
+    # planting for a one-time crop (before it can legitimately be
+    # harvested - the real HARVEST handler blocks on
+    # `day - planted_day < first_yield_day` regardless). Proposing a
+    # HARVEST task anyway gave it PRIORITY_HARVEST (above PLANT/BUILD/
+    # PLACE's PRIORITY_PLANT), perpetually monopolizing the single
+    # farmer on a no-op for the crop's entire maturation period -
+    # harmless when there was nothing else to do anyway (pre-T6.2), but
+    # directly measured to block BUILD_PASTURE for ~2 real days once an
+    # animal investment became available (T6.3's golden-episode
+    # regression from 5274 to 3932 traced to exactly this).
+    tiles = _empty_tiles()
+    tiles[4][4] = _plant_tile(yield_units=1, watered_today=True, planted_day=0)  # WHEAT, first_yield_day=2
+    tasks = build_task_list(tiles, current_day=1)  # day 1 < planted_day(0) + first_yield_day(2)
+    assert [t for t in tasks if t.op == "HARVEST"] == []
+
+
+def test_build_task_list_harvests_an_ongoing_crop_as_soon_as_it_has_yield():
+    # Ongoing crops (TOMATO/STRAWBERRY) only ever accumulate yield_units
+    # after first_yield_day in the real interpreter (kaggriculture.py's
+    # own HARVEST handler prints a warning if this is ever violated) -
+    # yield_units > 0 alone is always a legitimate harvest signal for
+    # these, unlike a fresh one-time crop.
+    tiles = _empty_tiles()
+    tile = _plant_tile(yield_units=1, watered_today=True, planted_day=0)
+    tile["crop"] = "TOMATO"
+    tiles[4][4] = tile
+    tasks = build_task_list(tiles, current_day=1)  # well before TOMATO's own first_yield_day=8
+    assert [t for t in tasks if t.op == "HARVEST"] == [Task(priority=PRIORITY_HARVEST, pos=(4, 4), op="HARVEST")]
 
 
 def test_build_task_list_flags_weeds_as_maintenance():
@@ -239,9 +273,9 @@ def test_action_for_unit_build_ops_take_no_argument():
 def test_build_task_list_is_sorted_by_priority():
     tiles = _empty_tiles()
     tiles[0][0] = {"kind": "WEED"}  # maintenance
-    tiles[1][1] = _plant_tile(yield_units=1, watered_today=True)  # harvest
+    tiles[1][1] = _plant_tile(yield_units=1, watered_today=True, planted_day=0)  # harvest (legit by day 2)
     tiles[2][2] = _plant_tile(consecutive_unwatered=1, watered_today=False)  # prevent-loss
-    tasks = build_task_list(tiles)
+    tasks = build_task_list(tiles, current_day=2)
     assert [t.priority for t in tasks] == sorted(t.priority for t in tasks)
     assert tasks[0].priority == PRIORITY_PREVENT_LOSS
 

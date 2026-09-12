@@ -90,7 +90,16 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       selection already naturally prefers newly-unlocked land near the shed). Golden episodes
       unchanged (single farmer, default params - the fix mainly saves travel time, which shows up
       more with hands/expanded land; still real infrastructure, not a no-op).
-- [ ] T6.3 — `BUY_ANIMAL` market order in `decide.py` (mirrors `BUY_SEED`, gated on `shed_room()`)
+- [x] T6.3 — `BUY_ANIMAL` market order in `decide.py` (mirrors `BUY_SEED`, gated on `shed_room()`).
+      Rewired `decide()` to act on an animal top choice directly, removing T6.1's crop-only
+      fallback (now dead code, deleted). Found+fixed a much bigger bug while measuring: a freshly
+      planted one-time crop's yield_units=1 (set immediately at planting, before it's actually
+      harvestable) gave HARVEST undeserved priority over PLANT/BUILD_*/PLACE, perpetually
+      monopolizing the single farmer on a doomed no-op for the crop's whole maturation period —
+      harmless before T6.2/6.3 added competing investments, costly once BUILD_PASTURE had to wait
+      on it (5274→3932 regression, traced and fixed via `tasks._is_actually_harvestable()`). The
+      fix alone (independent of animals) unlocked a much larger real improvement across all golden
+      seeds (e.g. starter/seed2: 5292→13322) — re-recorded golden episodes accordingly.
 - [ ] T6.4 — Real-episode integration + re-measurement (document any timing/deadlock bug found)
 - [ ] T6.5 — Fix documented `BUY_SEED` gap: don't buy without an empty tile to plant on
 - [ ] T6.6 — Extend `kaggle_environments`-import boundary check to `policy/` (+ `agent_main.py`)

@@ -15,6 +15,22 @@ decide._crop_has_time_to_mature()), not accepted as-is. These are the
 numbers *after* that fix, and now beat "starter" for the first time
 (T2.4's wheat-loop numbers lost to it: 3387-3391 vs 3506-3748).
 
+Re-recorded again for T6.3 (BUY_ANIMAL wired in) - a much bigger story
+than a simple re-baseline: adding animal investment exposed a real,
+previously-latent bug in tasks.py's HARVEST-task logic
+(kaggriculture.py's _new_plant() sets a one-time crop's yield_units to 1
+*immediately* at planting, before it's actually harvestable - a
+freshly-planted crop's doomed-to-fail HARVEST attempt outranked
+PLANT/BUILD_*/PLACE's priority, so the single farmer got stuck
+perpetually re-attempting it for the crop's entire maturation period).
+Harmless before T6.2 (nothing else productive to do with that time
+anyway); costly once BUILD_PASTURE became available and had to wait on
+it (measured: 5274 -> 3932, a ~1342 regression). Fixed in
+tasks._is_actually_harvestable() - and the fix alone (independent of
+animals) unlocked a much larger, genuine improvement, since the farmer
+was losing productive time on *every* one-time-crop planting all game,
+not just the one that happened to coincide with an animal purchase.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -33,18 +49,19 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T3.5 full three-layer policy, reproduced twice
-# before being hardcoded here. This is a real, if crude, win over
-# "starter" - not yet the rigorous >=60% win rate SPEC.md's success
-# criteria call for (that needs Phase 4's paired-seed harness, not three
-# ad-hoc seeds), but a genuine improvement worth locking in as a floor.
+# Recorded against the T6.3 policy (BUY_ANIMAL + the HARVEST-gating fix),
+# reproduced twice before being hardcoded here. A large, genuine jump
+# over T3.5's numbers (e.g. starter/seed2: 5292 -> 13322) - not yet the
+# rigorous >=60% win rate SPEC.md's success criteria call for (that needs
+# Phase 4's paired-seed harness, not three ad-hoc seeds), but a real
+# improvement worth locking in as a floor.
 _GOLDEN = {
-    ("starter", 1): (5274.0, 3506.0),
-    ("starter", 2): (5292.0, 3528.0),
-    ("starter", 3): (5543.0, 3743.0),
-    ("pass", 1): (5288.0, 3000.0),
-    ("pass", 2): (5720.0, 3000.0),
-    ("pass", 3): (5274.0, 3000.0),
+    ("starter", 1): (6886.0, 3571.0),
+    ("starter", 2): (13322.0, 3712.0),
+    ("starter", 3): (12899.0, 3425.0),
+    ("pass", 1): (5510.0, 3000.0),
+    ("pass", 2): (8001.0, 3000.0),
+    ("pass", 3): (5733.0, 3000.0),
 }
 
 

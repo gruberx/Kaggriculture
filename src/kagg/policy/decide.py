@@ -8,25 +8,27 @@ module top level - see its own docstring on why that must happen at
 top level, not lazily), never inside decide() itself, which runs every
 turn.
 
-Known gap, not an oversight: `_top_investment_choice` below already
-ranks animals alongside crops (T6.1), but tasks.py/market.py can't yet
-*act* on an animal choice - BUY_ANIMAL + BUILD_COOP/BUILD_PASTURE +
-PLACE aren't implemented until T6.2/T6.3. `decide()` therefore falls
-back to `_top_crop_choice` (the old, crop-only ranking) for the actual
-PLANT/BUY_SEED decision whenever the overall top choice is an animal -
-found to matter for real, not just hypothetically, while implementing
-this: without the fallback, a direct trace of a real "starter" episode
-showed the top choice flipping to COW at day 18 (our own MELON sales
-had depressed its price below COW's), after which the episode planted
-nothing for the rest of the season - a real ~150-200 money loss per
-seed against the Checkpoint 5 baseline, not a contrived edge case. Once
-T6.2/T6.3 land, `decide()` should be revisited to act on the animal
-choice directly instead of falling back. Also not handled: a BUY_SEED
-order doesn't check whether an empty tile actually exists to plant it
-on - a farm with no free land could accumulate unused seeds. Smaller
-and rarer than the season-maturity issue (a full farm still has *some*
-replantable tile once something is harvested), left as a known
-limitation (tracked as T6.5).
+Revision history worth knowing, not just the current state: T6.1 first
+generalized the top-choice ranking to include animals
+(`_top_investment_choice`), but tasks.py/market.py couldn't yet *act* on
+an animal choice, so `decide()` briefly fell back to a crop-only ranking
+(`_top_crop_choice`) whenever the overall top choice was an animal - a
+real, measured gap, not hypothetical (a direct trace of a real "starter"
+episode showed the top choice flipping to COW at day 18 once our own
+MELON sales depressed its price, after which the episode planted
+nothing for the rest of the season without the fallback - ~150-200
+money lost per seed against the Checkpoint 5 baseline). T6.2 (the
+acquisition pipeline in tasks.py) and T6.3 (BUY_ANIMAL below) closed
+that gap, so `decide()` now acts on an animal top choice directly -
+`_top_crop_choice` was removed once nothing called it any more (T6.3).
+
+Known gap, not an oversight: a BUY_SEED/BUY_ANIMAL order doesn't check
+whether an empty tile/matching structure actually exists to use it on -
+a farm with no free land could accumulate unused seeds or animals.
+Smaller and rarer than the season-maturity issue was (a full farm still
+has *some* replantable tile once something is harvested), left as a
+known limitation (tracked as T6.5, which only covers BUY_SEED's case -
+BUY_ANIMAL's equivalent isn't separately tracked yet).
 
 Standard library only - ships inside the submission bundle.
 """
@@ -35,6 +37,7 @@ from __future__ import annotations
 
 from kagg.gamelib.constants import ANIMALS, CROPS
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
+from kagg.gamelib.shed import shed_room
 from kagg.policy.market import market_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, should_buy_land
 from kagg.policy.tasks import action_for_unit, assign_units, build_task_list
@@ -47,6 +50,13 @@ _MAX_MARKET_ORDERS = 10
 # change it - see _crop_has_time_to_mature's own docstring for why this
 # exists at all.
 _DEFAULT_SEASON_LENGTH_DAYS = 30
+
+# Real default (kaggriculture.json's shedCapacity=100) - like
+# season_length_days above, this isn't exposed in the observation at
+# all (only in env.configuration, which agent(obs) never receives -
+# verified directly), so it's a named, tunable parameter with the real
+# default baked in, not something read from obs.
+_DEFAULT_SHED_CAPACITY = 100
 
 
 def _crop_has_time_to_mature(crop: str, current_day: int, season_length_days: int) -> bool:
@@ -76,24 +86,6 @@ def _crop_has_time_to_mature(crop: str, current_day: int, season_length_days: in
         first_production_day = forecast_ongoing_schedule(crop, planted_day=current_day)[0]
         return first_production_day < season_length_days
     return current_day + cd["max_yield_day"] < season_length_days
-
-
-def _top_crop_choice(market_inventory: dict, current_day: int, params: dict) -> str | None:
-    """The highest-ranked *crop* (not animal) that still has time to
-    mature this season. `None` if nothing does.
-
-    Kept alongside the general `_top_investment_choice` below
-    specifically as `decide()`'s fallback for the "top choice is an
-    animal, but nothing can act on that yet" case - see the module
-    docstring for the real regression this fallback avoids.
-    """
-    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory):
-        if name not in CROPS:
-            continue
-        if _crop_has_time_to_mature(name, current_day, season_length_days):
-            return name
-    return None
 
 
 def _animal_has_time_to_mature(animal: str, current_day: int, season_length_days: int) -> bool:
@@ -149,20 +141,19 @@ def decide(obs: dict, params: dict) -> dict:
     current_day = obs.get("day", 0)
     investment = _top_investment_choice(obs["market"]["inventory"], current_day, params)
     desired_name, desired_kind = investment if investment is not None else (None, None)
-    if desired_kind == "crop":
-        desired_crop = desired_name
-    else:
-        # Top choice is an animal (or nothing at all) - only a crop is
-        # actionable today (see module docstring's "Known gap"), so fall
-        # back to the best crop specifically rather than planting
-        # nothing - verified this fallback is load-bearing, not just
-        # defensive (see module docstring for the real episode trace).
-        desired_crop = _top_crop_choice(obs["market"]["inventory"], current_day, params)
+    desired_crop = desired_name if desired_kind == "crop" else None
+    desired_animal = desired_name if desired_kind == "animal" else None
+
     have_seed = desired_crop is not None and seeds.get(desired_crop, 0) > 0
     plant_crop = desired_crop if have_seed else None
+    have_animal = desired_animal is not None and shed.get(desired_animal, 0) > 0
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
-    tasks = build_task_list(me["tiles"], unit_positions, plant_crop=plant_crop)
+    tasks = build_task_list(
+        me["tiles"], unit_positions,
+        plant_crop=plant_crop, desired_animal=desired_animal, have_animal=have_animal,
+        current_day=current_day,
+    )
     assignment = assign_units(tasks, unit_positions)
 
     farmer_action = action_for_unit(unit_positions[0], assignment[0])
@@ -180,14 +171,21 @@ def decide(obs: dict, params: dict) -> dict:
         max_orders=_MAX_MARKET_ORDERS,
     )
 
-    # Seed purchase: arrives next turn (market orders resolve after this
-    # turn's unit actions) - the PLANT task above naturally starts firing
-    # once the seed shows up in a future observation, no extra state
-    # needed here.
+    # Seed/animal purchase: arrives next turn (market orders resolve
+    # after this turn's unit actions) - the PLANT/PLACE task above
+    # naturally starts firing once the seed/animal shows up in a future
+    # observation, no extra state needed here. Mutually exclusive by
+    # construction (desired_crop and desired_animal can't both be set -
+    # _top_investment_choice returns a single top pick).
     if desired_crop is not None and not have_seed and len(market) < _MAX_MARKET_ORDERS:
         seed_cost = CROPS[desired_crop]["seed"]
         if me["money"] >= seed_cost:
             market.append(["BUY_SEED", desired_crop, 1])
+    elif desired_animal is not None and not have_animal and len(market) < _MAX_MARKET_ORDERS:
+        animal_cost = ANIMALS[desired_animal]["cost"]
+        shed_capacity = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
+        if me["money"] >= animal_cost and shed_room(shed, shed_capacity) > 0:
+            market.append(["BUY_ANIMAL", desired_animal, 1])
 
     # Land purchase, per the strategic layer's tunable threshold
     # (SPEC-policy.md "1. Strategic layer"). One order per turn - if

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from kagg.gamelib.constants import ANIMALS
+from kagg.gamelib.constants import ANIMALS, CROPS
 from kagg.gamelib.farm import tile_distance
 
 PRIORITY_PREVENT_LOSS = 0
@@ -66,6 +66,7 @@ def build_task_list(
     plant_crop: str | None = None,
     desired_animal: str | None = None,
     have_animal: bool = False,
+    current_day: int = 0,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -93,6 +94,12 @@ def build_task_list(
     priority over `plant_crop` if both are somehow given (callers are
     expected to supply only one, mirroring `_top_investment_choice`'s
     single top pick, but this keeps behavior well-defined either way).
+
+    `current_day` gates HARVEST for one-time crops (T6.3's real bug fix,
+    not anticipated in advance - see `_plant_tile_tasks`'s own docstring
+    for the full story). Defaults to 0 for callers that don't pass it
+    (e.g. existing tests using `planted_day=0` fixtures), not the
+    intended real-play path - `decide()` always supplies the real day.
     """
     tasks: list[Task] = []
     empty_tiles: list[tuple[int, int]] = []
@@ -111,7 +118,7 @@ def build_task_list(
             if kind == "WEED":
                 tasks.append(Task(PRIORITY_MAINTENANCE, pos, "DIG"))
             elif kind == "PLANT":
-                tasks.extend(_plant_tile_tasks(pos, tile))
+                tasks.extend(_plant_tile_tasks(pos, tile, current_day))
             elif "animal" in tile:
                 tasks.extend(_animal_tile_tasks(pos, tile))
             elif kind == desired_structure:
@@ -149,15 +156,45 @@ def _new_investment_task(
     return None
 
 
-def _plant_tile_tasks(pos: tuple[int, int], tile: dict) -> list[Task]:
+def _plant_tile_tasks(pos: tuple[int, int], tile: dict, current_day: int) -> list[Task]:
     tasks = []
     if not tile.get("watered_today", False):
         urgent = tile.get("consecutive_unwatered", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
         tasks.append(Task(priority, pos, "WATER"))
-    if tile.get("yield_units", 0) > 0:
+    if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(tile, current_day):
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     return tasks
+
+
+def _is_actually_harvestable(tile: dict, current_day: int) -> bool:
+    """True if a PLANT tile with `yield_units > 0` can really be
+    HARVESTed right now, not just banked toward a future harvest.
+
+    Real bug found and fixed during T6.3, not anticipated in advance:
+    kaggriculture.py's _new_plant() sets a one-time crop's yield_units to
+    1 *immediately* at planting, well before `day - planted_day >=
+    first_yield_day` - the real HARVEST handler's own gate, which blocks
+    regardless of yield_units already banked (the exact mechanic T3.5
+    already found for melon timing). Proposing a HARVEST task anyway gave
+    it PRIORITY_HARVEST, above PLANT/BUILD_*/PLACE's PRIORITY_PLANT -
+    perpetually monopolizing the single farmer on a doomed-to-fail no-op
+    for the crop's entire maturation period. Harmless before T6.2 (there
+    was nothing else productive to do with that time anyway); directly
+    measured to block a pending BUILD_PASTURE for ~2 real days once an
+    animal investment became available (T6.3's golden-episode regression
+    from 5274 to 3932, traced to exactly this before being fixed here).
+
+    Ongoing crops (TOMATO/STRAWBERRY) don't have this problem: the real
+    interpreter's own _daily_refresh_plants only ever increments their
+    yield_units *after* first_yield_day (kaggriculture.py's HARVEST
+    handler even warns if this invariant is ever violated), so
+    yield_units > 0 already implies harvestable for them.
+    """
+    cd = CROPS[tile["crop"]]
+    if cd["ongoing"]:
+        return True
+    return current_day - tile["planted_day"] >= cd["first_yield_day"]
 
 
 def _animal_tile_tasks(pos: tuple[int, int], tile: dict) -> list[Task]:
