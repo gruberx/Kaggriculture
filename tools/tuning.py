@@ -87,3 +87,61 @@ def record_accepted_run(
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     with open(log_path, "a") as f:
         f.write(json.dumps(entry) + "\n")
+
+
+_DEFAULT_MAX_PASSES = 10
+
+
+def coordinate_ascent(
+    param_grid: dict[tuple, list[tuple]],
+    evaluate,
+    initial_params: dict,
+    max_passes: int = _DEFAULT_MAX_PASSES,
+) -> dict:
+    """Stage 1 coordinate ascent (SPEC-tuning.md): for each entry in
+    `param_grid`, hold every other parameter fixed and sweep the given
+    candidate values, keeping whichever wins outright over the current
+    best via `accept_candidate` - a real, non-noise improvement (Wilson
+    interval overlap doesn't count), not merely a higher point estimate.
+    Repeats full passes over every grid entry until one changes nothing
+    ("no parameter change improves the working-block win rate beyond
+    noise") or `max_passes` is reached (a safety cap against oscillation
+    or never converging, not something SPEC-tuning.md itself specifies).
+
+    `param_grid` keys are tuples of one or more parameter names - a
+    single name for an independent sweep, several for a correlated group
+    swept jointly (SPEC-tuning.md: "hires_per_day and land_purchase_
+    threshold are suspected to interact... and should be swept jointly
+    rather than independently"). Each value is a list of same-length
+    tuples, one candidate combination per grid point.
+
+    `evaluate(params: dict)` must return something with `.win_rate_a` and
+    `.wilson_interval_a` - a `harness.BlockResult` in real use (T7.4), or
+    any compatible object in a test (see SPEC-tuning.md's own
+    requirement: "tested on a toy 2-parameter objective with a known
+    optimum... before being trusted on the real (expensive) arena").
+    Parameters not named in any `param_grid` entry are carried through
+    from `initial_params` untouched.
+    """
+    current = dict(initial_params)
+    for _ in range(max_passes):
+        changed = False
+        for names, candidates in param_grid.items():
+            current_values = tuple(current[name] for name in names)
+            best_values = current_values
+            best_result = evaluate(current)
+            for candidate_values in candidates:
+                if candidate_values == current_values:
+                    continue
+                trial = dict(current)
+                trial.update(zip(names, candidate_values))
+                trial_result = evaluate(trial)
+                if accept_candidate(trial_result, best_result):
+                    best_result = trial_result
+                    best_values = candidate_values
+            if best_values != current_values:
+                current.update(zip(names, best_values))
+                changed = True
+        if not changed:
+            break
+    return current

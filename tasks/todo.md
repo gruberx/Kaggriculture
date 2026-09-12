@@ -131,7 +131,8 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
 
 - [x] T7.1 — Regression gate (`tools/tuning.py`): held-out Wilson-interval accept/reject, tested
       against a synthetic worse/better candidate (+ a numerically-higher-but-overlapping case)
-- [ ] T7.2 — Coordinate-ascent loop, tested on a toy 2-parameter objective before the real arena
+- [x] T7.2 — Coordinate-ascent loop, tested on a toy 2-parameter objective before the real arena
+      (single-param sweeps, a correlated-group sweep, and a fixed-point/no-regression check)
 - [ ] T7.3 — Opponent panel (starter/random/previous-best snapshot) + eval-only params override hook
 - [ ] T7.4 — Run the sweep (hiring-count question first); each accepted change its own commit +
       fresh `ops` submission
