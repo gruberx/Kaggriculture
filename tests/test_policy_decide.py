@@ -306,6 +306,38 @@ def test_decide_plants_nothing_when_no_crop_can_mature_in_time():
     assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
 
 
+def _fill_all_tiles(obs, filler=None):
+    filler = filler or {"kind": "WEED"}
+    obs["farms"][0]["tiles"] = [[dict(filler) for _ in range(10)] for _ in range(10)]
+    return obs
+
+
+def test_decide_does_not_buy_a_seed_when_the_farm_has_no_empty_tile():
+    # T6.5's documented gap, closed: buying a seed with nowhere to plant
+    # it just accumulates unused seeds - a farm with no free land at all
+    # (every tile occupied, e.g. by weeds) shouldn't buy one.
+    obs = _fill_all_tiles(_obs())
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
+
+
+def test_decide_does_not_buy_an_animal_when_no_land_or_matching_structure_exists():
+    obs = _fill_all_tiles(_obs())
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW is the top choice
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
+def test_decide_still_buys_an_animal_when_a_matching_empty_structure_exists():
+    # No empty *tile* to build on, but an existing empty PASTURE is
+    # enough - the animal doesn't need free land, just somewhere to go.
+    obs = _fill_all_tiles(_obs())
+    obs["farms"][0]["tiles"][0][0] = {"kind": "PASTURE"}
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW is the top choice
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == [["BUY_ANIMAL", "COW", 1]]
+
+
 def test_decide_assigns_hands_when_present():
     obs = _obs()
     obs["farms"][0]["hands"] = [[0, 0]]

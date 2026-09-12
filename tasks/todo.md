@@ -115,7 +115,10 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       real-episode invariant test confirming production actually happens. Re-measured via
       arena.py: 50/50 vs both starter/random (same as Checkpoint 5 — no regression; the
       real gap is against the Kaggle field, not these weak baselines).
-- [ ] T6.5 — Fix documented `BUY_SEED` gap: don't buy without an empty tile to plant on
+- [x] T6.5 — Fix documented `BUY_SEED` gap: don't buy without an empty tile to plant on
+      (also closed the analogous `BUY_ANIMAL` gap in the same pass, one shared tile scan:
+      an animal needs an empty tile *or* an existing empty matching structure, not
+      necessarily free land). Golden episodes unchanged — 193/193 full suite.
 - [ ] T6.6 — Extend `kaggle_environments`-import boundary check to `policy/` (+ `agent_main.py`)
 - [ ] **Checkpoint 6** — full suite green; arena re-measurement vs starter/random recorded in the
       commit message. Commit.

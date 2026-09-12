@@ -22,13 +22,11 @@ acquisition pipeline in tasks.py) and T6.3 (BUY_ANIMAL below) closed
 that gap, so `decide()` now acts on an animal top choice directly -
 `_top_crop_choice` was removed once nothing called it any more (T6.3).
 
-Known gap, not an oversight: a BUY_SEED/BUY_ANIMAL order doesn't check
-whether an empty tile/matching structure actually exists to use it on -
-a farm with no free land could accumulate unused seeds or animals.
-Smaller and rarer than the season-maturity issue was (a full farm still
-has *some* replantable tile once something is harvested), left as a
-known limitation (tracked as T6.5, which only covers BUY_SEED's case -
-BUY_ANIMAL's equivalent isn't separately tracked yet).
+T6.5 closed a documented gap from T3.5: BUY_SEED/BUY_ANIMAL now both
+check that there's somewhere to actually use the purchase (an empty
+tile for a seed; an empty tile or an existing empty matching structure
+for an animal) before spending on it - a full farm no longer
+accumulates unused seeds or animals it can never place.
 
 Standard library only - ships inside the submission bundle.
 """
@@ -171,12 +169,23 @@ def decide(obs: dict, params: dict) -> dict:
     stuck_animal = next(
         (a for a in ANIMALS if shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0), None
     )
-    placed_animal_types = {
-        tile["animal"]
-        for row in me["tiles"]
-        for tile in row
-        if isinstance(tile, dict) and "animal" in tile
-    }
+    # One scan covers three questions at once: which animal types are
+    # already placed (stuck/already-have-one logic above), whether any
+    # empty tile exists at all, and which structure kinds already sit
+    # empty (T6.5: BUY_SEED/BUY_ANIMAL shouldn't fire with nowhere to
+    # use them - a full farm just accumulates unused seeds/animals).
+    placed_animal_types: set[str] = set()
+    has_empty_tile = False
+    empty_structure_kinds: set[str] = set()
+    for row in me["tiles"]:
+        for tile in row:
+            if tile is None:
+                has_empty_tile = True
+            elif isinstance(tile, dict):
+                if "animal" in tile:
+                    placed_animal_types.add(tile["animal"])
+                elif tile.get("kind") in ("COOP", "PASTURE"):
+                    empty_structure_kinds.add(tile["kind"])
     if stuck_animal is not None:
         acquisition_animal = stuck_animal
         plant_crop = None  # finish the paid-for animal before starting a new crop too
@@ -243,12 +252,27 @@ def decide(obs: dict, params: dict) -> dict:
     # _top_investment_choice returns a single top pick). Both gated on
     # `stuck_animal is None` too - finish placing what's already bought
     # (see the stuck_animal comment above) before spending on anything
-    # else, seed or animal.
-    if stuck_animal is None and desired_crop is not None and not have_seed and len(market) < _MAX_MARKET_ORDERS:
+    # else, seed or animal. Also gated on somewhere to actually use the
+    # purchase (T6.5): a seed needs an empty tile; an animal needs either
+    # an empty tile (to build a fresh structure on) or an existing empty
+    # matching structure - it doesn't need free land specifically, just
+    # somewhere to eventually stand.
+    if (
+        stuck_animal is None
+        and desired_crop is not None
+        and not have_seed
+        and has_empty_tile
+        and len(market) < _MAX_MARKET_ORDERS
+    ):
         seed_cost = CROPS[desired_crop]["seed"]
         if me["money"] >= seed_cost:
             market.append(["BUY_SEED", desired_crop, 1])
-    elif acquisition_animal is not None and not have_animal_anywhere and len(market) < _MAX_MARKET_ORDERS:
+    elif (
+        acquisition_animal is not None
+        and not have_animal_anywhere
+        and (has_empty_tile or ANIMALS[acquisition_animal]["structure"] in empty_structure_kinds)
+        and len(market) < _MAX_MARKET_ORDERS
+    ):
         animal_cost = ANIMALS[acquisition_animal]["cost"]
         shed_capacity = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
         if me["money"] >= animal_cost and shed_room(shed, shed_capacity) > 0:
