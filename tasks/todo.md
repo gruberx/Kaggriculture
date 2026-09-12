@@ -82,10 +82,14 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       not-yet-actionable animal case, a real "starter" episode stalled all planting from day 18
       onward (COW outranked MELON after our own sales), costing ~150-200 money/seed. Added a
       `_top_crop_choice` fallback; golden episodes now match Checkpoint 5 exactly again.
-- [ ] T6.2 — Acquisition pipeline in `tasks.py`: `BUILD_COOP`/`BUILD_PASTURE`/`PLACE` task generation,
-      + fix a verified movement inefficiency: PLANT picks the first empty tile in scan order
-      (farthest from the spawn point at board center) instead of the nearest one — make tile
-      selection distance-aware and account for `LAND_ORDER`'s unlock sequence
+- [x] T6.2 — Acquisition pipeline in `tasks.py`: `BUILD_COOP`/`BUILD_PASTURE`/`PLACE` task generation,
+      + fixed the verified movement inefficiency: `build_task_list` now picks the nearest empty
+      tile/matching structure to any unit (via `tile_distance`) instead of the first one in
+      row-major scan order; `decide()` rewired to pass real unit positions. `LAND_ORDER`-aware
+      expansion ordering not done (no unlock-sequence-specific logic needed yet — distance-based
+      selection already naturally prefers newly-unlocked land near the shed). Golden episodes
+      unchanged (single farmer, default params - the fix mainly saves travel time, which shows up
+      more with hands/expanded land; still real infrastructure, not a no-op).
 - [ ] T6.3 — `BUY_ANIMAL` market order in `decide.py` (mirrors `BUY_SEED`, gated on `shed_room()`)
 - [ ] T6.4 — Real-episode integration + re-measurement (document any timing/deadlock bug found)
 - [ ] T6.5 — Fix documented `BUY_SEED` gap: don't buy without an empty tile to plant on

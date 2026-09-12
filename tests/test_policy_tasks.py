@@ -132,6 +132,110 @@ def test_build_task_list_only_plants_one_tile_per_call():
     assert len([t for t in tasks if t.op == "PLANT"]) == 1
 
 
+def test_build_task_list_plants_the_nearest_empty_tile_not_the_first_scanned():
+    # T6.2's real, verified fix (found while explaining the game's board
+    # geometry to the user): the farm spawns near the board center
+    # (4,4), not (0,0) - picking the first empty tile in row-major scan
+    # order previously meant walking to the far corner every time.
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], plant_crop="CARROT")
+    assert len(tasks) == 1
+    assert tasks[0].pos == (4, 4)  # farmer's own tile is empty and nearest possible
+
+
+def test_build_task_list_plants_the_tile_closest_to_any_unit_among_several_empty():
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(9, 9)], plant_crop="CARROT")
+    assert tasks[0].pos == (9, 9)  # nearest to the given unit, not (0, 0)
+
+
+def test_build_task_list_falls_back_to_scan_order_without_unit_positions():
+    # No unit_positions given - preserves the old, simpler behavior
+    # rather than guessing (decide() always supplies real positions in
+    # practice; this is a graceful default, not the intended real-play
+    # path).
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, plant_crop="CARROT")
+    assert tasks[0].pos == (0, 0)
+
+
+# --- animal acquisition pipeline (T6.2) ----------------------------------
+
+
+def _empty_structure(kind: str) -> dict:
+    return {"kind": kind}
+
+
+def test_build_task_list_builds_a_structure_when_none_exists_yet():
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="COW", have_animal=False)
+    assert len(tasks) == 1
+    assert tasks[0].op == "BUILD_PASTURE"  # COW's structure, per gamelib.constants.ANIMALS
+    assert tasks[0].pos == (4, 4)
+
+
+def test_build_task_list_builds_proactively_even_when_the_animal_is_already_held():
+    # Design decision from tasks/plan.md T6.2: building doesn't wait on
+    # already owning the animal - it can run in parallel with the
+    # BUY_ANIMAL order.
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="COW", have_animal=True)
+    assert len(tasks) == 1
+    assert tasks[0].op == "BUILD_PASTURE"
+
+
+def test_build_task_list_builds_coop_for_goose():
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="GOOSE", have_animal=False)
+    assert tasks[0].op == "BUILD_COOP"
+
+
+def test_build_task_list_places_a_held_animal_on_a_matching_empty_structure():
+    tiles = _empty_tiles()
+    tiles[4][4] = _empty_structure("PASTURE")
+    tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW", have_animal=True)
+    assert len(tasks) == 1
+    assert tasks[0].op == "PLACE"
+    assert tasks[0].pos == (4, 4)
+    assert tasks[0].animal == "COW"
+
+
+def test_build_task_list_does_nothing_when_structure_exists_but_animal_not_held():
+    # Structure already built, BUY_ANIMAL hasn't landed yet (decide()'s
+    # job, pending) - neither BUILD (already done) nor PLACE (nothing to
+    # place) applies this turn.
+    tiles = _empty_tiles()
+    tiles[4][4] = _empty_structure("PASTURE")
+    tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW", have_animal=False)
+    assert tasks == []
+
+
+def test_build_task_list_ignores_a_mismatched_empty_structure():
+    # An empty COOP sits idle when the desired animal needs a PASTURE.
+    tiles = _empty_tiles()
+    tiles[4][4] = _empty_structure("COOP")
+    tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW", have_animal=True)
+    assert tasks[0].op == "BUILD_PASTURE"  # builds a fresh PASTURE elsewhere, ignoring the COOP
+
+
+def test_build_task_list_places_on_the_nearest_matching_structure():
+    tiles = _empty_tiles()
+    tiles[0][0] = _empty_structure("PASTURE")
+    tiles[9][9] = _empty_structure("PASTURE")
+    tasks = build_task_list(tiles, unit_positions=[(9, 8)], desired_animal="COW", have_animal=True)
+    assert tasks[0].pos == (9, 9)
+
+
+def test_action_for_unit_includes_animal_for_place():
+    task = Task(priority=PRIORITY_PLANT, pos=(4, 4), op="PLACE", animal="COW")
+    assert action_for_unit((4, 4), task) == ["PLACE", "COW"]
+
+
+def test_action_for_unit_build_ops_take_no_argument():
+    task = Task(priority=PRIORITY_PLANT, pos=(4, 4), op="BUILD_PASTURE")
+    assert action_for_unit((4, 4), task) == ["BUILD_PASTURE"]
+
+
 def test_build_task_list_is_sorted_by_priority():
     tiles = _empty_tiles()
     tiles[0][0] = {"kind": "WEED"}  # maintenance

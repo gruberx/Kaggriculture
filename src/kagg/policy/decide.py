@@ -161,8 +161,8 @@ def decide(obs: dict, params: dict) -> dict:
     have_seed = desired_crop is not None and seeds.get(desired_crop, 0) > 0
     plant_crop = desired_crop if have_seed else None
 
-    tasks = build_task_list(me["tiles"], plant_crop=plant_crop)
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
+    tasks = build_task_list(me["tiles"], unit_positions, plant_crop=plant_crop)
     assignment = assign_units(tasks, unit_positions)
 
     farmer_action = action_for_unit(unit_positions[0], assignment[0])

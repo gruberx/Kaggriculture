@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from kagg.gamelib.constants import ANIMALS
 from kagg.gamelib.farm import tile_distance
 
 PRIORITY_PREVENT_LOSS = 0
@@ -33,30 +34,76 @@ PRIORITY_MAINTENANCE = 4
 class Task:
     priority: int
     pos: tuple[int, int]
-    op: str  # "WATER" | "HARVEST" | "FEED" | "PLANT" | "DIG" | "COLLECT_FERTILIZER"
+    op: str  # "WATER"|"HARVEST"|"FEED"|"PLANT"|"DIG"|"COLLECT_FERTILIZER"|"BUILD_COOP"|"BUILD_PASTURE"|"PLACE"
     crop: str | None = None  # only set for PLANT tasks
+    animal: str | None = None  # only set for PLACE tasks
 
 
-def build_task_list(tiles, plant_crop: str | None = None) -> list[Task]:
+def _closest_pos(candidates: list[tuple[int, int]], unit_positions) -> tuple[int, int] | None:
+    """Nearest candidate position to any given unit, or the first
+    candidate in scan order if no unit positions are known.
+
+    Found and fixed as part of T6.2 (tasks/plan.md), not anticipated in
+    advance: the farm spawns near the board's center (verified directly
+    in kaggriculture.py: (4, 4), not (0, 0) - see tasks/plan.md's T6.2
+    entry), so picking the first empty tile in row-major scan order
+    meant walking to the far corner every time, a real, measured
+    movement inefficiency, not a hypothetical one. The scan-order
+    fallback (no unit_positions given) is a graceful default for callers
+    that don't care which tile, not the intended real-play path -
+    decide() always supplies real unit positions.
+    """
+    if not candidates:
+        return None
+    if not unit_positions:
+        return candidates[0]
+    return min(candidates, key=lambda pos: min(tile_distance(pos, u) for u in unit_positions))
+
+
+def build_task_list(
+    tiles,
+    unit_positions=(),
+    plant_crop: str | None = None,
+    desired_animal: str | None = None,
+    have_animal: bool = False,
+) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
-    `plant_crop` is the crop to plant on the first empty tile found, if
-    any (sourced from the strategic layer's portfolio ranking - see
+    `plant_crop` is the crop to plant on the nearest empty tile, if any
+    (sourced from the strategic layer's portfolio ranking - see
     SPEC-policy.md "1. Strategic layer" / kagg.policy.strategy) - `None`
     means don't plant this turn (no seeds available, or nothing worth
-    planting). Only one PLANT task is ever produced per call: one action
-    plants (at most) one tile, so there's nothing to gain from listing
-    every empty tile as a candidate right now.
+    planting).
+
+    `desired_animal` (T6.2) generalizes the same idea to animal
+    acquisition: builds the matching structure (BUILD_COOP/BUILD_PASTURE)
+    proactively on the nearest empty tile if none exists yet - this does
+    NOT wait on `have_animal` (tasks/plan.md T6.2's design decision: the
+    structure and the BUY_ANIMAL market order can complete in parallel
+    across turns) - or PLACEs a held animal (`have_animal=True`) on the
+    nearest matching empty structure once one exists. If a matching
+    structure already exists but the animal isn't held yet, there is
+    nothing for this layer to do this turn (BUY_ANIMAL is decide()'s
+    concern, not this one's).
+
+    At most one new-investment task (`PLANT`/`BUILD_COOP`/
+    `BUILD_PASTURE`/`PLACE`) is ever produced per call - one action
+    plants/builds/places at most one tile, so there's nothing to gain
+    from listing every candidate right now. `desired_animal` takes
+    priority over `plant_crop` if both are somehow given (callers are
+    expected to supply only one, mirroring `_top_investment_choice`'s
+    single top pick, but this keeps behavior well-defined either way).
     """
     tasks: list[Task] = []
-    planted_this_call = False
+    empty_tiles: list[tuple[int, int]] = []
+    matching_structure_tiles: list[tuple[int, int]] = []
+    desired_structure = ANIMALS[desired_animal]["structure"] if desired_animal is not None else None
+
     for y, row in enumerate(tiles):
         for x, tile in enumerate(row):
             pos = (x, y)
             if tile is None:
-                if plant_crop is not None and not planted_this_call:
-                    tasks.append(Task(PRIORITY_PLANT, pos, "PLANT", crop=plant_crop))
-                    planted_this_call = True
+                empty_tiles.append(pos)
                 continue
             if not isinstance(tile, dict):
                 continue  # "LOCKED"
@@ -67,9 +114,39 @@ def build_task_list(tiles, plant_crop: str | None = None) -> list[Task]:
                 tasks.extend(_plant_tile_tasks(pos, tile))
             elif "animal" in tile:
                 tasks.extend(_animal_tile_tasks(pos, tile))
-            # An empty COOP/PASTURE (no "animal" key) has nothing to do.
+            elif kind == desired_structure:
+                matching_structure_tiles.append(pos)
+            # An empty COOP/PASTURE not matching desired_structure has
+            # nothing to do.
+
+    investment_task = _new_investment_task(
+        empty_tiles, matching_structure_tiles, unit_positions,
+        plant_crop, desired_animal, desired_structure, have_animal,
+    )
+    if investment_task is not None:
+        tasks.append(investment_task)
+
     tasks.sort(key=lambda t: t.priority)
     return tasks
+
+
+def _new_investment_task(
+    empty_tiles, matching_structure_tiles, unit_positions,
+    plant_crop, desired_animal, desired_structure, have_animal,
+) -> Task | None:
+    if desired_animal is not None:
+        if have_animal and matching_structure_tiles:
+            pos = _closest_pos(matching_structure_tiles, unit_positions)
+            return Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal)
+        if not matching_structure_tiles and empty_tiles:
+            pos = _closest_pos(empty_tiles, unit_positions)
+            build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
+            return Task(PRIORITY_PLANT, pos, build_op)
+        return None
+    if plant_crop is not None and empty_tiles:
+        pos = _closest_pos(empty_tiles, unit_positions)
+        return Task(PRIORITY_PLANT, pos, "PLANT", crop=plant_crop)
+    return None
 
 
 def _plant_tile_tasks(pos: tuple[int, int], tile: dict) -> list[Task]:
@@ -144,6 +221,8 @@ def action_for_unit(unit_pos: tuple[int, int], task: Task | None) -> list:
     if unit_pos == task.pos:
         if task.op == "PLANT":
             return ["PLANT", task.crop]
+        if task.op == "PLACE":
+            return ["PLACE", task.animal]
         return [task.op]
     x, y = unit_pos
     tx, ty = task.pos
