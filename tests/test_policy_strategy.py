@@ -24,26 +24,73 @@ from kagg.policy.strategy import (
 
 # Computed directly from gamelib (Phase 1, already property-tested) at
 # I0 (base price), independently of this module:
-#   WHEAT:      yield=4, tile_days=5  -> 4*25/5   = 20.000
-#   CARROT:     yield=3, tile_days=4  -> 3*35/4   = 26.250
-#   TOMATO:     yield=4, tile_days=12 -> 4*60/12  = 20.000
-#   STRAWBERRY: yield=4, tile_days=17 -> 4*120/17 = 28.235...
-#   MELON:      yield=6, tile_days=13 -> 6*250/13 = 115.385... (yield
-#               capped at max_yield=6 - the window waters 7 days but the
-#               cap is hit at age 10, matching SPEC-gamelib.md's own
-#               worked example)
+#   WHEAT:      yield=4, tile_days=5
+#   CARROT:     yield=3, tile_days=4
+#   TOMATO:     yield=4, tile_days=12
+#   STRAWBERRY: yield=4, tile_days=17
+#   MELON:      yield=6, tile_days=13 (yield capped at max_yield=6 - the
+#               window waters 7 days but the cap is hit at age 10,
+#               matching SPEC-gamelib.md's own worked example)
 #   GOOSE: 50/1  = 50.000
 #   COW:   160/2 = 80.000
 #   SHEEP: 200/3 = 66.667...
+#
+# T8.3f: crop_revenue_per_tile_day no longer prices the whole
+# `total_yield`-unit run at one flat snapshot - it walks
+# gamelib.market.price(crop, I0 + k) for k = 0, ..., total_yield-1 (see
+# its own docstring). "Independently calculated" now means summing that
+# same, already-Phase-1-verified price() directly here rather than
+# hand-multiplying a single base price by total_yield.
 _MARKET_AT_I0 = {}  # rank_portfolio falls back to MARKET_I0 per item when absent
 
 
+def _independent_crop_revenue(crop: str, total_yield: int, tile_days: int, inventory: int = MARKET_I0) -> float:
+    from kagg.gamelib.market import price as _price
+
+    return sum(_price(crop, inventory + k) for k in range(total_yield)) / tile_days
+
+
 def test_crop_revenue_per_tile_day_matches_independent_calculation():
-    assert crop_revenue_per_tile_day("WHEAT", MARKET_I0) == pytest.approx(20.0)
-    assert crop_revenue_per_tile_day("CARROT", MARKET_I0) == pytest.approx(26.25)
-    assert crop_revenue_per_tile_day("TOMATO", MARKET_I0) == pytest.approx(20.0)
-    assert crop_revenue_per_tile_day("STRAWBERRY", MARKET_I0) == pytest.approx(120 * 4 / 17)
-    assert crop_revenue_per_tile_day("MELON", MARKET_I0) == pytest.approx(250 * 6 / 13)
+    assert crop_revenue_per_tile_day("WHEAT", MARKET_I0) == pytest.approx(_independent_crop_revenue("WHEAT", 4, 5))
+    assert crop_revenue_per_tile_day("CARROT", MARKET_I0) == pytest.approx(_independent_crop_revenue("CARROT", 3, 4))
+    assert crop_revenue_per_tile_day("TOMATO", MARKET_I0) == pytest.approx(_independent_crop_revenue("TOMATO", 4, 12))
+    assert crop_revenue_per_tile_day("STRAWBERRY", MARKET_I0) == pytest.approx(
+        _independent_crop_revenue("STRAWBERRY", 4, 17)
+    )
+    assert crop_revenue_per_tile_day("MELON", MARKET_I0) == pytest.approx(_independent_crop_revenue("MELON", 6, 13))
+
+
+def test_crop_revenue_per_tile_day_self_impact_never_exceeds_the_flat_price_estimate():
+    # A tiny sanity check on the model's own direction, not a business
+    # rule: since price() is non-increasing in inventory once at/above
+    # I0, walking forward from a snapshot can never score *higher* than
+    # pricing every unit at that same starting snapshot.
+    for crop in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON"):
+        flat = _independent_crop_revenue(crop, *_yield_and_tile_days(crop))
+        assert crop_revenue_per_tile_day(crop, MARKET_I0) <= flat + 1e-9
+
+
+def _yield_and_tile_days(crop: str) -> tuple[int, int]:
+    from kagg.gamelib.constants import CROPS
+    from kagg.gamelib.growth import forecast_one_time_yield, forecast_ongoing_schedule, watering_bonus_window
+
+    cd = CROPS[crop]
+    if cd["ongoing"]:
+        schedule = forecast_ongoing_schedule(crop, planted_day=0)
+        return min(cd["max_yield"], len(schedule)), schedule[-1] + 1
+    watered_days = set(watering_bonus_window(crop))
+    return forecast_one_time_yield(crop, watered_days), cd["max_yield_day"] + 1
+
+
+def test_crop_revenue_per_tile_day_drops_sharply_once_the_farm_already_commits_many_tiles():
+    # T8.3f, the user's own observation: a single tile's own yield barely
+    # moves its own price (measured: one melon tile's 6-unit run scores
+    # unchanged at I0 - MELON's T=300 dwarfs 6 units), but committing to
+    # many tiles of the same premium good is where the real crash the
+    # user described actually shows up.
+    one_tile = crop_revenue_per_tile_day("MELON", MARKET_I0, already_committed_units=0)
+    many_tiles = crop_revenue_per_tile_day("MELON", MARKET_I0, already_committed_units=20 * 6)
+    assert many_tiles < one_tile * 0.9
 
 
 def test_animal_revenue_per_tile_day_matches_independent_calculation():
@@ -55,9 +102,12 @@ def test_animal_revenue_per_tile_day_matches_independent_calculation():
 def test_rank_portfolio_orders_by_marginal_revenue_at_base_price():
     # MELON's huge per-tile-day revenue at base price is exactly the
     # "premium goods look great until you check market depth" trap
-    # SPEC.md's economic analysis warns about - this ranking function
-    # deliberately does NOT yet account for that (see its own docstring);
-    # it's a first-pass ranking at *today's* price, not a full plan.
+    # SPEC.md's economic analysis warns about. With no `crop_tile_counts`
+    # given (nothing planted yet), MELON still ranks first - T8.3f's
+    # self-impact fix only demotes it once the farm has actually
+    # committed real tiles to it (see the test below); a single
+    # hypothetical new tile alone doesn't move its own price enough to
+    # matter (see crop_revenue_per_tile_day's own docstring).
     assert rank_portfolio(_MARKET_AT_I0) == [
         "MELON",
         "COW",
@@ -68,6 +118,16 @@ def test_rank_portfolio_orders_by_marginal_revenue_at_base_price():
         "WHEAT",
         "TOMATO",
     ]
+
+
+def test_rank_portfolio_demotes_a_crop_the_farm_has_already_committed_many_tiles_to():
+    # T8.3f, the user's own observation: 20 melon tiles already growing
+    # means the *next* melon tile is priced starting from where those
+    # 20 tiles' own 120-unit combined harvest would already have pushed
+    # the market - MELON must drop out of first place once that's real,
+    # not merely hypothetical.
+    ranking = rank_portfolio(_MARKET_AT_I0, crop_tile_counts={"MELON": 20})
+    assert ranking[0] != "MELON"
 
 
 def test_rank_portfolio_reacts_to_a_crashed_price():

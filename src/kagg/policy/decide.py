@@ -125,6 +125,26 @@ _DEFAULT_LIQUIDATION_DAYS_BEFORE_END = 2
 # opportunistic MAINTENANCE-tier work.
 _DEFAULT_USE_FERTILIZER = False
 
+# T8.3f (the user's own observation): gates whether `_crop_tile_counts`'s
+# scan result actually reaches `rank_portfolio` (see its own docstring
+# and `crop_revenue_per_tile_day`'s for the full self-impact story) or is
+# withheld (`None`, rank_portfolio's pre-T8.3f behavior, unchanged) - a
+# single flag so the change can be cleanly isolated in self-play, exactly
+# like every other behavior lever in this module.
+#
+# Accepted: a clean, decisive 50/50 win on both the working block (seeds
+# 100-149) and the held-out block (seeds 900-949) against the identical
+# code with this flag off. Traced, not just trusted (seed 100): the
+# self-impact-aware agent planted MELON only 16 times before switching to
+# STRAWBERRY for the remaining 7 plantings, ending at $21452; the
+# unaware agent kept planting MELON 23 times (crashing its own price)
+# plus a few cheap CARROT/WHEAT fallbacks once MELON's actual realized
+# price cratered, ending at only $17765 - a real, structural
+# diversification effect, exactly the dynamic the user described (a
+# single crop's own overproduction craters its price while other goods
+# stay high) rather than a marginal tuning gain.
+_DEFAULT_CROP_SELF_IMPACT_AWARE = True
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -244,7 +264,25 @@ def _animal_has_time_to_mature(animal: str, current_day: int, season_length_days
     return bool(schedule) and schedule[0] < season_length_days
 
 
-def _top_investment_choice(market_inventory: dict, current_day: int, params: dict) -> tuple[str, str] | None:
+def _crop_tile_counts(tiles) -> dict[str, int]:
+    """How many PLANT tiles of each crop currently exist on the farm -
+    T8.3f's input to `rank_portfolio`'s self-impact pricing (see its own
+    docstring): a *new* tile's marginal value must be priced as if the
+    farm's existing commitment to that crop already landed, not from a
+    pristine market snapshot.
+    """
+    counts: dict[str, int] = {}
+    for row in tiles:
+        for tile in row:
+            if isinstance(tile, dict) and tile.get("kind") == "PLANT":
+                crop = tile.get("crop")
+                counts[crop] = counts.get(crop, 0) + 1
+    return counts
+
+
+def _top_investment_choice(
+    market_inventory: dict, current_day: int, params: dict, crop_tile_counts: dict | None = None
+) -> tuple[str, str] | None:
     """The highest-ranked crop-or-animal that still has time to mature
     this season, as `(name, kind)` with `kind` "crop" or "animal". `None`
     if nothing does - late enough in the season, forcing a choice would
@@ -254,9 +292,12 @@ def _top_investment_choice(market_inventory: dict, current_day: int, params: dic
     animals too (T6.1) - see the module docstring for the real, temporary
     gap this opens until T6.2/T6.3 wire actual animal acquisition into
     tasks.py/market.py.
+
+    `crop_tile_counts` (T8.3f) is passed straight through to
+    `rank_portfolio` - see its own docstring.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory):
+    for name in rank_portfolio(market_inventory, crop_tile_counts):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
                 return name, "crop"
@@ -266,7 +307,9 @@ def _top_investment_choice(market_inventory: dict, current_day: int, params: dic
     return None
 
 
-def _top_crop_choice(market_inventory: dict, current_day: int, params: dict) -> str | None:
+def _top_crop_choice(
+    market_inventory: dict, current_day: int, params: dict, crop_tile_counts: dict | None = None
+) -> str | None:
     """Best CROP alone, ignoring animals entirely - a fallback
     (`params["plant_while_pursuing_animal"]`, default **on** since
     T8.3b) used *alongside* (not instead of) `_top_investment_choice`'s
@@ -309,7 +352,7 @@ def _top_crop_choice(market_inventory: dict, current_day: int, params: dict) -> 
     pipeline instead of being pre-empted by it.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory):
+    for name in rank_portfolio(market_inventory, crop_tile_counts):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             return name
     return None
@@ -325,7 +368,12 @@ def decide(obs: dict, params: dict) -> dict:
     shed = private.get("shed", {})
 
     current_day = obs.get("day", 0)
-    investment = _top_investment_choice(obs["market"]["inventory"], current_day, params)
+    crop_tile_counts = (
+        _crop_tile_counts(me["tiles"])
+        if params.get("crop_self_impact_aware", _DEFAULT_CROP_SELF_IMPACT_AWARE)
+        else None
+    )
+    investment = _top_investment_choice(obs["market"]["inventory"], current_day, params, crop_tile_counts)
     desired_name, desired_kind = investment if investment is not None else (None, None)
     desired_crop = desired_name if desired_kind == "crop" else None
     desired_animal = desired_name if desired_kind == "animal" else None
@@ -340,7 +388,7 @@ def decide(obs: dict, params: dict) -> dict:
     if desired_crop is not None:
         fallback_crop = desired_crop
     elif params.get("plant_while_pursuing_animal", _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL):
-        fallback_crop = _top_crop_choice(obs["market"]["inventory"], current_day, params)
+        fallback_crop = _top_crop_choice(obs["market"]["inventory"], current_day, params, crop_tile_counts)
     else:
         fallback_crop = None
     have_seed = fallback_crop is not None and seeds.get(fallback_crop, 0) > 0

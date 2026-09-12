@@ -386,6 +386,38 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       real spare MAINTENANCE-tier capacity, not deleted outright. Golden table unchanged (default
       behavior is bit-identical to before this task). 265/265 full suite (10 new tests), compileall
       clean, boundary check green.
+- [x] T8.3f — The user's own proposal (price-aware crop/production diversification) plus a
+      clarifying question (can we see the opponent's production?) that surfaced real facts worth
+      recording: `obs["farms"]` is one shared list visible identically to both players (tiles, crops,
+      animals, money, positions all visible), only `private` (shed/seeds) is per-player - and the
+      user's recollection that premium goods react sharper to overproduction is exactly the
+      `above_target` coefficients already encoded in `PREMIUM_GOODS` (MELON 3.60, WOOL 3.20 vs WHEAT
+      0.20, CARROT/TOMATO 0.60-0.70). Scoped, with the user, to *own* self-impact first (no opponent
+      modeling yet).
+      **A real mid-implementation pivot, reported honestly rather than shipped quietly:** the first
+      version walked a single tile's own future yield against its own price
+      (`crop_revenue_per_tile_day`'s per-unit lockstep pricing, mirroring the real engine's SELL
+      quoting) - measured this alone is real but numerically negligible (one melon tile's 6-unit run:
+      250 -> 250 unchanged), since the market's elasticity scale (`T`) is calibrated to a whole farm's
+      output, not one tile's. Reported this finding back to the user, who chose the corrected fix:
+      account for how many tiles of a crop are **already planted on the farm** (measured: 20 melon
+      tiles already growing crashes even the *next* tile's own average price from 250 to 46; 30 tiles
+      crashes it below every other crop's).
+      **Built:** `rank_portfolio`/`crop_revenue_per_tile_day` (`strategy.py`) gained a
+      `crop_tile_counts`/`already_committed_units` argument; `decide.py` scans the farm's own tiles
+      (`_crop_tile_counts`) and feeds the counts through, gated by a new `params["crop_self_impact_aware"]`
+      flag for a clean self-play A/B. Scoped to crops only (animals deferred - their lifetime yield is
+      intentionally unbounded, so there's no natural total to walk without picking an arbitrary
+      horizon). Opponent visibility explicitly deferred too, per the user's own scoping choice - a
+      real, documented next step, not forgotten.
+      **Measured: 50/50 wins on BOTH self-play blocks** against the mechanism disabled. Traced, not
+      just trusted (seed 100): the self-impact-aware agent planted MELON only 16 times before
+      switching to STRAWBERRY for its remaining 7 plantings ($21452 final); the old code kept planting
+      MELON 23 times (crashing its own realized price) plus cheap CARROT/WHEAT fallbacks once MELON's
+      price cratered ($17765 final) - real structural diversification, not a marginal tuning gain.
+      **Accepted** as the default (`crop_self_impact_aware=True`). Golden table re-recorded - 4 of 6
+      seeds changed (both directions, since this changes *what* gets planted). 272/272 full suite (11
+      new tests), compileall clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

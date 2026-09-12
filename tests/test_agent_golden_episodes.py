@@ -155,6 +155,30 @@ starter/seed3: 21486 -> 25422), unlike T8.3b's conditional fix - this
 one is a structural travel-efficiency improvement that applies in every
 game, not just ones where a specific animal-lock-in scenario occurs.
 
+Re-recorded a ninth time for T8.3f (tasks/plan.md) - the user's own
+observation about the game's price-elasticity rules, refined together
+with the user through direct measurement: an initial implementation
+walked a single tile's own future yield against its own price
+(`crop_revenue_per_tile_day`'s per-unit lockstep pricing), but measured
+that this alone barely moves anything - one MELON tile's 6-unit run
+scores unchanged (250 -> 250), since the market's elasticity scale (T)
+is calibrated to a whole farm's output, not one tile's. The real fix
+prices a *new* tile starting from where the farm's *existing* commitment
+to that crop (`rank_portfolio`'s new `crop_tile_counts` argument, counted
+from the farm's own tiles) would already have pushed the market -
+measured directly: 20 melon tiles already growing crashes even the next
+tile's own average price from 250 to 46, correctly demoting MELON below
+every other crop once that commitment is real. Measured: 50/50 wins on
+BOTH self-play blocks against the previously-shipped default. Traced,
+not just trusted (seed 100): the self-impact-aware agent planted MELON
+16 times before switching to STRAWBERRY for its remaining 7 plantings
+($21452 final); the old code kept planting MELON 23 times (crashing its
+own realized price) plus a few cheap CARROT/WHEAT fallbacks once MELON's
+price cratered ($17765 final) - a real, structural diversification
+effect, not a marginal tuning gain. 4 of 6 golden seeds changed this
+time (both directions - this changes *what* gets planted, not simply
+"more efficient at the same plan").
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -173,22 +197,20 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.3c policy (investment_anchor="UNIT_TOWARD_SHED"
-# accepted as the default), reproduced twice before being hardcoded here.
-# Not yet the rigorous >=60% win rate SPEC.md's success criteria call for
-# (that needs Phase 4's paired-seed harness, not three ad-hoc seeds), but
-# a real improvement worth locking in - all 6 seeds improved this time
-# (e.g. starter/seed3: 21486 -> 25422), consistent with this being a
-# structural travel-efficiency fix that applies every game, not a
-# conditional one like T8.3b's - and with the 50/50-on-both-blocks
-# self-play result this was accepted on.
+# Recorded against the T8.3f policy (crop_self_impact_aware=True accepted
+# as the default), reproduced twice before being hardcoded here. Not yet
+# the rigorous >=60% win rate SPEC.md's success criteria call for (that
+# needs Phase 4's paired-seed harness, not three ad-hoc seeds), but a real
+# improvement worth locking in - accepted on a 50/50-on-both-blocks
+# self-play result, traced to real crop diversification (see the module
+# docstring's T8.3f paragraph above).
 _GOLDEN = {
     ("starter", 1): (26366.0, 3421.0),
-    ("starter", 2): (26541.0, 3569.0),
-    ("starter", 3): (25422.0, 3661.0),
+    ("starter", 2): (25376.0, 3569.0),
+    ("starter", 3): (25447.0, 3649.0),
     ("pass", 1): (26156.0, 3000.0),
-    ("pass", 2): (26017.0, 3000.0),
-    ("pass", 3): (25639.0, 3000.0),
+    ("pass", 2): (25561.0, 3000.0),
+    ("pass", 3): (27215.0, 3000.0),
 }
 
 

@@ -98,6 +98,18 @@ DEFAULT_PARAMS = {
     # story. Kept available (like "SHED") for a future re-check once a
     # second unit (T8.6/T8.7) gives real spare capacity.
     "use_fertilizer": False,
+    # T8.3f: the user's own observation - a crop's revenue score now
+    # prices in the farm's *existing* commitment to that same crop (many
+    # tiles already growing MELON crash even the next tile's own price),
+    # not just a single hypothetical tile's negligible self-impact alone.
+    # Accepted: 50/50 on both self-play blocks against the mechanism
+    # disabled, traced to real crop diversification (switching off MELON
+    # once already heavily planted, instead of crashing its own price
+    # further) - see kagg.policy.decide's
+    # _DEFAULT_CROP_SELF_IMPACT_AWARE comment for the full story and
+    # kagg.policy.strategy.rank_portfolio's own docstring for the
+    # mechanism.
+    "crop_self_impact_aware": True,
 }
 
 

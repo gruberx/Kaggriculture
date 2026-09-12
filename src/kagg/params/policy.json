@@ -11,5 +11,6 @@
   "land_buy_max_free_tile_fraction": 0.25,
   "land_buy_min_frontier_distance": 99,
   "liquidation_days_before_end": 2,
-  "use_fertilizer": false
+  "use_fertilizer": false,
+  "crop_self_impact_aware": true
 }

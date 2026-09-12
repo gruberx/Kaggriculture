@@ -13,6 +13,7 @@ from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0, PRODUCTS
 from kagg.policy.decide import (
     _animal_has_time_to_mature,
     _crop_has_time_to_mature,
+    _crop_tile_counts,
     _top_investment_choice,
     decide,
 )
@@ -129,6 +130,50 @@ def test_decide_does_not_liquidate_early_in_the_season():
     action = decide(obs, DEFAULT_PARAMS)
     sell_melon = [o for o in action["market"] if o[0] == "SELL" and o[1] == "MELON"]
     assert sell_melon == [["SELL", "MELON", 5]]  # default drip_sell_max_per_turn still applies
+
+
+def test_crop_tile_counts_counts_plant_tiles_by_crop():
+    tiles = [[None] * 10 for _ in range(10)]
+    tiles[0][0] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    tiles[0][1] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    tiles[1][0] = {"kind": "PLANT", "crop": "WHEAT", "planted_day": 0}
+    tiles[2][0] = {"kind": "COOP"}  # not a PLANT tile - ignored
+    assert _crop_tile_counts(tiles) == {"MELON": 2, "WHEAT": 1}
+
+
+def test_decide_defaults_crop_self_impact_aware_to_true_when_unset():
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("crop_self_impact_aware") is True
+    assert decide_module._DEFAULT_CROP_SELF_IMPACT_AWARE is True
+
+
+def test_decide_can_disable_crop_self_impact_awareness_explicitly():
+    # Same setup as the enabled-by-default test below, but with the flag
+    # off - decide() must fall back to rank_portfolio's pre-T8.3f
+    # behavior (crop_tile_counts withheld entirely), still recommending
+    # MELON despite the 30 already-committed tiles.
+    obs = _obs()
+    for i in range(30):
+        obs["farms"][0]["tiles"][i % 10][i // 10] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    action = decide(obs, dict(DEFAULT_PARAMS, crop_self_impact_aware=False))
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert buy_seed_orders and buy_seed_orders[0][1] == "MELON"
+
+
+def test_decide_stops_recommending_a_crop_the_farm_has_already_committed_many_tiles_to():
+    # T8.3f, the user's own observation: end-to-end wiring check - once
+    # the farm already has many MELON tiles (30, i.e. 180 melons in the
+    # pipeline - enough to crash even the *next* tile's own average price
+    # below every other crop's, per rank_portfolio's own docstring),
+    # decide()'s own BUY_SEED choice must reflect the self-impact-
+    # adjusted ranking, not just rank_portfolio tested in isolation.
+    obs = _obs()
+    for i in range(30):
+        obs["farms"][0]["tiles"][i % 10][i // 10] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    action = decide(obs, DEFAULT_PARAMS)
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert buy_seed_orders and buy_seed_orders[0][1] != "MELON"
 
 
 def test_decide_defaults_use_fertilizer_to_false_when_unset():

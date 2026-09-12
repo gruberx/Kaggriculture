@@ -24,22 +24,19 @@ from kagg.gamelib.growth import (
 from kagg.gamelib.market import price
 
 
-def crop_revenue_per_tile_day(crop: str, sell_at_inventory: int) -> float:
-    """Expected revenue per tile-day for a crop watered on every day its
-    bonus window allows (no fertilizer), evaluated at `sell_at_inventory`
-    - the market inventory level its product would actually sell at, not
-    base price (SPEC-policy.md: "given current market depth, not by base
-    price").
+def _crop_yield_and_tile_days(crop: str) -> tuple[int, int]:
+    """(total_yield, tile_days) for one tile of `crop` grown start to
+    finish - the two quantities `crop_revenue_per_tile_day` and
+    `rank_portfolio` (T8.3f) both need, factored out once so they can't
+    drift apart from each other.
 
-    One-time crops: total yield from watering the entire bonus window,
-    divided by the tile-days occupied from planting through harvest
-    (`max_yield_day + 1`). Ongoing crops: total yield across the capped
-    schedule (SPEC-gamelib.md: finite, capped at `max_yield` scheduled
-    productions), divided by the tile-days occupied through the last
-    scheduled production.
+    One-time crops: total yield from watering the entire bonus window;
+    tile-days occupied from planting through harvest (`max_yield_day +
+    1`). Ongoing crops: total yield across the capped schedule (SPEC-
+    gamelib.md: finite, capped at `max_yield` scheduled productions);
+    tile-days occupied through the last scheduled production.
     """
     cd = CROPS[crop]
-    product_price = price(crop, sell_at_inventory)
     if cd["ongoing"]:
         schedule = forecast_ongoing_schedule(crop, planted_day=0)
         total_yield = min(cd["max_yield"], len(schedule))  # 1 unit/tick, capped
@@ -48,7 +45,60 @@ def crop_revenue_per_tile_day(crop: str, sell_at_inventory: int) -> float:
         watered_days = set(watering_bonus_window(crop))
         total_yield = forecast_one_time_yield(crop, watered_days)
         tile_days = cd["max_yield_day"] + 1
-    return (total_yield * product_price) / tile_days
+    return total_yield, tile_days
+
+
+def crop_revenue_per_tile_day(crop: str, sell_at_inventory: int, already_committed_units: int = 0) -> float:
+    """Expected revenue per tile-day for a crop watered on every day its
+    bonus window allows (no fertilizer), evaluated at `sell_at_inventory`
+    - the market inventory level its product would actually sell at, not
+    base price (SPEC-policy.md: "given current market depth, not by base
+    price").
+
+    T8.3f (the user's own observation, matching a real gap this module's
+    own `rank_portfolio` docstring used to flag explicitly): self-impact
+    aware, not priced at one flat snapshot. `gamelib.market.price` mirrors
+    kaggriculture.py's own per-unit lockstep SELL quoting - each unit sold
+    pushes market inventory up by exactly 1 before the next unit is
+    quoted - so pricing an entire `total_yield`-unit run at the same
+    starting snapshot overstates its value, more so for goods whose curve
+    reacts steeply to a glut (SPEC.md's PREMIUM_GOODS: MELON/WOOL/MILK/
+    STRAWBERRY). Walks `sell_at_inventory + already_committed_units + k`
+    for k = 0, 1, ..., total_yield-1 instead of one flat price.
+
+    `already_committed_units` (T8.3f) is `rank_portfolio`'s way of saying
+    "this many units of `crop` are already in the pipeline from tiles
+    already planted elsewhere on the farm" - **load-bearing**, not
+    cosmetic: measured directly (gamelib.market.price at this crop's own
+    T-scale) that a *single* tile's own yield barely moves its own price
+    at all (e.g. one melon tile's 6-unit run: 250 -> 250, no change - the
+    market's elasticity scale T is calibrated to a whole farm's output,
+    not one tile's), so without this offset the self-impact walk above is
+    a real but practically negligible correction. Committing to *many*
+    tiles of the same crop is where the real crash shows up (measured:
+    20 melon tiles = 120 units, 250 -> 108 by the last one) - exactly the
+    "premium goods react sharper to overproduction" dynamic the user
+    described, which only becomes visible at the farm's total footprint,
+    not a single new tile's own contribution.
+
+    Deliberately conservative, not a full simulation: ignores the real
+    market's own recovery between sales from town/shop consumption
+    (kaggriculture.py's `_town_consume` decrements inventory by ~1/day per
+    product from the town center alone, more with an unlocked shop) - a
+    real game would likely fetch somewhat more than this model predicts,
+    never less, so this errs toward undervaluing a crop rather than
+    overvaluing it.
+
+    Scoped to crops only - `animal_revenue_per_tile_day` (below) is
+    unchanged. An animal's lifetime yield is intentionally unbounded (see
+    that function's own docstring: "no fixed occupancy to divide by"), so
+    there is no natural `total_yield` to walk across without picking an
+    arbitrary horizon - left as a documented gap, not silently ignored.
+    """
+    total_yield, tile_days = _crop_yield_and_tile_days(crop)
+    start = sell_at_inventory + already_committed_units
+    total_revenue = sum(price(crop, start + k) for k in range(total_yield))
+    return total_revenue / tile_days
 
 
 def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int) -> float:
@@ -64,23 +114,32 @@ def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int) -> float:
     return product_price / a["interval"]
 
 
-def rank_portfolio(market_inventory: dict) -> list[str]:
+def rank_portfolio(market_inventory: dict, crop_tile_counts: dict | None = None) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day at `market_inventory`'s *current* level for each one's own
     product (missing entries fall back to MARKET_I0, i.e. base price).
 
-    This is a first-pass ranking at today's prices - it does not yet
-    account for how planting many tiles of the same thing would move the
-    price down as your own production lands. That self-impact refinement
-    is left to a later policy iteration / tuning experiment, not this
-    ranking function - see SPEC.md's economic analysis for why premium
-    goods (melon, wool, milk, strawberry) look deceptively good by this
-    measure alone until market depth is actually checked.
+    `crop_tile_counts` (T8.3f, the user's own observation): how many
+    tiles of each crop are already planted on the farm, so a *new* tile's
+    marginal value is priced starting from where the farm's existing
+    commitment to that crop would already have pushed the market, not
+    from a pristine snapshot - see `crop_revenue_per_tile_day`'s own
+    docstring for why this (not merely walking one tile's own future
+    yield) is the part that actually matters: SPEC.md's economic analysis
+    warning that premium goods (melon, wool, milk, strawberry) look
+    deceptively good until market depth is checked is exactly about a
+    farm's *total* footprint in one good, not a single tile's. `None`
+    (the default) means "nothing planted yet" - every existing caller
+    before T8.3f keeps its old, unadjusted behavior unchanged. Animals
+    are unaffected - `crop_tile_counts` only ever names crops.
     """
+    crop_tile_counts = crop_tile_counts or {}
     scores = {}
     for crop in CROPS:
         inv = market_inventory.get(crop, MARKET_I0)
-        scores[crop] = crop_revenue_per_tile_day(crop, inv)
+        total_yield, _ = _crop_yield_and_tile_days(crop)
+        already_committed_units = crop_tile_counts.get(crop, 0) * total_yield
+        scores[crop] = crop_revenue_per_tile_day(crop, inv, already_committed_units)
     for animal, a in ANIMALS.items():
         inv = market_inventory.get(a["product"], MARKET_I0)
         scores[animal] = animal_revenue_per_tile_day(animal, inv)
