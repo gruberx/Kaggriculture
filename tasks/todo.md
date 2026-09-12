@@ -119,9 +119,13 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       (also closed the analogous `BUY_ANIMAL` gap in the same pass, one shared tile scan:
       an animal needs an empty tile *or* an existing empty matching structure, not
       necessarily free land). Golden episodes unchanged — 193/193 full suite.
-- [ ] T6.6 — Extend `kaggle_environments`-import boundary check to `policy/` (+ `agent_main.py`)
-- [ ] **Checkpoint 6** — full suite green; arena re-measurement vs starter/random recorded in the
-      commit message. Commit.
+- [x] T6.6 — Extend `kaggle_environments`-import boundary check to `policy/` (+ `agent_main.py`).
+      Renamed `tests/test_gamelib_boundary.py` → `tests/test_shipped_boundary.py`; added tests
+      proving the file-scan (not just the detector) actually catches a planted violation in a
+      scratch copy of `policy/` and of `agent_main.py`.
+- [x] **Checkpoint 6** — full suite green (195/195). Arena re-measurement: unchanged since T6.4's
+      50/50 vs starter/random (T6.5/T6.6 didn't touch runtime behavior — golden episodes identical,
+      no re-run needed). Commit.
 
 ## Phase 7 — `tuning`: Stage 1 only (coordinate ascent + regression gate)
 

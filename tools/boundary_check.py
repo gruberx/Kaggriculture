@@ -1,10 +1,12 @@
 """Shared AST-based `kaggle_environments`-import detector.
 
-Extracted from tests/test_gamelib_boundary.py (T1.7) so tools/
-build_submission.py's bundle audit (T5.1) and any dev-time boundary test
-can share one implementation instead of two AST walks drifting apart.
-See SPEC.md "Rule compliance": gamelib/agent/policy ship in the
-submission bundle and must never import kaggle_environments.
+Extracted from tests/test_gamelib_boundary.py (T1.7, later renamed
+tests/test_shipped_boundary.py and widened to cover policy/ and
+agent_main.py too - T6.6) so tools/build_submission.py's bundle audit
+(T5.1) and any dev-time boundary test can share one implementation
+instead of two AST walks drifting apart. See SPEC.md "Rule compliance":
+gamelib/agent/policy ship in the submission bundle and must never import
+kaggle_environments.
 
 Dev-only: this module itself is never bundled/shipped.
 """
