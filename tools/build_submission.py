@@ -18,8 +18,10 @@ context section.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
+import subprocess
 import sys
 import tarfile
 
@@ -79,18 +81,87 @@ def audit_bundle(build_dir: str) -> list[str]:
     return violations
 
 
+def _editable_src_dir() -> str:
+    """Absolute path of the editable-installed dev-tree kagg package's
+    parent directory (its `src/`) - found via the live import rather
+    than hardcoded, so this works in any dev environment, not just this
+    one. Used by smoke_test to exclude it from the subprocess's
+    sys.path (see that function's docstring for why this matters)."""
+    import kagg
+
+    return os.path.dirname(os.path.dirname(os.path.abspath(kagg.__file__)))
+
+
+_SMOKE_TEST_SCRIPT = """
+import json
+import os
+import sys
+
+sys.path = [p for p in sys.path if os.path.abspath(p) != {editable_src_dir!r}]
+
+from kaggle_environments import make
+
+env = make("kaggriculture", configuration={{"episodeSteps": {episode_steps}, "seed": 1}}, debug=False)
+env.run([{main_py_path!r}, "random"])
+final = env.steps[-1]
+
+import kagg
+
+print(json.dumps({{
+    "statuses": [final[0].status, final[1].status],
+    "kagg_file": os.path.abspath(kagg.__file__),
+}}))
+"""
+
+
 def smoke_test(main_py_path: str, episode_steps: int = _DEFAULT_EPISODE_STEPS) -> tuple[bool, str]:
     """Run a real episode against the built main.py (against "random",
     matching SPEC-ops.md) to catch import/path errors before they cost a
-    submission slot. Returns (ok, detail) - detail explains a failure."""
-    from kaggle_environments import make
+    submission slot. Returns (ok, detail) - detail explains a failure.
 
-    env = make("kaggriculture", configuration={"episodeSteps": episode_steps, "seed": 1}, debug=False)
-    env.run([main_py_path, "random"])
-    final = env.steps[-1]
-    statuses = (final[0].status, final[1].status)
+    Runs in a clean subprocess whose sys.path excludes the editable
+    dev-tree's src/ directory - a real, previously unnoticed gap found
+    while planning T8.0, not a hypothetical: `kagg` is editable-installed
+    (a `.pth` file puts src/ on sys.path at interpreter startup, ahead of
+    anything kaggle_environments' loader appends later), so an in-process
+    smoke test always resolves `import kagg` to the *live* dev-tree
+    package regardless of what actually sits next to `main_py_path` on
+    disk. That made this smoke test pure theater: a bundle entirely
+    missing its kagg/ package still "passed" by silently falling back to
+    the dev tree (see this module's own regression test for the
+    reproduction). The subprocess strips that one sys.path entry before
+    importing anything, and the resolved `kagg.__file__` is checked
+    against `main_py_path`'s own directory afterward, so this now
+    actually proves the bundle is self-contained.
+    """
+    bundle_kagg_dir = os.path.join(os.path.dirname(os.path.abspath(main_py_path)), "kagg")
+    script = _SMOKE_TEST_SCRIPT.format(
+        editable_src_dir=_editable_src_dir(),
+        episode_steps=episode_steps,
+        main_py_path=os.path.abspath(main_py_path),
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=120
+    )
+    if result.returncode != 0:
+        return False, f"smoke-test subprocess failed:\n{result.stderr[-4000:]}"
+
+    try:
+        payload = json.loads(result.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return False, f"smoke-test subprocess produced no parseable output:\n{result.stdout}\n{result.stderr}"
+
+    statuses = tuple(payload["statuses"])
     if statuses != ("DONE", "DONE"):
         return False, f"expected (DONE, DONE), got {statuses}"
+
+    kagg_file = payload["kagg_file"]
+    if not kagg_file.startswith(bundle_kagg_dir + os.sep):
+        return False, (
+            f"smoke test ran the wrong kagg package: expected it under {bundle_kagg_dir}, "
+            f"got {kagg_file} - the bundle is likely missing kagg/ and silently fell back "
+            "to some other package on sys.path"
+        )
     return True, ""
 
 

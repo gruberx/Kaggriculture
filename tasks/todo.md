@@ -160,6 +160,69 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       `params/policy.json` update exists (`land_purchase_threshold_money` 5000 → 10000). 217/217
       full suite. Commit.
 
+## Phase 8 — movement, land gating, and making labor actually work
+
+Real submission `56184182` scores ~9,400-13,600 vs the field's 76,000-102,000 (~8x gap). User
+observations from watching real replays, all confirmed against code + real env source: (1) land
+bought while free tiles remain — `should_buy_land` never checks occupancy; (2) work runs in a line
+away from the shed, not a compact sweep — `tasks.py`'s sort never uses distance, and `_closest_pos`
+anchors placement to the farmer's *current* position, not the shed; the env teleports the farmer to
+spawn and dumps all inventory to the shed every day, so travel-from-shed is repaid daily; (3) no
+extra staff hired — `hires_per_day=0` was set by T7.4's sweep, but that sweep ran against code where
+a hand taking the wheat PICKUP starves animals forever (per-unit inventory, `decide.py` only reads
+`inventories[0]`) and expansion is capped at 1 task/turn so hands have nothing to do. Hiring is
+economically near-free (one-time `fib(n)` cost, no wage, ~$360 for 5 units all season) so this is
+likely the single largest lever. **Blocker found while planning**: code-vs-code self-play is
+currently impossible (editable install always wins the import over any bundle/snapshot on
+`sys.path` — verified directly), so a measurement instrument (T8.0) must land first. Full story,
+verified line numbers, and the design rationale: `/root/.claude/plans/partitioned-puzzling-blossom.md`.
+
+- [x] T8.0 — Code-snapshot opponent. Added `tools/tuning.py::write_code_snapshot_agent` (copies
+      `gamelib/`, `policy/`, `params/policy.json`, `__init__.py` under a unique `kagg_snap_<uuid>`
+      package name and rewrites every `from kagg.` import to match - verified this is the *only*
+      import spelling in `src/`) and `snapshot_agent_from_git_ref` (same, from a `git archive` of a
+      given ref). Confirmed the blocker was real: a naive same-name copy is silently ignored
+      because `kagg` is editable-installed onto `sys.path` at interpreter startup, ahead of where
+      `kaggle_environments`'s loader appends a raw agent file's own directory - verified directly
+      (`sys.path` order: `[...python stdlib..., site-packages, .../repo/src]`, then the loader's
+      `sys.path.append(exec_dir)` lands *after* that). A RED test using the naive approach would
+      have silently run the live `decide()` instead of a sentinel stub; the package rename fixes it,
+      confirmed by 4 new tests including one loading two independently-sentineled snapshots in one
+      process (the exact "candidate vs previous-best in one multiprocessing worker" shape) and one
+      confirming a snapshot of unmodified code ties the live agent exactly, 0 wins either side.
+      Also fixed the identical blind spot in `tools/build_submission.py`'s smoke test: it ran
+      in-process, so it *always* resolved `kagg` to the live dev tree regardless of what the bundle
+      actually shipped - a bundle missing its entire `kagg/` package still reported a false pass.
+      Reproduced with a real RED test (bundle = `main.py` only, no `kagg/`, old code said `ok=True`)
+      and fixed by running the smoke episode in an isolated subprocess that strips the editable
+      `src/` entry from `sys.path` and asserts the resolved `kagg.__file__` is actually under the
+      bundle's own directory. 222/222 full suite (5 new tests), compileall clean.
+- [ ] T8.1 — Shed-anchored investment placement (`gamelib.farm.shed_distance`, new placement key in
+      `tasks.py`, `params["investment_anchor"]`).
+- [ ] T8.2 — Distance-aware, tier-local task assignment (`tasks.py` sort + `assign_units`
+      rewritten as tier-by-tier greedy nearest-match; stability under statelessness proved in the
+      plan file, not just asserted).
+- [ ] T8.3 — Land purchase gating (`should_buy_land` gains occupancy-aware gates, both defaulting
+      to today's ungated behavior; swept values are explicitly provisional, pending Stage B).
+- [ ] **Checkpoint 8A** — suite green, golden table re-recorded, bundle built + submitted, real
+      episode scores recorded.
+- [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
+      unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
+      forced, checking the pipeline actually reaches production).
+- [ ] T8.5 — HIRE order priority (`hires + sells + tail`, buys slot-reserved but emitted after
+      sells to avoid seeing pre-sale money).
+- [ ] T8.6 — Parallel planting + batched seed purchase, bounded by `seeds_on_hand` (atomic PLANT
+      validation — load-bearing), `max_plants_per_unit` (real watering-capacity guard), and
+      `max_plant_tasks_per_turn`. Must be bit-identical to today at `hires_per_day=0`.
+- [ ] T8.7 — Re-run the hiring sweep (direct self-play only, no panel blending). Prediction stated
+      up front: if `hires_per_day=0` still wins after T8.4/T8.6, the bottleneck isn't labor —
+      that's the most informative possible negative result here.
+- [ ] T8.8 — Re-sweep land (`land_purchase_threshold_money` and T8.3's gates) now that labor works
+      — the Phase 7 value was fit to a 1-unit farm and is likely stale.
+- [ ] T8.9 — (stretch) decouple plant-crop choice from animal-acquisition choice, so hands can keep
+      planting while unit 0 pursues an animal.
+- [ ] **Checkpoint 8B** — suite green, bundle built + submitted, real episode scores recorded.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

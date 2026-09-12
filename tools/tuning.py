@@ -16,6 +16,8 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import shutil
+import subprocess
 import sys
 import uuid
 
@@ -26,9 +28,9 @@ from harness import BlockResult  # noqa: E402
 
 _ACCEPTED_RUNS_LOG_RELATIVE_PATH = os.path.join("data", "arena", "accepted_runs.jsonl")
 
-_AGENT_MAIN_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "..", "src", "kagg", "agent_main.py"
-)
+_REPO_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+_AGENT_MAIN_PATH = os.path.join(_REPO_ROOT, "src", "kagg", "agent_main.py")
+_REAL_SRC_KAGG_DIR = os.path.join(_REPO_ROOT, "src", "kagg")
 _PARAMS_LOAD_LINE = "_PARAMS = load_params()"
 
 
@@ -208,6 +210,107 @@ def write_candidate_agent(params: dict, workdir: str) -> str:
     with open(agent_path, "w") as f:
         f.write(patched_source)
     return agent_path
+
+
+def _rewrite_kagg_imports(path: str, pkg: str) -> None:
+    """Rewrite every `from kagg.` import in `path` to `from {pkg}.` in
+    place. A plain substring replace is total and safe here: every
+    kagg-internal import in src/ is of the single form `from kagg.<sub>
+    import ...` (verified by grep across the whole package - no bare
+    `import kagg`), so there is no other spelling to miss."""
+    with open(path) as f:
+        source = f.read()
+    rewritten = source.replace("from kagg.", f"from {pkg}.")
+    if rewritten != source:
+        with open(path, "w") as f:
+            f.write(rewritten)
+
+
+def write_code_snapshot_agent(src_kagg_dir: str, workdir: str, params: dict | None = None) -> str:
+    """Write a standalone agent file running a *copy* of `src_kagg_dir`'s
+    code, importable under a unique package name so it cannot resolve to
+    the live, editable-installed `kagg` package - the T8.0 measurement
+    blocker.
+
+    Verified directly before writing this function, not assumed: `kagg`
+    is editable-installed via a `.pth` file that puts `src/` on
+    `sys.path` at interpreter startup (i.e. near the *front* of
+    sys.path), while kaggle_environments' loader
+    (`kaggle_environments/agent.py`) only `sys.path.append(exec_dir)`s a
+    raw agent file's own directory for the duration of loading it - at
+    the *end* of sys.path. So `import kagg` inside any agent file always
+    finds the live dev-tree package first, regardless of what a same-
+    named copy sits next to that agent file on disk. `write_candidate_agent`
+    (above) sidesteps this by never copying the package at all - it only
+    patches one line in a copy of agent_main.py and imports
+    `kagg.policy.params.load_params`, a pure function with no per-
+    candidate state, so letting it resolve to the live package is
+    harmless. A *code* snapshot has no such luxury: the whole point is to
+    run different code, so the package itself must not collide.
+
+    Renaming the package is the only fix that is safe regardless of how
+    many snapshots (or a snapshot alongside the live agent_main.py) end
+    up loaded in the same process - including inside one
+    multiprocessing.Pool worker, exactly how harness.run_block executes
+    both sides of a self-play match.
+    """
+    pkg = f"kagg_snap_{uuid.uuid4().hex[:12]}"
+    pkg_dir = os.path.join(workdir, pkg)
+    os.makedirs(pkg_dir, exist_ok=True)
+
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+    shutil.copy2(os.path.join(src_kagg_dir, "__init__.py"), os.path.join(pkg_dir, "__init__.py"))
+    shutil.copytree(os.path.join(src_kagg_dir, "gamelib"), os.path.join(pkg_dir, "gamelib"), ignore=ignore)
+    shutil.copytree(os.path.join(src_kagg_dir, "policy"), os.path.join(pkg_dir, "policy"), ignore=ignore)
+    params_dir = os.path.join(pkg_dir, "params")
+    os.makedirs(params_dir)
+    shutil.copy2(
+        os.path.join(src_kagg_dir, "params", "policy.json"), os.path.join(params_dir, "policy.json")
+    )
+
+    for dirpath, _dirnames, filenames in os.walk(pkg_dir):
+        for name in filenames:
+            if name.endswith(".py"):
+                _rewrite_kagg_imports(os.path.join(dirpath, name), pkg)
+
+    with open(os.path.join(src_kagg_dir, "agent_main.py")) as f:
+        main_source = f.read()
+    main_source = main_source.replace("from kagg.", f"from {pkg}.")
+
+    if params is not None:
+        occurrences = main_source.count(_PARAMS_LOAD_LINE)
+        if occurrences != 1:
+            raise RuntimeError(
+                f"expected exactly one {_PARAMS_LOAD_LINE!r} line in "
+                f"{src_kagg_dir}/agent_main.py, found {occurrences} - "
+                "agent_main.py may have changed shape; update write_code_snapshot_agent to match"
+            )
+        params_path = os.path.join(workdir, f"snapshot_params_{pkg}.json")
+        with open(params_path, "w") as f:
+            json.dump(params, f)
+        main_source = main_source.replace(_PARAMS_LOAD_LINE, f"_PARAMS = load_params({params_path!r})")
+
+    main_path = os.path.join(workdir, f"main_{pkg}.py")
+    with open(main_path, "w") as f:
+        f.write(main_source)
+    return main_path
+
+
+def snapshot_agent_from_git_ref(
+    ref: str, workdir: str, params: dict | None = None, repo_root: str = _REPO_ROOT
+) -> str:
+    """write_code_snapshot_agent, but sourced from `src/kagg` as it stood
+    at git ref `ref` instead of the current working tree - for comparing
+    a candidate against a specific previous commit (the checked-in
+    baseline at HEAD, a tagged release, etc.) rather than uncommitted
+    working-tree state."""
+    extract_dir = os.path.join(workdir, f"git_src_{uuid.uuid4().hex[:12]}")
+    os.makedirs(extract_dir, exist_ok=True)
+    archive = subprocess.run(
+        ["git", "archive", ref, "src/kagg"], cwd=repo_root, check=True, capture_output=True,
+    )
+    subprocess.run(["tar", "-x"], input=archive.stdout, cwd=extract_dir, check=True)
+    return write_code_snapshot_agent(os.path.join(extract_dir, "src", "kagg"), workdir, params=params)
 
 
 def resolve_opponent(opponent, workdir: str) -> str:

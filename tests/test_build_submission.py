@@ -9,6 +9,7 @@ checked-in source.
 """
 
 import os
+import shutil
 import sys
 import tarfile
 
@@ -69,6 +70,34 @@ def test_smoke_test_passes_for_the_real_bundle(tmp_path):
         os.path.join(build_dir, "main.py"), episode_steps=_SMOKE_TEST_STEPS
     )
     assert ok, detail
+
+
+def test_smoke_test_fails_when_the_bundle_is_missing_kagg_even_though_the_dev_tree_has_it(tmp_path):
+    """Regression test for a real, previously unnoticed ops gap (T8.0):
+    `kagg` is editable-installed, putting src/ on sys.path at interpreter
+    startup - *ahead of* kaggle_environments' own loader, which only
+    `sys.path.append(exec_dir)`s a raw agent file's directory (appended,
+    so it always loses that race). An in-process smoke test therefore
+    always finds the live dev-tree kagg package first, regardless of
+    what's actually sitting next to the bundle's main.py on disk - so a
+    bundle entirely missing its kagg/ package still "passed" by silently
+    falling back to the live tree. Reproduced here by copying only
+    main.py, deliberately not kagg/: the fixed smoke_test must fail, not
+    silently succeed.
+    """
+    build_dir = str(tmp_path / "build")
+    os.makedirs(build_dir)
+    shutil.copy2(os.path.join(_REAL_SRC_KAGG, "agent_main.py"), os.path.join(build_dir, "main.py"))
+    # Deliberately no kagg/ directory copied.
+
+    ok, detail = build_submission.smoke_test(
+        os.path.join(build_dir, "main.py"), episode_steps=_SMOKE_TEST_STEPS
+    )
+
+    assert not ok, (
+        "smoke_test must fail for a bundle missing its kagg/ package, "
+        f"not silently fall back to the dev tree (detail={detail!r})"
+    )
 
 
 def test_build_creates_a_tarball_with_main_py_at_the_root(tmp_path):

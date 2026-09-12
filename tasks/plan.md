@@ -451,6 +451,56 @@ into numbers backed by the arena, never accepting a change the held-out block do
 **Checkpoint 7:** `SPEC-tuning.md`'s Testing section passes; at least one accepted, held-out-gated
 `params/policy.json` update exists; commit.
 
+## Phase 8 — movement, land gating, and making labor actually work
+
+**Context.** Real submission `56184182` (Checkpoint 7's accepted policy) scores ~9,400-13,600 in
+real public episodes against a field scoring 76,000-102,000 — a ~8x gap, structural rather than a
+tuning gap. Watching real replays, the user reported three observations, all confirmed against the
+real env source (`kaggriculture.py`) rather than assumed:
+
+1. Land is sometimes bought while plenty of free tiles remain — `strategy.should_buy_land` is
+   gated only on money, never on occupancy.
+2. Work runs in a line away from the shed rather than a compact sweep, with empty walks back.
+   Two causes: `tasks.py`'s final sort never uses distance (stable sort → row-major order wins
+   ties, so a single farmer always gets the farthest tile in the top tier first); and
+   `_closest_pos` anchors new-investment placement to the *farmer's current position*, so the plot
+   grows as a monotonic line away from wherever the farmer last stood. Amplifier confirmed in the
+   env source: `_end_of_day` teleports the farmer back to spawn `(4,4)`, dumps all carried
+   inventory to the shed, and despawns every hand — so travel-from-shed is repaid every day.
+3. No extra staff is hired — `hires_per_day=0`, set by T7.4's sweep (every value >0 lost, 0.03-0.17
+   win rate). That measurement is invalid: it ran against code where (a) `decide.py` models only
+   `inventories[0]`, but the env's PICKUP/FEED/PLACE consume from the *acting unit's own*
+   inventory, so a hand that grabs the wheat PICKUP starves every animal on the farm forever; (b)
+   expansion is hard-capped at one new-investment task and one seed bought per turn, so extra hands
+   have nothing to plant. Hiring itself is nearly free by the game's own economics: a one-time
+   `fib(n)` cost (1,1,2,3,5…, reset daily), **no wage or upkeep anywhere in the env source**, the
+   farmer's full action set, auto-dismissed at end of day — five units all season costs ~$360. This
+   is plausibly the single largest lever available, previously invisible behind our own bugs.
+
+**Blocker found while planning, verified directly:** code-vs-code self-play is currently
+impossible. `kagg` is editable-installed (`__editable__.kagg-0.0.1.pth` → `src/`), and
+`kaggle_environments/agent.py` does `sys.path.append(exec_dir)` — append, so the live tree always
+wins the import over any snapshot/bundle placed on `sys.path`. A code-vs-code arena block would
+silently compare new code against itself and read ~50/50. `tools/build_submission.py`'s smoke test
+has the identical blind spot (it has never actually exercised the built bundle). T8.0 fixes both in
+one commit before any other Phase 8 work is measured.
+
+**Sequencing** (user's explicit choice): movement + land first (Stage A, ends in a submission),
+then multi-unit correctness + hiring (Stage B, ends in a submission). Land's *values* are
+near-meaningless with a single unit, so Stage A's T8.3 lands the *gate* with clearly documented
+provisional defaults, and Stage B's T8.8 re-sweeps once labor works.
+
+Full task-by-task design (exact functions, signatures, RED tests, a proved stability argument for
+the stateless distance-based assignment, and measurement plan) is recorded in
+`/root/.claude/plans/partitioned-puzzling-blossom.md` — not duplicated here; `tasks/todo.md` carries
+the checkbox-level summary kept in sync with that file as tasks land.
+
+**Checkpoint 8A:** T8.0-T8.3 done, suite green, golden table re-recorded, bundle built and
+submitted, real episode scores recorded before Stage B starts.
+
+**Checkpoint 8B:** T8.4-T8.9 done, suite green, bundle built and submitted, real episode scores
+recorded.
+
 ## What's still not planned
 
 - **`fastsim`** — not built per `SPEC.md`'s own decision (measured episode speed makes it
