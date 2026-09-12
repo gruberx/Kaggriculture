@@ -227,7 +227,13 @@ def build_task_list(
     if investment_task is not None:
         tasks.append(investment_task)
 
-    tasks.sort(key=lambda t: t.priority)
+    # (priority, pos): deterministic and unit-position-independent (T8.2,
+    # tasks/plan.md) - proximity-based servicing now lives entirely in
+    # assign_units, not here. The old `key=lambda t: t.priority` was a
+    # *stable* sort, so same-priority tasks kept pure row-major scan
+    # order - with one unit, assign_units always took tasks[0], i.e. the
+    # northwest-most tile of the top tier, however far away it was.
+    tasks.sort(key=lambda t: (t.priority, t.pos))
     return tasks
 
 
@@ -336,31 +342,52 @@ def _animal_tile_tasks(pos: tuple[int, int], tile: dict, farmer_inventory: dict)
 
 
 def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> list[Task | None]:
-    """Greedily assign each unit position to at most one task.
+    """Assign each unit position to at most one task, processing
+    priority tiers in order and matching greedily by distance *within*
+    each tier (T8.2, tasks/plan.md - see that task's write-up for the
+    full stability argument summarized here).
 
-    Processes `tasks` in the order given (callers pass the priority-sorted
-    output of build_task_list - this function doesn't re-sort, so a
-    caller with a pre-filtered/reordered list gets exactly that order),
-    claiming the *closest* still-unclaimed unit for each task in turn -
-    priority dominates proximity by construction (an earlier, higher-
-    priority task always gets first pick of units, even a distant one,
-    before a later task - possibly closer to some idle unit - is
-    considered at all), and proximity only breaks ties *within* a
-    priority tier. At up to 100 tiles and a handful of units, this is a
-    bounded greedy assignment, not a search problem (SPEC-policy.md).
+    Priority dominates proximity by construction: every tier is fully
+    resolved (until it runs out of free units or free tasks) before the
+    next, lower-priority tier is even looked at - a distant PREVENT_LOSS
+    task always gets first pick of units over a closer ROUTINE_CARE one.
+    Within a tier, the globally nearest (unit, task) pair is matched
+    first, then removed, and the process repeats - not "each task
+    claims its closest unit" in list order (T8.2's real fix: the old
+    version did exactly that, so a single unit could be sent to a
+    farther same-tier task simply because it appeared earlier in the
+    list). Ties break on `(task.pos, unit_index)`, both independent of
+    any unit's actual position, which is what makes this stable turn to
+    turn for a `decide()` that has no memory of what a unit was already
+    heading toward: as a unit takes one step closer to its assigned
+    task, that task's distance strictly decreases while every other
+    task's distance can decrease by at most the same amount, so it
+    remains a minimizer (and ties only ever *leave* the minimal set,
+    never enter it) - re-running this function after each single-tile
+    move reproduces the same assignment for any unit still en route.
+
+    Still "at most one task per unit, one unit per task" (SPEC-policy.md)
+    and a bounded greedy assignment, not a search problem - at up to 100
+    tiles and a handful of units this is cheap even at its O(tasks^2 *
+    units) worst case within one tier.
 
     Returns a list the same length and order as `unit_positions`; an
     unassigned unit's slot is `None`.
     """
     assignment: list[Task | None] = [None] * len(unit_positions)
-    claimed: set[int] = set()
-    for task in tasks:
-        candidates = [i for i in range(len(unit_positions)) if i not in claimed]
-        if not candidates:
+    free_units = set(range(len(unit_positions)))
+    for priority in sorted({t.priority for t in tasks}):
+        if not free_units:
             break
-        closest = min(candidates, key=lambda i: tile_distance(unit_positions[i], task.pos))
-        assignment[closest] = task
-        claimed.add(closest)
+        tier = [t for t in tasks if t.priority == priority]
+        while free_units and tier:
+            _, t_idx, u_idx = min(
+                ((tile_distance(unit_positions[u], t.pos), t.pos, u), t_idx, u)
+                for t_idx, t in enumerate(tier)
+                for u in free_units
+            )
+            assignment[u_idx] = tier.pop(t_idx)
+            free_units.discard(u_idx)
     return assignment
 
 

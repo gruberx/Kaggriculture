@@ -65,17 +65,28 @@ _WHEAT_FEED_RESERVE = 10
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
 # "UNIT" (the pre-T8.1 behavior) deliberately, not "SHED": measured via
-# direct self-play, SHED alone *lost* to UNIT (0.26 win rate, working
-# block) due to a real interaction with the animal/crop choice gap
-# _top_crop_choice documents; combined with that fix it won the working
-# block (0.72) but not the held-out one (0.56, rejected by
-# tuning.accept_candidate) - not yet a properly arena-accepted change.
-# The mechanism (anchor="SHED") is real, tested, and available for a
-# future tuning sweep, not shipped as the default on unconfirmed evidence.
+# direct self-play (pre-T8.2), SHED alone *lost* to UNIT (0.26 win rate,
+# working block) due to a real interaction with the animal/crop choice
+# gap _top_crop_choice documents; combined with that fix it won the
+# working block (0.72) but not the held-out one (0.56, rejected by
+# tuning.accept_candidate).
+#
+# Re-tested after T8.2 landed (distance-aware task servicing), on the
+# hypothesis that SHED+plant_while_pursuing_animal was waiting on it -
+# it wasn't: with T8.2 in place, SHED+plant_while_pursuing_animal=True
+# *lost decisively* to plain UNIT (working 0.28, holdout 0.18 - a
+# reversal, not just "still not accepted"). T8.2's distance-aware
+# servicing already keeps the farmer working the nearest urgent tile
+# regardless of the plot's shape, so the runaway-line placement T8.1
+# targeted is far less costly once servicing order is smart - the two
+# fixes overlap rather than compose. The mechanism (anchor="SHED") stays
+# available as a tested, real capability for a future sweep, but there is
+# now real evidence it does not pair well with T8.2, not just "unproven."
 _DEFAULT_INVESTMENT_ANCHOR = "UNIT"
 
 # T8.9 - see _top_crop_choice's own docstring for the real bug this
-# fixes and why, despite that, it defaults to off.
+# fixes and why, despite that, it defaults to off. Same re-test after
+# T8.2 as investment_anchor above, same reversal - see that comment.
 _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL = False
 
 

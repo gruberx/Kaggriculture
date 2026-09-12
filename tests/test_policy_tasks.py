@@ -447,6 +447,68 @@ def test_assign_units_leaves_extra_units_idle_when_out_of_tasks():
     assert assignment.count(task) == 1
 
 
+def test_assign_units_serves_the_nearest_task_within_a_tier():
+    # T8.2's real fix (tasks/plan.md): the pre-T8.2 implementation
+    # processed same-priority tasks in *list* order (row-major scan
+    # order, since build_task_list's old sort never used distance), so a
+    # single unit standing right on one WATER tile still got sent to a
+    # farther one first if it happened to appear earlier in the list.
+    on_tile = Task(priority=PRIORITY_ROUTINE_CARE, pos=(4, 4), op="WATER")
+    far_tile = Task(priority=PRIORITY_ROUTINE_CARE, pos=(4, 0), op="WATER")
+    assignment = assign_units([far_tile, on_tile], [(4, 4)])
+    assert assignment == [on_tile]
+
+
+def test_assign_units_priority_still_dominates_proximity_with_tier_local_matching():
+    # Guards against T8.2 over-rotating on distance: a same-tier nearest-
+    # match must never let a lower-priority-but-closer task jump ahead of
+    # a higher-priority one, even in the rewritten tier-by-tier matcher.
+    urgent_far = Task(priority=PRIORITY_PREVENT_LOSS, pos=(9, 9), op="WATER")
+    routine_near = Task(priority=PRIORITY_ROUTINE_CARE, pos=(0, 1), op="WATER")
+    assignment = assign_units([routine_near, urgent_far], [(0, 0)])
+    assert assignment == [urgent_far]
+
+
+def _step_toward(pos: tuple[int, int], target: tuple[int, int]) -> tuple[int, int]:
+    if pos == target:
+        return pos
+    x, y = pos
+    tx, ty = target
+    dx, dy = tx - x, ty - y
+    if dx != 0:
+        return (x + (1 if dx > 0 else -1), y)
+    return (x, y + (1 if dy > 0 else -1))
+
+
+def test_greedy_assignment_is_stable_under_one_step_moves():
+    # The no-memory stability property T8.2's design relies on
+    # (tasks/plan.md's proof): once a unit is heading toward its
+    # assigned task, re-running assign_units after each single-tile move
+    # must keep assigning it the *same* task, never flip mid-walk to a
+    # different one in the same tier - decide() is a pure function of the
+    # observation with no memory of "what I was already doing."
+    tasks = [
+        Task(priority=PRIORITY_ROUTINE_CARE, pos=(0, 0), op="WATER"),
+        Task(priority=PRIORITY_ROUTINE_CARE, pos=(9, 9), op="WATER"),
+        Task(priority=PRIORITY_ROUTINE_CARE, pos=(5, 0), op="WATER"),
+    ]
+    units = [(2, 2), (7, 7), (5, 5)]
+    assignment = assign_units(tasks, units)
+
+    for _ in range(12):
+        units = [
+            _step_toward(u, assignment[i].pos) if assignment[i] is not None else u
+            for i, u in enumerate(units)
+        ]
+        new_assignment = assign_units(tasks, units)
+        for i in range(len(units)):
+            if assignment[i] is not None and units[i] != assignment[i].pos:
+                assert new_assignment[i] == assignment[i], (
+                    f"unit {i} switched tasks before reaching {assignment[i].pos}"
+                )
+        assignment = new_assignment
+
+
 # --- action_for_unit -----------------------------------------------------
 
 

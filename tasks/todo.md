@@ -229,10 +229,24 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       behavior is unchanged (golden table reproduces bit-identical, no re-record needed). Revisit
       after T8.2 (distance-aware assignment), which may be what the combination is actually waiting
       on - noted in decide.py's own comments. 234/234 full suite, compileall clean.
-- [ ] T8.2 — Distance-aware, tier-local task assignment (`tasks.py` sort + `assign_units`
-      rewritten as tier-by-tier greedy nearest-match; stability under statelessness proved in the
-      plan file, not just asserted). Re-measure `investment_anchor`/`plant_while_pursuing_animal`
-      together with this once landed - T8.1's held-out rejection may be exactly what this fixes.
+- [x] T8.2 — Distance-aware, tier-local task assignment. `build_task_list`'s final sort changed to
+      `(priority, pos)` (deterministic, unit-independent); `assign_units` rewritten as tier-by-tier
+      greedy nearest-match, tie-break `(distance, task.pos, unit_index)`. Stability under
+      `decide()`'s statelessness proved in the plan file (a unit's assigned task remains a minimizer
+      as it steps toward it) and confirmed by a real test that steps units 12 times and checks the
+      assignment never flips mid-walk. **The single biggest accepted change of Phase 8 so far**:
+      direct self-play against the pre-T8.2 snapshot won 49/50 on the working block and 48/50 on the
+      held-out block (95% Wilson [0.895, 0.996] and [0.865, 0.989]) - formally accepted by
+      `tuning.accept_candidate` against an even-odds baseline on both. Golden table re-recorded (4/6
+      seeds improved substantially, e.g. pass/seed2: 10299 → 19168; 2/6 dipped slightly - consistent
+      with a large-majority, not unanimous, win).
+      **Resolved T8.1's open question, and the answer was the opposite of the hypothesis**: re-tested
+      `investment_anchor="SHED"` + `plant_while_pursuing_animal=True` on top of T8.2 expecting them to
+      finally pay off - instead they now *lose decisively* (working 0.28, holdout 0.18). T8.2's
+      distance-aware servicing already keeps the farmer on the nearest urgent tile regardless of the
+      plot's shape, so T8.1's shed-anchored placement and T8.2's smart servicing overlap rather than
+      compose. Both toggles stay off by default (documented in decide.py's own comments); this
+      question is now closed, not deferred. 237/237 full suite, compileall clean.
 - [ ] T8.3 — Land purchase gating (`should_buy_land` gains occupancy-aware gates, both defaulting
       to today's ungated behavior; swept values are explicitly provisional, pending Stage B).
 - [ ] **Checkpoint 8A** — suite green, golden table re-recorded, bundle built + submitted, real

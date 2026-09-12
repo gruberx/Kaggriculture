@@ -66,6 +66,29 @@ both the working block and the held-out block (95% Wilson interval
 [0.929, 1.0] on each) - a genuinely accepted, held-out-gated result,
 not an ad-hoc measurement.
 
+Re-recorded a fifth time for T8.2 (distance-aware, tier-local task
+servicing - tasks/plan.md): `assign_units` used to process same-priority
+tasks in row-major scan order (a stable sort on priority alone never used
+distance), so a single unit could be sent to the farthest same-tier task
+first even while standing on a nearer one. Rewritten as tier-by-tier
+greedy nearest-match, proved stable under decide()'s statelessness (see
+tasks.assign_units's own docstring for the argument). This was the
+biggest single accepted change of Phase 8 so far, dwarfing T8.1's
+placement fix: direct self-play against the pre-T8.2 snapshot won 49/50
+on the working block and 48/50 on the held-out block (95% Wilson interval
+[0.895, 0.996] and [0.865, 0.989] respectively) - formally accepted by
+tuning.accept_candidate against an even-odds baseline on both. Notably,
+this also *reversed* T8.1's open question: investment_anchor="SHED" +
+plant_while_pursuing_animal=True (T8.1/T8.9's opt-in fixes, still not the
+default) were re-tested on top of T8.2 on the hypothesis that T8.2 was
+what they were "waiting on" - instead they now *lose decisively*
+(working 0.28, holdout 0.18) to the plain UNIT/False default. T8.2's
+distance-aware servicing already keeps the farmer on the nearest urgent
+tile regardless of the plot's shape, so T8.1's shed-anchored placement
+and T8.2's smart servicing overlap rather than compose - see
+kagg.policy.decide's _DEFAULT_INVESTMENT_ANCHOR comment for the full
+story. Both toggles remain off by default.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -84,18 +107,22 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T7.4 policy (land_purchase_threshold_money raised
-# to 10000, the first Stage 1 tuning acceptance), reproduced twice before
-# being hardcoded here. Not yet the rigorous >=60% win rate SPEC.md's
-# success criteria call for (that needs Phase 4's paired-seed harness,
-# not three ad-hoc seeds), but a real improvement worth locking in.
+# Recorded against the T8.2 policy (distance-aware tier-local task
+# servicing, the biggest accepted change of Phase 8 so far), reproduced
+# twice before being hardcoded here. Not yet the rigorous >=60% win rate
+# SPEC.md's success criteria call for (that needs Phase 4's paired-seed
+# harness, not three ad-hoc seeds), but a real improvement worth locking
+# in - 4 of 6 seeds improved substantially (e.g. pass/seed2: 10299 ->
+# 19168), 2 of 6 dipped slightly, consistent with the 49/50 and 48/50
+# self-play results this was accepted on (a large majority win, not a
+# unanimous one).
 _GOLDEN = {
-    ("starter", 1): (13052.0, 3506.0),
-    ("starter", 2): (13563.0, 3711.0),
-    ("starter", 3): (13263.0, 3421.0),
-    ("pass", 1): (12309.0, 3000.0),
-    ("pass", 2): (10299.0, 3000.0),
-    ("pass", 3): (12003.0, 3000.0),
+    ("starter", 1): (11236.0, 3431.0),
+    ("starter", 2): (18821.0, 3630.0),
+    ("starter", 3): (17043.0, 3868.0),
+    ("pass", 1): (11054.0, 3000.0),
+    ("pass", 2): (19168.0, 3000.0),
+    ("pass", 3): (16544.0, 3000.0),
 }
 
 
