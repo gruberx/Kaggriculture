@@ -31,7 +31,7 @@ _DEFAULT_PARAMS_PATH = os.path.join(
 # file, or this loader never being called at all, shouldn't behave any
 # differently than a fully-populated one.
 DEFAULT_PARAMS = {
-    "land_purchase_threshold_money": 5000,
+    "land_purchase_threshold_money": 10000,  # raised from 5000 by T7.4's first accepted sweep result
     "hires_per_day": 0,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,

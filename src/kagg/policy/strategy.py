@@ -87,11 +87,27 @@ def rank_portfolio(market_inventory: dict) -> list[str]:
     return sorted(scores, key=scores.__getitem__, reverse=True)
 
 
-# Deliberately conservative defaults - starting points for `tuning` to
-# improve on, not values chosen by intuition (SPEC-policy.md's central
-# rule). Never raise these based on reasoning alone; only on an arena
-# result (SPEC.md's economic analysis flags both as open questions).
-_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 5000
+# Starting points for `tuning` to improve on, not values chosen by
+# intuition (SPEC-policy.md's central rule) - never raised based on
+# reasoning alone, only on a real, held-out-gated arena result.
+#
+# land_purchase_threshold_money was raised 5000 -> 10000 by T7.4's first
+# real Stage 1 sweep (tasks/plan.md): a real, previously unnoticed
+# methodological pitfall surfaced along the way - aggregating win rate
+# across a panel where 2/3 of the opponents (starter/random) are already
+# near a 100% win-rate ceiling dilutes the signal so heavily that a
+# candidate which actually *loses* to the checked-in baseline in direct
+# self-play (verified: 0.34 win rate head-to-head) can still look like
+# an "improvement" on the diluted aggregate (0.78 vs 0.667). Direct
+# self-play against the previous-best snapshot, not the blended panel
+# score, is what actually found this real change: threshold=10000 beat
+# the previous default 50/50 on both the working block and (separately)
+# the held-out block, with a 95% Wilson interval of [0.929, 1.0] on
+# each. Same sweep also directly confirmed the forum's own contradicted-
+# intuition finding for hires_per_day (SPEC-policy.md's hiring note):
+# every hires_per_day > 0 value tried lost consistently (0.03-0.17 win
+# rate) to hires_per_day=0 in direct self-play, so it stays at 0.
+_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 10000
 _DEFAULT_HIRES_PER_DAY = 0
 
 

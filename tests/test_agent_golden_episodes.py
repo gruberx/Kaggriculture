@@ -49,6 +49,23 @@ these fixes). All three fixes together, not any one
 alone, were needed before every seed showed a genuine improvement over
 T6.3 (e.g. pass/seed1: 5510 -> 8078).
 
+Re-recorded a fourth time for T7.4 (Stage 1's first real accepted
+parameter change, not a bug fix this time): land_purchase_threshold_money
+raised 5000 -> 10000. Found via a real, previously unnoticed
+methodological pitfall in tuning's own opponent-panel design - blending
+win rate across starter/random (both near a 100% win-rate ceiling
+against basically any reasonable policy) with self-play against the
+checked-in baseline dilutes the signal so heavily that a candidate
+which actually *loses* to the baseline in direct self-play (measured:
+0.34 win rate head-to-head) can still look like an improvement on the
+blended aggregate (0.78 vs 0.667) - see kagg.policy.strategy's own
+_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY comment for the full story.
+Direct self-play against the previous-best snapshot (not the blended
+panel score) is what actually found this real change: 50/50 wins on
+both the working block and the held-out block (95% Wilson interval
+[0.929, 1.0] on each) - a genuinely accepted, held-out-gated result,
+not an ad-hoc measurement.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -67,19 +84,18 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T6.3 policy (BUY_ANIMAL + the HARVEST-gating fix),
-# reproduced twice before being hardcoded here. A large, genuine jump
-# over T3.5's numbers (e.g. starter/seed2: 5292 -> 13322) - not yet the
-# rigorous >=60% win rate SPEC.md's success criteria call for (that needs
-# Phase 4's paired-seed harness, not three ad-hoc seeds), but a real
-# improvement worth locking in as a floor.
+# Recorded against the T7.4 policy (land_purchase_threshold_money raised
+# to 10000, the first Stage 1 tuning acceptance), reproduced twice before
+# being hardcoded here. Not yet the rigorous >=60% win rate SPEC.md's
+# success criteria call for (that needs Phase 4's paired-seed harness,
+# not three ad-hoc seeds), but a real improvement worth locking in.
 _GOLDEN = {
-    ("starter", 1): (9343.0, 3536.0),
-    ("starter", 2): (13522.0, 3712.0),
-    ("starter", 3): (13198.0, 3421.0),
-    ("pass", 1): (8078.0, 3000.0),
-    ("pass", 2): (10430.0, 3000.0),
-    ("pass", 3): (7930.0, 3000.0),
+    ("starter", 1): (13052.0, 3506.0),
+    ("starter", 2): (13563.0, 3711.0),
+    ("starter", 3): (13263.0, 3421.0),
+    ("pass", 1): (12309.0, 3000.0),
+    ("pass", 2): (10299.0, 3000.0),
+    ("pass", 3): (12003.0, 3000.0),
 }
 
 

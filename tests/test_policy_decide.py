@@ -108,7 +108,7 @@ def test_decide_queues_land_purchase_when_affordable_and_over_threshold():
 def test_decide_does_not_queue_land_purchase_below_threshold():
     obs = _obs()
     obs["farms"][0]["money"] = 500
-    action = decide(obs, DEFAULT_PARAMS)  # default threshold is 5000
+    action = decide(obs, DEFAULT_PARAMS)  # default threshold is 10000 (T7.4)
     assert ["BUY_LAND"] not in action["market"]
 
 

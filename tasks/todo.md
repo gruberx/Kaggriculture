@@ -139,10 +139,26 @@ already done (`fb44ae9`) — not listed here. Work top to bottom; each `Checkpoi
       the first candidate's params for a second one compared in the same process — exactly the
       "candidate vs previous-best" case). Fixed by copying `agent_main.py`'s real source with its
       params-load line patched, never importing it as a module — full fidelity, no shared state.
-- [ ] T7.4 — Run the sweep (hiring-count question first); each accepted change its own commit +
-      fresh `ops` submission
-- [ ] **Checkpoint 7** — `SPEC-tuning.md` Testing section passes; ≥1 accepted held-out-gated
-      `params/policy.json` update exists. Commit.
+- [x] T7.4 — Ran the sweep (hiring-count question first). Found a real methodological bug along
+      the way: blending win rate across starter/random (near a 100% ceiling for any reasonable
+      policy) with self-play against the baseline dilutes the signal so heavily that a candidate
+      which *loses* to baseline head-to-head (0.34) can still look like an improvement on the
+      blended aggregate (0.78 vs 0.667) — see `strategy.py`'s `_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY`
+      comment. Pure self-play against baseline is the real signal. Result: `hires_per_day` stays 0
+      (every value >0 tried lost consistently, 0.03-0.17 win rate — confirms the forum's own
+      "hiring has ~zero/negative marginal value" finding). **Accepted**: `land_purchase_threshold_money`
+      5000 → 10000 — 50/50 wins on both the working block and the held-out block (95% Wilson
+      interval [0.929, 1.0] each). A second bug found while writing the reusable sweep script
+      (`tools/run_hiring_sweep.py`) — a hand-typed degenerate `(0.0, 0.0)` Wilson interval for the
+      baseline-vs-itself case spuriously let `coordinate_ascent` walk to a bad `hires_per_day=3` —
+      was correctly caught and rejected by the held-out gate itself (no bad change reached
+      `params/policy.json`), then fixed in the script. Golden episodes re-recorded (real
+      improvement across every seed, e.g. pass/seed1: 8078 → 12309). Fresh `ops` submission: ask
+      the user first (T5.3's same ask-first discipline applies to every submission, not just the
+      first).
+- [x] **Checkpoint 7** — `SPEC-tuning.md` Testing section passes; 1 accepted held-out-gated
+      `params/policy.json` update exists (`land_purchase_threshold_money` 5000 → 10000). 217/217
+      full suite. Commit.
 
 ## Not planned yet (see plan.md)
 
