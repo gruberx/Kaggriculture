@@ -14,6 +14,7 @@ different definitions, not verifying this one.
 import pytest
 
 from kagg.gamelib.constants import MARKET_I0
+from kagg.gamelib.market import expected_daily_consumption
 from kagg.policy.strategy import (
     animal_revenue_per_tile_day,
     crop_revenue_per_tile_day,
@@ -93,10 +94,26 @@ def test_crop_revenue_per_tile_day_drops_sharply_once_the_farm_already_commits_m
     assert many_tiles < one_tile * 0.9
 
 
+def test_crop_revenue_per_tile_day_expected_consumption_raises_the_score():
+    # T8.3i, the user's own follow-up: consumption pulls the opposite
+    # direction from already_committed_units - it should raise the score
+    # (scarcity from a shop already drawing this product down), not
+    # lower it.
+    baseline = crop_revenue_per_tile_day("CARROT", MARKET_I0)
+    with_consumption = crop_revenue_per_tile_day("CARROT", MARKET_I0, expected_consumption=100)
+    assert with_consumption > baseline
+
+
 def test_animal_revenue_per_tile_day_matches_independent_calculation():
     assert animal_revenue_per_tile_day("GOOSE", MARKET_I0) == pytest.approx(50.0)
     assert animal_revenue_per_tile_day("COW", MARKET_I0) == pytest.approx(80.0)
     assert animal_revenue_per_tile_day("SHEEP", MARKET_I0) == pytest.approx(200 / 3)
+
+
+def test_animal_revenue_per_tile_day_expected_consumption_raises_the_score():
+    baseline = animal_revenue_per_tile_day("SHEEP", MARKET_I0)
+    with_consumption = animal_revenue_per_tile_day("SHEEP", MARKET_I0, expected_consumption=100)
+    assert with_consumption > baseline
 
 
 def test_rank_portfolio_orders_by_marginal_revenue_at_base_price():
@@ -128,6 +145,28 @@ def test_rank_portfolio_demotes_a_crop_the_farm_has_already_committed_many_tiles
     # not merely hypothetical.
     ranking = rank_portfolio(_MARKET_AT_I0, crop_tile_counts={"MELON": 20})
     assert ranking[0] != "MELON"
+
+
+def test_rank_portfolio_wires_unlocked_shops_through_to_crop_scoring():
+    # T8.3i, the user's own follow-up: rank_portfolio must actually pass
+    # `unlocked_shops` through to crop_revenue_per_tile_day, not just
+    # accept the argument - PET_CAFE only sells CARROT (a single-product
+    # shop, doubled consumption rate), so heavily unlocking it must rank
+    # CARROT no worse (and, at base price, strictly better) than with no
+    # shop information at all.
+    ranking_without = rank_portfolio(_MARKET_AT_I0)
+    ranking_with = rank_portfolio(_MARKET_AT_I0, unlocked_shops=["PET_CAFE"] * 8)
+    assert ranking_with.index("CARROT") < ranking_without.index("CARROT")
+
+
+def test_rank_portfolio_favors_an_animal_product_a_currently_unlocked_shop_is_consuming():
+    # Same mechanism, for an ANIMAL product (T8.3i extends
+    # animal_revenue_per_tile_day too, unlike T8.3f's crop-only scope,
+    # since a consumption estimate needs no lifetime-total bound) -
+    # YARN_STORE only sells WOOL (SHEEP's product).
+    ranking_without = rank_portfolio(_MARKET_AT_I0)
+    ranking_with = rank_portfolio(_MARKET_AT_I0, unlocked_shops=["YARN_STORE"] * 8)
+    assert ranking_with.index("SHEEP") <= ranking_without.index("SHEEP")
 
 
 def test_rank_portfolio_reacts_to_a_crashed_price():

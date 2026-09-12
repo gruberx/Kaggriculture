@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 
-from kagg.gamelib.constants import HINGE_GAIN, MARKET_PARAMS, PRICE_FLOOR
+from kagg.gamelib.constants import HINGE_GAIN, MARKET_PARAMS, PRICE_FLOOR, SHOPS, TOWN_CENTER_PRODUCTS
 
 
 def shape(func: str, x: float, T: float | None = None) -> float:
@@ -68,3 +68,47 @@ def price(item: str, inventory: int, params: dict | None = None) -> int:
         amp = p["above_target"] * base / shape(f, T, T)
         computed = base - amp * shape(f, inventory - I0, T)
     return max(PRICE_FLOOR, int(round(computed)))
+
+
+def expected_daily_consumption(
+    product: str,
+    unlocked_shops,
+    turns_per_day: int = 24,
+    town_center_interval: int = 24,
+    shop_interval: int = 4,
+) -> float:
+    """Units/day of `product` the town removes from the market - T8.3i,
+    the user's own observation: this consumption is already reflected
+    *reactively* in `price()` once it's happened (kaggriculture.py's
+    `_town_consume` mutates the same shared `market["inventory"]` that
+    `price()` reads), but nothing in this codebase used it
+    *proactively* before this function existed.
+
+    Mirrors kaggriculture.py's `_town_consume`: the town center draws 1
+    unit of every product except FERTILIZER every `town_center_interval`
+    steps (`turns_per_day / town_center_interval` times/day, so 1/day at
+    the real defaults), and each currently unlocked shop that lists
+    `product` draws `multiplier` units (2 if that shop has only one
+    product - YARN_STORE/PET_CAFE - else 1) every `shop_interval` steps.
+
+    `unlocked_shops` is `obs["town"]["unlocked_shops"]` verbatim - a list
+    of shop names, duplicates allowed (shops are drawn with replacement
+    and each instance consumes independently, matching the real engine -
+    no need to deduplicate here).
+
+    The three interval arguments carry real defaults (turnsPerDay=24,
+    townCenterSellInterval=24, townShopSellInterval=4) rather than being
+    read from anywhere - like `forecast_animal_schedule`'s own
+    `horizon_days=30`, these are episode configuration values not
+    exposed in the observation at all, so a real, named default is the
+    correct shape here, not a value silently assumed by omission.
+    """
+    daily = 0.0
+    if product in TOWN_CENTER_PRODUCTS:
+        daily += turns_per_day / town_center_interval
+    for shop in unlocked_shops:
+        products = SHOPS.get(shop)
+        if products and product in products:
+            multiplier = 2 if len(products) == 1 else 1
+            daily += multiplier * turns_per_day / shop_interval
+    return daily

@@ -122,6 +122,14 @@ DEFAULT_PARAMS = {
     # _DEFAULT_CROP_SELF_IMPACT_OPPONENT_WEIGHT comment for the full
     # measured story across every weight tried.
     "crop_self_impact_opponent_weight": 0.0,
+    # T8.3i: the user's own follow-up question - elevated town-shop
+    # demand (e.g. YARN_STORE for WOOL, PET_CAFE for CARROT) was
+    # previously only reflected *reactively*, once the price had already
+    # moved (obs["town"]["unlocked_shops"] was never read at all before
+    # this). Accepted: a strong, decisive win (49/50 working block, 48/50
+    # held-out block) - see kagg.policy.decide's
+    # _DEFAULT_CROP_SHOP_DEMAND_AWARE comment for the full measured story.
+    "crop_shop_demand_aware": True,
 }
 
 

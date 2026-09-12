@@ -179,6 +179,23 @@ effect, not a marginal tuning gain. 4 of 6 golden seeds changed this
 time (both directions - this changes *what* gets planted, not simply
 "more efficient at the same plan").
 
+Re-recorded a tenth time for T8.3i (tasks/plan.md) - the user's own follow-up question: is
+elevated town-shop demand already accounted for, or only as a lagging reaction once the price has
+already moved? Confirmed it was purely the latter - `market_inventory` already reflects any
+consumption a shop has *already* caused (the same shared object `_town_consume` mutates), but
+`obs["town"]["unlocked_shops"]` was never read anywhere in this codebase before this, so nothing
+looked ahead to what a *currently* unlocked shop will keep doing for the rest of the game. Added
+`gamelib.market.expected_daily_consumption` (mirrors `_town_consume`'s own math, oracle-verified:
+`SHOPS`/`TOWN_CENTER_PRODUCTS`/`MAX_SHOP_INSTANCES` all checked directly against the real engine)
+and wired it into both `crop_revenue_per_tile_day` and (unlike T8.3f/g/h's crop-only self-impact
+scope) `animal_revenue_per_tile_day` - a consumption estimate needs no bounded lifetime total the
+way self-impact-from-production does, so animal products aren't excluded here. Measured: a strong,
+decisive win - 49/50 on the working block and 48/50 on the held-out block. Traced (seed 100, 8
+shops unlocked by season end): the shop-aware agent diversified its post-MELON fallback into
+TOMATO and CARROT (both drawn down by the unlocked shops) instead of STRAWBERRY (the unaware
+agent's plain crop-only leader) - $24078 final vs $21424, a real ~12% gain from knowing which
+goods have elevated demand.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -197,20 +214,20 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.3f policy (crop_self_impact_aware=True accepted
+# Recorded against the T8.3i policy (crop_shop_demand_aware=True accepted
 # as the default), reproduced twice before being hardcoded here. Not yet
 # the rigorous >=60% win rate SPEC.md's success criteria call for (that
 # needs Phase 4's paired-seed harness, not three ad-hoc seeds), but a real
-# improvement worth locking in - accepted on a 50/50-on-both-blocks
-# self-play result, traced to real crop diversification (see the module
-# docstring's T8.3f paragraph above).
+# improvement worth locking in - accepted on a 49/50-and-48/50 self-play
+# result, traced to real crop diversification toward shop-favored goods
+# (see the module docstring's T8.3i paragraph above).
 _GOLDEN = {
-    ("starter", 1): (26366.0, 3421.0),
+    ("starter", 1): (26316.0, 3421.0),
     ("starter", 2): (25376.0, 3569.0),
     ("starter", 3): (25447.0, 3649.0),
-    ("pass", 1): (26156.0, 3000.0),
-    ("pass", 2): (25561.0, 3000.0),
-    ("pass", 3): (27215.0, 3000.0),
+    ("pass", 1): (26106.0, 3000.0),
+    ("pass", 2): (26535.0, 3000.0),
+    ("pass", 3): (27402.0, 3000.0),
 }
 
 

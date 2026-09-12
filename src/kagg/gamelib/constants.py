@@ -50,6 +50,32 @@ MARKET_PARAMS = {
 # `target` meaning the same thing it does for every other shape.
 HINGE_GAIN = 8.0
 
+# Town shops: each unlocked instance consumes specific products from the
+# market over time (kaggriculture.py's _town_consume), raising their
+# price - a real demand signal, distinct from PRODUCTS' base scarcity
+# math. A shop with only one product (YARN_STORE, PET_CAFE) consumes it
+# at double the per-instance rate of a multi-product shop - mirrors
+# _town_consume's `multiplier = 2 if len(products) == 1 else 1`.
+SHOPS = {
+    "BAKERY": ["EGG", "WHEAT"],
+    "PIZZA_SHOP": ["MILK", "TOMATO", "WHEAT"],
+    "BRUNCH_SPOT": ["EGG", "WHEAT", "STRAWBERRY"],
+    "YARN_STORE": ["WOOL"],
+    "ICE_CREAM_SHOP": ["STRAWBERRY", "MILK", "WHEAT"],
+    "PET_CAFE": ["CARROT"],
+    "SMOOTHIE_SHOP": ["STRAWBERRY", "MILK"],
+    "FARMERS_MARKET": ["WHEAT", "CARROT", "TOMATO", "STRAWBERRY"],
+}
+
+# Every PRODUCT except FERTILIZER is drawn down by the town center itself,
+# shops or not - mirrors kaggriculture.py's TOWN_CENTER_PRODUCTS.
+TOWN_CENTER_PRODUCTS = [p for p in PRODUCTS if p != "FERTILIZER"]
+
+# Shops are drawn with replacement (the same shop can unlock more than
+# once, each instance consuming independently) - this caps total unlocked
+# instance count, not variety.
+MAX_SHOP_INSTANCES = 8
+
 # n-th hire of the day -> cost = FARM_HAND_COST_MULT * fib(n), resetting
 # each day. Configurable via episode configuration's `farmHandCostMult`,
 # but this is the default multiplier.

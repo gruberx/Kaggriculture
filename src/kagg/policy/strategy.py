@@ -21,7 +21,7 @@ from kagg.gamelib.growth import (
     forecast_one_time_yield,
     watering_bonus_window,
 )
-from kagg.gamelib.market import price
+from kagg.gamelib.market import expected_daily_consumption, price
 
 
 def _crop_yield_and_tile_days(crop: str) -> tuple[int, int]:
@@ -48,7 +48,9 @@ def _crop_yield_and_tile_days(crop: str) -> tuple[int, int]:
     return total_yield, tile_days
 
 
-def crop_revenue_per_tile_day(crop: str, sell_at_inventory: int, already_committed_units: int = 0) -> float:
+def crop_revenue_per_tile_day(
+    crop: str, sell_at_inventory: int, already_committed_units: int = 0, expected_consumption: float = 0
+) -> float:
     """Expected revenue per tile-day for a crop watered on every day its
     bonus window allows (no fertilizer), evaluated at `sell_at_inventory`
     - the market inventory level its product would actually sell at, not
@@ -81,40 +83,58 @@ def crop_revenue_per_tile_day(crop: str, sell_at_inventory: int, already_committ
     described, which only becomes visible at the farm's total footprint,
     not a single new tile's own contribution.
 
-    Deliberately conservative, not a full simulation: ignores the real
-    market's own recovery between sales from town/shop consumption
-    (kaggriculture.py's `_town_consume` decrements inventory by ~1/day per
-    product from the town center alone, more with an unlocked shop) - a
-    real game would likely fetch somewhat more than this model predicts,
-    never less, so this errs toward undervaluing a crop rather than
-    overvaluing it.
+    `expected_consumption` (T8.3i, the user's own follow-up): town/shop
+    consumption pulls the *opposite* direction from
+    `already_committed_units` - it removes units instead of adding them,
+    raising price instead of lowering it - so it's simply subtracted from
+    the same starting point before the self-impact walk runs. Previously
+    this function only ever *undervalued* a crop by ignoring consumption
+    entirely (see the removed paragraph this replaces); this closes that
+    gap when a caller supplies a real estimate (`rank_portfolio` computes
+    it from `gamelib.market.expected_daily_consumption` and
+    `obs["town"]["unlocked_shops"]`) instead of leaving it un-modeled.
+    Defaults to 0 (no consumption information), which reproduces T8.3f's
+    exact prior behavior for every caller that doesn't pass it.
 
     Scoped to crops only - `animal_revenue_per_tile_day` (below) is
-    unchanged. An animal's lifetime yield is intentionally unbounded (see
-    that function's own docstring: "no fixed occupancy to divide by"), so
-    there is no natural `total_yield` to walk across without picking an
-    arbitrary horizon - left as a documented gap, not silently ignored.
+    unchanged for `already_committed_units` (an animal's lifetime yield
+    is intentionally unbounded - see that function's own docstring: "no
+    fixed occupancy to divide by" - so there is no natural `total_yield`
+    to walk across without picking an arbitrary horizon), but DOES get
+    its own `expected_consumption` (T8.3i) since that doesn't need one -
+    see its own docstring.
     """
     total_yield, tile_days = _crop_yield_and_tile_days(crop)
-    start = sell_at_inventory + already_committed_units
+    start = sell_at_inventory + already_committed_units - expected_consumption
     total_revenue = sum(price(crop, start + k) for k in range(total_yield))
     return total_revenue / tile_days
 
 
-def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int) -> float:
+def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int, expected_consumption: float = 0) -> float:
     """Steady-state revenue per tile-day for a continuously fed animal.
 
     No tile-days denominator the way crops have one: animals produce
     indefinitely once placed (SPEC.md's economic analysis: "no fixed
     occupancy to divide by") - this is just the per-tick rate
     (1 / interval) at the given product price.
+
+    `expected_consumption` (T8.3i): unlike `crop_revenue_per_tile_day`'s
+    `already_committed_units` (which needs a bounded lifetime total this
+    function deliberately doesn't have), a consumption estimate over one
+    production interval needs no such bound - it's simply subtracted from
+    `sell_at_inventory` before pricing, raising the modeled price for a
+    product a currently-unlocked shop is actively drawing down (e.g.
+    YARN_STORE for WOOL). Defaults to 0, reproducing the exact prior
+    behavior for every caller that doesn't pass it.
     """
     a = ANIMALS[animal]
-    product_price = price(a["product"], sell_at_inventory)
+    product_price = price(a["product"], sell_at_inventory - expected_consumption)
     return product_price / a["interval"]
 
 
-def rank_portfolio(market_inventory: dict, crop_tile_counts: dict | None = None) -> list[str]:
+def rank_portfolio(
+    market_inventory: dict, crop_tile_counts: dict | None = None, unlocked_shops: list | None = None
+) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day at `market_inventory`'s *current* level for each one's own
     product (missing entries fall back to MARKET_I0, i.e. base price).
@@ -132,17 +152,31 @@ def rank_portfolio(market_inventory: dict, crop_tile_counts: dict | None = None)
     (the default) means "nothing planted yet" - every existing caller
     before T8.3f keeps its old, unadjusted behavior unchanged. Animals
     are unaffected - `crop_tile_counts` only ever names crops.
+
+    `unlocked_shops` (T8.3i, the user's own follow-up question: "is
+    elevated shop demand already accounted for, or only as a lagging
+    reaction once the price has already moved?"): before this, purely
+    the latter - `market_inventory` already reflects any consumption a
+    shop has *already* caused (the same shared object `_town_consume`
+    mutates), but nothing here looked ahead to what a *currently*
+    unlocked shop will keep doing for the rest of the game. `None` (the
+    default) means "no information," reproducing the exact prior
+    behavior for every caller that doesn't pass it - matches
+    `crop_tile_counts`'s own convention.
     """
     crop_tile_counts = crop_tile_counts or {}
+    unlocked_shops = unlocked_shops or []
     scores = {}
     for crop in CROPS:
         inv = market_inventory.get(crop, MARKET_I0)
-        total_yield, _ = _crop_yield_and_tile_days(crop)
+        total_yield, tile_days = _crop_yield_and_tile_days(crop)
         already_committed_units = crop_tile_counts.get(crop, 0) * total_yield
-        scores[crop] = crop_revenue_per_tile_day(crop, inv, already_committed_units)
+        expected_consumption = expected_daily_consumption(crop, unlocked_shops) * tile_days
+        scores[crop] = crop_revenue_per_tile_day(crop, inv, already_committed_units, expected_consumption)
     for animal, a in ANIMALS.items():
         inv = market_inventory.get(a["product"], MARKET_I0)
-        scores[animal] = animal_revenue_per_tile_day(animal, inv)
+        expected_consumption = expected_daily_consumption(a["product"], unlocked_shops) * a["interval"]
+        scores[animal] = animal_revenue_per_tile_day(animal, inv, expected_consumption)
     return sorted(scores, key=scores.__getitem__, reverse=True)
 
 

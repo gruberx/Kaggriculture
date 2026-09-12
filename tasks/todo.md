@@ -484,6 +484,37 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       information this stateless `decide()` doesn't currently derive. Golden table unchanged (default
       behavior is bit-identical to T8.3f/T8.3g). 278/278 full suite (renamed/added tests), compileall
       clean, boundary check green.
+- [x] T8.3i — The user's own follow-up question, arising directly from the T8.3g/T8.3h
+      discussion: does the agent already account for elevated town-shop demand, or only react once
+      the price has already moved? Answered by reading the code, not assuming: purely the latter -
+      `market_inventory` already reflects any consumption a shop has *already* caused (the same
+      shared object `_town_consume` mutates, and `rank_portfolio` already reads it), but
+      `obs["town"]["unlocked_shops"]` was never read anywhere in this codebase before this task, so
+      nothing looked ahead to what a *currently* unlocked shop will keep consuming for the rest of
+      the game. Also recorded the user's related observation along the way: hiring (T8.4-T8.7) will
+      speed up production and should already be handled correctly by T8.3f's self-impact mechanism
+      (it counts real current tiles, not planting rate) - flagged in "Not planned yet" below for a
+      real re-validation once hiring actually works, not assumed safe without checking.
+      **Built:** `SHOPS`/`TOWN_CENTER_PRODUCTS`/`MAX_SHOP_INSTANCES` added to `gamelib/constants.py`
+      (oracle-verified byte-for-byte against the real engine, new tests in `test_gamelib_market.py`);
+      `gamelib.market.expected_daily_consumption(product, unlocked_shops, ...)` mirrors
+      `_town_consume`'s own math (town center's constant per-product draw plus each unlocked shop's
+      per-instance draw, doubled for YARN_STORE/PET_CAFE's single-product shops); wired into both
+      `crop_revenue_per_tile_day` *and* `animal_revenue_per_tile_day` (unlike T8.3f/g/h's crop-only
+      self-impact scope - a consumption estimate needs no bounded lifetime total the way self-impact-
+      from-production does, so animal products like WOOL/MILK/EGG are included here) as a negative
+      offset to the same starting inventory the self-impact walk already uses. Gated by
+      `params["crop_shop_demand_aware"]` for a clean self-play A/B.
+      **Measured: a strong, decisive win** - 49/50 on the working block and 48/50 on the held-out
+      block, the second-strongest result of the whole investigation (after T8.3c). Traced (seed 100,
+      8 shops unlocked by season end - PIZZA_SHOP x3, SMOOTHIE_SHOP x2, FARMERS_MARKET x2,
+      BRUNCH_SPOT): the shop-aware agent diversified its post-MELON fallback into TOMATO and CARROT
+      (both drawn down by the unlocked shops) instead of STRAWBERRY (the unaware agent's plain
+      crop-only leader with no shop information) - $24078 final vs $21424, a real ~12% gain from
+      knowing which goods have elevated demand, not a marginal tuning improvement.
+      **Accepted** as the default (`crop_shop_demand_aware=True`). Golden table re-recorded - 5 of 6
+      seeds changed. 294/294 full suite (new tests across `test_gamelib_market.py`,
+      `test_policy_strategy.py`, `test_policy_decide.py`), compileall clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).
@@ -507,3 +538,16 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
 targets — gated behind a Stage-1 baseline that doesn't exist yet).
+
+**Open questions recorded for later, not forgotten (the user's own request, 2026-09-12):**
+- Opponent production/price-impact awareness (T8.3g/T8.3h): rejected at every weight tried
+  (0.0-1.0), traced to the estimate having no timing information about the opponent's tiles. A
+  signal-based approach (trust the opponent term only when the *observed* market price already
+  shows movement unexplained by our own activity) remains untried - the user's own follow-up idea,
+  flagged for a real return visit, not abandoned.
+- Re-validate T8.3f/T8.3g/T8.3h (crop self-impact awareness) via self-play once hiring actually
+  works (after T8.4-T8.7): the user's own observation - faster multi-worker production could plant
+  a crop's full tile commitment much sooner than the single-farmer games these were measured
+  against. The mechanism itself should already generalize correctly (`_crop_tile_counts` counts
+  real current tiles regardless of how many workers planted them, not planting *rate*), but this is
+  an assumption, not yet confirmed by a real measurement under nonzero `hires_per_day`.

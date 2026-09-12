@@ -217,6 +217,29 @@ _DEFAULT_CROP_SELF_IMPACT_AWARE = True
 # attempted here.
 _DEFAULT_CROP_SELF_IMPACT_OPPONENT_WEIGHT = 0.0
 
+# T8.3i (the user's own follow-up question: is elevated town-shop demand
+# already accounted for, or only as a lagging reaction once the price has
+# already moved?): before this, purely the latter - `market_inventory`
+# already reflects any consumption a shop has *already* caused (the same
+# shared object kaggriculture.py's `_town_consume` mutates), but nothing
+# in this codebase looked ahead to what a *currently* unlocked shop will
+# keep doing for the rest of the game (`obs["town"]["unlocked_shops"]`
+# was never read anywhere before this). Gates whether that list actually
+# reaches `rank_portfolio` - see `kagg.gamelib.market.
+# expected_daily_consumption` and `strategy.rank_portfolio`'s own
+# docstrings for the mechanism.
+#
+# Accepted: a strong, decisive win - 49/50 on the working block (seeds
+# 100-149) and 48/50 on the held-out block (seeds 900-949) against the
+# identical code with this flag off. Traced (seed 100, 8 shops unlocked
+# by season end - PIZZA_SHOP x3, SMOOTHIE_SHOP x2, FARMERS_MARKET x2,
+# BRUNCH_SPOT): the shop-aware agent diversified its post-MELON fallback
+# into TOMATO and CARROT (both drawn down by the unlocked shops) instead
+# of STRAWBERRY (the unaware agent's plain crop-only leader with no shop
+# information) - $24078 final vs $21424, a real ~12% gain from knowing
+# which goods have elevated demand, not a marginal tuning improvement.
+_DEFAULT_CROP_SHOP_DEMAND_AWARE = True
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -391,7 +414,11 @@ def _combined_crop_tile_counts(my_tiles, other_farms, opponent_weight: float = 1
 
 
 def _top_investment_choice(
-    market_inventory: dict, current_day: int, params: dict, crop_tile_counts: dict | None = None
+    market_inventory: dict,
+    current_day: int,
+    params: dict,
+    crop_tile_counts: dict | None = None,
+    unlocked_shops: list | None = None,
 ) -> tuple[str, str] | None:
     """The highest-ranked crop-or-animal that still has time to mature
     this season, as `(name, kind)` with `kind` "crop" or "animal". `None`
@@ -403,11 +430,11 @@ def _top_investment_choice(
     gap this opens until T6.2/T6.3 wire actual animal acquisition into
     tasks.py/market.py.
 
-    `crop_tile_counts` (T8.3f) is passed straight through to
-    `rank_portfolio` - see its own docstring.
+    `crop_tile_counts` (T8.3f) and `unlocked_shops` (T8.3i) are both
+    passed straight through to `rank_portfolio` - see its own docstring.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory, crop_tile_counts):
+    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
                 return name, "crop"
@@ -418,7 +445,11 @@ def _top_investment_choice(
 
 
 def _top_crop_choice(
-    market_inventory: dict, current_day: int, params: dict, crop_tile_counts: dict | None = None
+    market_inventory: dict,
+    current_day: int,
+    params: dict,
+    crop_tile_counts: dict | None = None,
+    unlocked_shops: list | None = None,
 ) -> str | None:
     """Best CROP alone, ignoring animals entirely - a fallback
     (`params["plant_while_pursuing_animal"]`, default **on** since
@@ -462,7 +493,7 @@ def _top_crop_choice(
     pipeline instead of being pre-empted by it.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory, crop_tile_counts):
+    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             return name
     return None
@@ -486,7 +517,14 @@ def decide(obs: dict, params: dict) -> dict:
         crop_tile_counts = _combined_crop_tile_counts(me["tiles"], other_farms, opponent_weight)
     else:
         crop_tile_counts = None
-    investment = _top_investment_choice(obs["market"]["inventory"], current_day, params, crop_tile_counts)
+    unlocked_shops = (
+        obs.get("town", {}).get("unlocked_shops", [])
+        if params.get("crop_shop_demand_aware", _DEFAULT_CROP_SHOP_DEMAND_AWARE)
+        else None
+    )
+    investment = _top_investment_choice(
+        obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops
+    )
     desired_name, desired_kind = investment if investment is not None else (None, None)
     desired_crop = desired_name if desired_kind == "crop" else None
     desired_animal = desired_name if desired_kind == "animal" else None
@@ -501,7 +539,9 @@ def decide(obs: dict, params: dict) -> dict:
     if desired_crop is not None:
         fallback_crop = desired_crop
     elif params.get("plant_while_pursuing_animal", _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL):
-        fallback_crop = _top_crop_choice(obs["market"]["inventory"], current_day, params, crop_tile_counts)
+        fallback_crop = _top_crop_choice(
+            obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops
+        )
     else:
         fallback_crop = None
     have_seed = fallback_crop is not None and seeds.get(fallback_crop, 0) > 0

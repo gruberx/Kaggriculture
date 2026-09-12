@@ -13,5 +13,6 @@
   "liquidation_days_before_end": 2,
   "use_fertilizer": false,
   "crop_self_impact_aware": true,
-  "crop_self_impact_opponent_weight": 0.0
+  "crop_self_impact_opponent_weight": 0.0,
+  "crop_shop_demand_aware": true
 }

@@ -252,6 +252,41 @@ def test_decide_demotes_a_crop_the_opponent_has_already_committed_many_tiles_to_
     assert buy_seed_orders and buy_seed_orders[0][1] != "MELON"
 
 
+def test_decide_defaults_crop_shop_demand_aware_to_true_when_unset():
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("crop_shop_demand_aware") is True
+    assert decide_module._DEFAULT_CROP_SHOP_DEMAND_AWARE is True
+
+
+def test_decide_favors_a_crop_a_currently_unlocked_shop_is_consuming():
+    # T8.3i, the user's own follow-up question: end-to-end wiring check.
+    # 30 MELON tiles already committed pushes MELON itself out of the
+    # running (same setup as the T8.3f test above) - among what's left,
+    # STRAWBERRY is the plain crop-only leader with no shop information,
+    # but PET_CAFE (sells only CARROT, doubled consumption rate) heavily
+    # unlocked must tip the choice to CARROT instead.
+    obs = _obs()
+    for i in range(30):
+        obs["farms"][0]["tiles"][i % 10][i // 10] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    obs["town"]["unlocked_shops"] = ["PET_CAFE"] * 8
+    action = decide(obs, DEFAULT_PARAMS)
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert buy_seed_orders and buy_seed_orders[0][1] == "CARROT"
+
+
+def test_decide_can_disable_shop_demand_awareness_explicitly():
+    # Same setup as above, but with the flag off - PET_CAFE's demand must
+    # be ignored, falling back to the plain crop-only leader (STRAWBERRY).
+    obs = _obs()
+    for i in range(30):
+        obs["farms"][0]["tiles"][i % 10][i // 10] = {"kind": "PLANT", "crop": "MELON", "planted_day": 0}
+    obs["town"]["unlocked_shops"] = ["PET_CAFE"] * 8
+    action = decide(obs, dict(DEFAULT_PARAMS, crop_shop_demand_aware=False))
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert buy_seed_orders and buy_seed_orders[0][1] == "STRAWBERRY"
+
+
 def test_decide_defaults_use_fertilizer_to_false_when_unset():
     # T8.3e: built and tested, but measured to lose in direct self-play
     # at both priority tiers tried (see decide.py's own
