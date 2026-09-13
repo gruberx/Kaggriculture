@@ -1,5 +1,5 @@
 {
-  "land_purchase_threshold_money": 10000,
+  "land_purchase_threshold_money": 15000,
   "hires_per_day": 1,
   "sell_margin": 0,
   "drip_sell_max_per_turn": 5,
@@ -8,7 +8,7 @@
   "wheat_max_buy_price": 40,
   "investment_anchor": "UNIT_TOWARD_SHED",
   "plant_while_pursuing_animal": true,
-  "land_buy_max_free_tile_fraction": 0.25,
+  "land_buy_max_free_tile_fraction": 0.1,
   "land_buy_min_frontier_distance": 99,
   "liquidation_days_before_end": 2,
   "use_fertilizer": false,

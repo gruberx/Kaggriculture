@@ -375,12 +375,13 @@ def test_should_buy_land_frontier_gate_defaults_to_disabled():
     assert should_buy_land(
         money=1_000_000, n_unlocked_extra=0, params={},
         free_tiles=20, unlocked_tiles=25, nearest_free_shed_distance=8,
-    ) is False  # fraction gate (0.25 default) blocks; frontier (99 default) can't override it
+    ) is False  # fraction gate (0.1 default, T8.8) blocks; frontier (99 default) can't override it
 
 
 def test_should_buy_land_fraction_1_0_reproduces_the_fully_ungated_behavior():
-    # T8.3's mechanism itself (as opposed to the accepted 0.25 default)
-    # is still reachable by passing the fully-ungated value explicitly.
+    # T8.3's mechanism itself (as opposed to the accepted default, 0.1
+    # since T8.8) is still reachable by passing the fully-ungated value
+    # explicitly.
     for free_tiles in (0, 1, 12, 24, 25):
         assert should_buy_land(
             money=1_000_000, n_unlocked_extra=0, params={"land_buy_max_free_tile_fraction": 1.0},
@@ -393,13 +394,16 @@ def test_should_buy_land_default_matches_the_accepted_fraction():
     # accepted params.py default, per this project's established
     # convention (see _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY) - so
     # params={} and an explicit accepted value behave identically.
-    for free_tiles, unlocked_tiles in [(20, 25), (5, 25), (6, 25)]:
+    # T8.8: re-swept to 0.1 (from 0.25) once hires_per_day=1 (T8.7)
+    # landed - free_tiles/unlocked_tiles combos updated so at least one
+    # still demonstrates a real True result under the stricter default.
+    for free_tiles, unlocked_tiles in [(20, 25), (1, 25), (3, 25)]:
         assert should_buy_land(
             money=1_000_000, n_unlocked_extra=0, params={},
             free_tiles=free_tiles, unlocked_tiles=unlocked_tiles, nearest_free_shed_distance=8,
         ) == should_buy_land(
             money=1_000_000, n_unlocked_extra=0,
-            params={"land_buy_max_free_tile_fraction": 0.25},
+            params={"land_buy_max_free_tile_fraction": 0.1},
             free_tiles=free_tiles, unlocked_tiles=unlocked_tiles, nearest_free_shed_distance=8,
         )
 

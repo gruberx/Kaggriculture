@@ -789,8 +789,29 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       (`kagg.policy.strategy`)/`DEFAULT_PARAMS`/`params/policy.json` kept in sync. 362/362 full suite
       (4 pre-existing tests updated for the new default, no new tests - this task changes a value,
       not a mechanism), compileall clean, boundary check green.
-- [ ] T8.8 — Re-sweep land (`land_purchase_threshold_money` and T8.3's gates) now that labor works
-      — the Phase 7 value was fit to a 1-unit farm and is likely stale.
+- [x] T8.8 — Re-swept land (`tools/run_land_sweep.py`) now that `hires_per_day=1` (T8.7) landed -
+      `hires_per_day` itself held fixed, not re-opened, per the task's own scope.
+      **Real, held-out-gated result that went the opposite direction the plan's own hypothesis
+      expected**: the working assumption was "more labor can work more land, so the gate should
+      loosen." Measured instead that going *stricter* wins decisively -
+      `land_buy_max_free_tile_fraction` 0.25 → 0.1 (working block 0.90 vs 0.25's own 0.36-0.38;
+      held-out 0.84, Wilson [0.715, 0.917]) - every looser value tried (0.4, 0.6, 0.8, 1.0 fully
+      ungated) lost outright, 1.0 all the way down to a total 0/50.
+      `land_purchase_threshold_money` 10000 → 15000 (swept jointly with the fraction gate via
+      `coordinate_ascent`). Traced, not just assumed: two labor units still can't profitably use
+      even one 25-tile quadrant - land purchase spends cash that would otherwise buy seeds/animals,
+      and a hired hand needs *work* (more investment tasks), not more square footage; land now also
+      competes with T8.6's larger batched seed/animal spend for the same cash on top of T8.3's
+      original finding. Non-regression check vs starter/random (10 holdout seeds, reporting only):
+      100% win rate.
+      Golden table re-recorded - 4 of 6 seeds improved, 2 dipped slightly (consistent with a 0.84
+      win rate, not a 50/50-both-blocks sweep like T8.3's own original). `_DEFAULT_LAND_PURCHASE_
+      THRESHOLD_MONEY`/`_DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION` (`kagg.policy.strategy`)/
+      `DEFAULT_PARAMS`/`params/policy.json` kept in sync. 362/362 full suite (2 pre-existing tests
+      updated for the new defaults), compileall clean, boundary check green.
+      Fresh Kaggle submission: ref `56213981` (commit `bf6cef3`, T8.4-T8.7 - submitted before T8.8's
+      own land re-sweep landed; T8.8 itself not yet submitted, ask the user first per this project's
+      standing discipline).
 - [x] T8.9 — Pulled forward into T8.1 above (found to be tightly coupled to it, not a separable
       stretch goal after all). Decouples plant-crop choice from animal-acquisition choice via
       `params["plant_while_pursuing_animal"]`; shipped as opt-in, not the default - see T8.1's entry

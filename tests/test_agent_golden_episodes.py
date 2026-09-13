@@ -248,6 +248,15 @@ re-run sweep (`tools/run_hiring_sweep.py`) flipped completely: every nonzero hir
 measured ceiling. All 6 golden seeds improved substantially (none decreased) - e.g. starter/seed1:
 27524 -> 37258, roughly +35%.
 
+Re-recorded a fourteenth time for T8.8 (land re-sweep, now that labor works) -
+land_purchase_threshold_money raised 10000 -> 15000 and land_buy_max_free_tile_fraction lowered
+0.25 -> 0.1. A real, held-out-gated result (0.84, Wilson [0.715, 0.917]) that went the opposite
+direction the plan's own hypothesis expected: with hires_per_day=1 (T8.7), land became *less*
+attractive, not more - two units still can't profitably use even one 25-tile quadrant, and land now
+competes with T8.6's larger seed/animal spend for the same cash. Golden seeds moved modestly in both
+directions (4 up, 2 down slightly) - consistent with an 0.84 win rate, not a 50/50-both-blocks
+sweep like T8.3's own original result.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -280,12 +289,12 @@ AGENT_MAIN_PATH = os.path.join(
 # was tried first and found invalid - see kagg.policy.decide's
 # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED comment for the full story).
 _GOLDEN = {
-    ("starter", 1): (37258.0, 5227.0),
-    ("starter", 2): (36673.0, 3623.0),
-    ("starter", 3): (35642.0, 3612.0),
-    ("pass", 1): (37411.0, 3000.0),
-    ("pass", 2): (37655.0, 3000.0),
-    ("pass", 3): (36655.0, 3000.0),
+    ("starter", 1): (38093.0, 5229.0),
+    ("starter", 2): (38589.0, 3646.0),
+    ("starter", 3): (35089.0, 3588.0),
+    ("pass", 1): (39161.0, 3000.0),
+    ("pass", 2): (39031.0, 3000.0),
+    ("pass", 3): (35256.0, 3000.0),
 }
 
 

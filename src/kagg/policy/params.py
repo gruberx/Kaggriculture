@@ -31,7 +31,11 @@ _DEFAULT_PARAMS_PATH = os.path.join(
 # file, or this loader never being called at all, shouldn't behave any
 # differently than a fully-populated one.
 DEFAULT_PARAMS = {
-    "land_purchase_threshold_money": 10000,  # raised from 5000 by T7.4's first accepted sweep result
+    # T8.8: raised again 10000 -> 15000 once hires_per_day=1 (T8.7)
+    # landed - see kagg.policy.strategy's own
+    # _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY comment for the measured
+    # story (swept jointly with land_buy_max_free_tile_fraction below).
+    "land_purchase_threshold_money": 15000,  # T7.4 first raised this from 5000
     # T8.7: raised 0 -> 1 - T7.4's own hires_per_day=0 result was invalid
     # (ran against real bugs, fixed by T8.4/T8.6), and the re-run sweep
     # flipped completely: every nonzero value tried won 96-100% direct
@@ -61,15 +65,19 @@ DEFAULT_PARAMS = {
     # kagg.policy.decide._top_crop_choice's docstring for the full story.
     "plant_while_pursuing_animal": True,
     # T8.3: occupancy-aware land-purchase gate. Accepted 1.0 -> 0.25 via
-    # direct self-play immediately after the mechanism landed: every
-    # tested value (0.6, 0.4, 0.25, 0.1) beat the ungated default 50/50 on
-    # the working block, confirmed 50/50 again on the held-out block for
-    # 0.25 - see kagg.policy.strategy.should_buy_land's own docstring for
-    # the mechanism and tasks/todo.md's T8.3 entry for the full story.
-    # Explicitly provisional: fit to a 1-unit farm (a single farmer
-    # cannot productively work even one 25-tile quadrant), so T8.8 must
-    # re-sweep once labor actually works.
-    "land_buy_max_free_tile_fraction": 0.25,
+    # direct self-play immediately after the mechanism landed - see
+    # kagg.policy.strategy.should_buy_land's own docstring for the
+    # mechanism and tasks/todo.md's T8.3 entry for the full story.
+    # **T8.8 re-swept once hires_per_day=1 (T8.7) landed, and the result
+    # went the opposite direction the plan's own hypothesis expected**:
+    # even *stricter* (0.25 -> 0.1) decisively beat 0.25, held-out-gated
+    # (0.84, Wilson [0.715, 0.917]) - every looser value tried (0.4, 0.6,
+    # 0.8, 1.0) lost outright. Two units still can't profitably use even
+    # one 25-tile quadrant; land now competes with T8.6's larger seed/
+    # animal spend for the same cash on top of T8.3's original finding.
+    # See kagg.policy.strategy's own _DEFAULT_LAND_BUY_MAX_FREE_TILE_
+    # FRACTION comment for the full measured story.
+    "land_buy_max_free_tile_fraction": 0.1,
     # No evidence yet this second gate is needed once the fraction gate
     # above already prevents nearly all land purchases - stays disabled.
     "land_buy_min_frontier_distance": 99,

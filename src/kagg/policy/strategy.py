@@ -444,7 +444,12 @@ def rank_portfolio(
 # every hires_per_day > 0 value tried lost consistently (0.03-0.17 win
 # rate) to hires_per_day=0 in direct self-play - that result was
 # overturned by T8.7 below, not merely superseded by a later sweep.
-_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 10000
+#
+# T8.8 re-sweep (once hires_per_day=1 landed): raised again, 10000 ->
+# 15000 - a real, held-out-gated result (see
+# _DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION's own comment for the full
+# joint-sweep story; both land params were swept and accepted together).
+_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 15000
 
 # T8.7 (tasks/plan.md, Stage B's payoff): T7.4's own hires_per_day=0
 # result was invalid, not just stale - Phase 8's planning found it ran
@@ -487,8 +492,24 @@ _DEFAULT_HIRES_PER_DAY = 1
 # almost entirely and final money rises ~34-35%, confirming a single
 # farmer cannot productively work even one 25-tile quadrant, so land
 # beyond it is currently pure waste. Explicitly provisional - fit to a
-# 1-unit farm, must be re-swept once labor works (T8.8).
-_DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION = 0.25
+# 1-unit farm, re-swept once labor works (T8.8).
+#
+# **T8.8 re-sweep, once hires_per_day=1 (T8.7) landed: real, decisive,
+# and the opposite direction the plan's own hypothesis expected.** The
+# working assumption going in was "more labor can work more land, so the
+# gate should loosen" - measured instead that an even *stricter* gate
+# (0.25 -> 0.1) beats 0.25 decisively (working block: 0.90 vs 0.25's own
+# 0.36-0.38; held-out: 0.84, Wilson [0.715, 0.917], formally accepted).
+# Every looser value tried (0.4, 0.6, 0.8, 1.0 - fully ungated) lost
+# outright, 1.0 all the way down to a total 0/50. Traced, not just
+# assumed: a second labor unit still doesn't change the underlying
+# constraint T8.3 already found - land purchase spends cash that would
+# otherwise buy seeds/animals, and a hired hand needs *work* (more
+# investment tasks), not more square footage, to be productive; two
+# units still can't profitably use even one full 25-tile quadrant, only
+# more so once land competes with T8.6's now-larger seed/animal spend
+# for the same cash. **Accepted**: 0.25 -> 0.1.
+_DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION = 0.1
 # No evidence yet this second gate is needed once the fraction gate above
 # already prevents nearly all land purchases - stays disabled (99 is
 # unreachable on any real board).
