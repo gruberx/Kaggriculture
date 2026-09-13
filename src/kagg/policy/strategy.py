@@ -172,6 +172,46 @@ def crop_revenue_per_tile_day(
     return total_revenue / tile_days
 
 
+def _animal_full_care_units(animal: str, days_remaining: int) -> int:
+    """Exact day-by-day simulation of `CARE`'s `pending_care_bonus`
+    mechanic under continuous feeding and care from day 0 through
+    `days_remaining`, returning total product units produced (T8.3q).
+
+    Mirrors `kaggriculture.py`'s `_daily_refresh_animals` precisely
+    (confirmed against the official "Animal Care" docs too): a day both
+    fed and cared for banks +1 to `pending_care_bonus` - including
+    *before* the animal's first scheduled production, since banking has
+    no `first_yield_day` gate the way production does - and a scheduled
+    production day (fed) pays out the *entire* bank on top of the base 1
+    unit, then resets it to 0, whether or not that day's production was
+    the one the bank was originally accrued for. This is genuinely
+    path-dependent (SHEEP's `first_yield_day=6` banks 5 days before its
+    very first tick, hitting `max_held` in one shot - a real, legal
+    mechanic, not a bug), so a day-by-day simulation is used instead of a
+    closed-form multiplier that risks getting cases like that silently
+    wrong. Assumes harvesting promptly enough that `max_held` is never
+    actually binding (a labor-unconstrained ceiling, matching this
+    function's own `net_of_cost` framing throughout - see
+    `kagg.policy.decide._DEFAULT_ANIMAL_CARE_AWARE` for the measured,
+    labor-realistic result).
+    """
+    a = ANIMALS[animal]
+    yield_units = 0
+    pending_care_bonus = 0
+    total_harvested = 0
+    for day in range(days_remaining):
+        next_day = day + 1
+        days_since_first = next_day - a["first_yield_day"]
+        if days_since_first >= 0 and days_since_first % a["interval"] == 0:
+            yield_units = min(a["max_held"], yield_units + 1 + pending_care_bonus)
+            pending_care_bonus = 0
+        pending_care_bonus += 1  # fed and cared every day in this ceiling scenario
+        if yield_units > 0:
+            total_harvested += yield_units
+            yield_units = 0
+    return total_harvested
+
+
 def animal_revenue_per_tile_day(
     animal: str,
     sell_at_inventory: int,
@@ -181,6 +221,7 @@ def animal_revenue_per_tile_day(
     feed_price: float = 0,
     fertilizer_income_aware: bool = False,
     fertilizer_sell_at_inventory: int = MARKET_I0,
+    care_aware: bool = False,
 ) -> float:
     """Steady-state revenue per tile-day for a continuously fed animal -
     or, when `net_of_cost` is set with a real `days_remaining`, net
@@ -250,12 +291,22 @@ def animal_revenue_per_tile_day(
     steady-state branch exactly as before. Defaults to `False`
     (`fertilizer_sell_at_inventory` unused when off), reproducing T8.3m's
     exact prior behavior for every caller that doesn't pass it.
+
+    `care_aware` (T8.3q) swaps the plain `forecast_animal_schedule` count
+    for `_animal_full_care_units`'s exact day-by-day simulation of
+    continuous `CARE`+feeding - see its own docstring for the mechanism
+    and the path-dependence that rules out a closed-form shortcut.
+    Defaults to `False`, reproducing the exact prior schedule-only count.
     """
     a = ANIMALS[animal]
     if net_of_cost and days_remaining is not None:
-        schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining)
+        if care_aware:
+            units = _animal_full_care_units(animal, days_remaining)
+        else:
+            schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining)
+            units = len(schedule)
         start = sell_at_inventory - expected_consumption
-        total_revenue = sum(price(a["product"], start + k) for k in range(len(schedule)))
+        total_revenue = sum(price(a["product"], start + k) for k in range(units))
         if fertilizer_income_aware:
             total_revenue += sum(
                 price("FERTILIZER", fertilizer_sell_at_inventory + k) for k in range(days_remaining)
@@ -276,6 +327,7 @@ def rank_portfolio(
     rank_season_aware: bool = False,
     animal_net_of_cost: bool = False,
     animal_fertilizer_income_aware: bool = False,
+    animal_care_aware: bool = False,
 ) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day at `market_inventory`'s *current* level for each one's own
@@ -338,6 +390,13 @@ def rank_portfolio(
     happens to be on, for a clean three-way self-play comparison
     (fertilizer alone is a no-op without net-of-cost; net-of-cost alone;
     both together).
+
+    `animal_care_aware` (T8.3q) is passed straight through the same way -
+    see `animal_revenue_per_tile_day`'s own docstring and
+    `_animal_full_care_units` for the mechanism. Independently gated from
+    both `animal_net_of_cost` and `animal_fertilizer_income_aware`, for
+    the same reason: T8.3b's isolation lesson applies to every new
+    mechanism layered on this ranking, not just the first one.
     """
     crop_tile_counts = crop_tile_counts or {}
     unlocked_shops = unlocked_shops or []
@@ -359,7 +418,7 @@ def rank_portfolio(
         expected_consumption = expected_daily_consumption(a["product"], unlocked_shops) * a["interval"]
         scores[animal] = animal_revenue_per_tile_day(
             animal, inv, expected_consumption, animal_days_remaining, animal_net_of_cost, feed_price,
-            animal_fertilizer_income_aware, fertilizer_sell_at_inventory,
+            animal_fertilizer_income_aware, fertilizer_sell_at_inventory, animal_care_aware,
         )
     return sorted(scores, key=scores.__getitem__, reverse=True)
 

@@ -493,3 +493,57 @@ def test_rank_portfolio_animal_fertilizer_income_aware_defaults_to_false():
     assert rank_portfolio(market, days_remaining=30, animal_net_of_cost=True) == rank_portfolio(
         market, days_remaining=30, animal_net_of_cost=True, animal_fertilizer_income_aware=False
     )
+
+
+def test_animal_revenue_per_tile_day_care_aware_matches_exact_day_by_day_simulation():
+    # T8.3q Part 2: GOOSE (first_yield_day=4, interval=1) over 6 days with
+    # continuous feeding+care. Hand-traced against the real
+    # pending_care_bonus mechanic: day1-3 bank (no production yet, +1/day
+    # each), day4 production pays out the bank (base 1 + pending 3 = 4,
+    # capped at max_held=4), bank resets and re-accrues day4 (+1), day5
+    # production pays 1+1=2 (capped at 4, no change), day6 production
+    # pays 1+1=2 (capped at 4, no change) - total harvested = 4+2+2 = 8.
+    from kagg.gamelib.market import price as _price
+
+    days_remaining = 6
+    expected_units = 8
+    expected = (
+        sum(_price("EGG", MARKET_I0 + k) for k in range(expected_units)) - 300 - 2 * days_remaining
+    ) / days_remaining
+    got = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=days_remaining, net_of_cost=True, feed_price=2, care_aware=True
+    )
+    assert got == pytest.approx(expected)
+
+
+def test_animal_revenue_per_tile_day_care_aware_raises_the_score():
+    without = animal_revenue_per_tile_day("SHEEP", MARKET_I0, days_remaining=30, net_of_cost=True, feed_price=25)
+    with_care = animal_revenue_per_tile_day(
+        "SHEEP", MARKET_I0, days_remaining=30, net_of_cost=True, feed_price=25, care_aware=True
+    )
+    assert with_care > without
+
+
+def test_animal_revenue_per_tile_day_care_aware_defaults_to_false():
+    steady_state = animal_revenue_per_tile_day("COW", MARKET_I0)
+    assert animal_revenue_per_tile_day("COW", MARKET_I0, care_aware=True) == pytest.approx(steady_state)
+
+
+def test_animal_revenue_per_tile_day_care_aware_is_a_noop_without_net_of_cost():
+    without = animal_revenue_per_tile_day("COW", MARKET_I0, days_remaining=30)
+    with_care_only = animal_revenue_per_tile_day("COW", MARKET_I0, days_remaining=30, care_aware=True)
+    assert with_care_only == pytest.approx(without)
+
+
+def test_rank_portfolio_animal_care_aware_raises_an_animals_rank():
+    market = {}
+    without = rank_portfolio(market, days_remaining=30, animal_net_of_cost=True)
+    with_care = rank_portfolio(market, days_remaining=30, animal_net_of_cost=True, animal_care_aware=True)
+    assert with_care.index("COW") < without.index("COW")
+
+
+def test_rank_portfolio_animal_care_aware_defaults_to_false():
+    market = {}
+    assert rank_portfolio(market, days_remaining=30, animal_net_of_cost=True) == rank_portfolio(
+        market, days_remaining=30, animal_net_of_cost=True, animal_care_aware=False
+    )

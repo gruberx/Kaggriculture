@@ -154,6 +154,7 @@ def build_task_list(
     current_day: int = 0,
     anchor: str = _ANCHOR_SHED,
     use_fertilizer: bool = True,
+    care_aware: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -201,6 +202,15 @@ def build_task_list(
     PLACE's target tile) gets placed - see `_ANCHOR_*` and
     `_placement_key` above. Defaults to `"SHED"`, a real fix for a real,
     measured defect (tasks/plan.md T8.1), not the old `"UNIT"` behavior.
+
+    `care_aware` (T8.3q) gates whether a `CARE` task fires for a placed
+    animal not yet cared for today - see `_animal_tile_tasks`'s own
+    docstring for the mechanism (`CARE` banks a yield bonus paid out on
+    the animal's next scheduled production). Defaults to `False`
+    (matches `use_fertilizer`'s own convention of a boolean flag rather
+    than always-on, since a real Kaggle action has a real single-farmer
+    turn cost - see `decide.py`'s `_DEFAULT_ANIMAL_CARE_AWARE` for the
+    measured story).
     """
     shed = shed or {}
     farmer_inventory = farmer_inventory or {}
@@ -224,7 +234,7 @@ def build_task_list(
             elif kind == "PLANT":
                 tasks.extend(_plant_tile_tasks(pos, tile, current_day, farmer_inventory, use_fertilizer))
             elif "animal" in tile:
-                animal_tasks, needs_wheat_priority = _animal_tile_tasks(pos, tile, farmer_inventory)
+                animal_tasks, needs_wheat_priority = _animal_tile_tasks(pos, tile, farmer_inventory, care_aware)
                 tasks.extend(animal_tasks)
                 if needs_wheat_priority is not None:
                     wheat_pickup_priority = (
@@ -380,14 +390,32 @@ def _is_actually_harvestable(tile: dict, current_day: int) -> bool:
     return current_day - tile["planted_day"] >= cd["first_yield_day"]
 
 
-def _animal_tile_tasks(pos: tuple[int, int], tile: dict, farmer_inventory: dict) -> tuple[list[Task], int | None]:
+def _animal_tile_tasks(
+    pos: tuple[int, int], tile: dict, farmer_inventory: dict, care_aware: bool = False
+) -> tuple[list[Task], int | None]:
     """Returns (tasks, wheat_pickup_priority) - the second element is
     `None` unless this tile needs feeding and the farmer isn't currently
     carrying any WHEAT to do it with (T6.4's finding, same root cause as
     PLACE's: FEED's real handler consumes from the acting unit's own
     inventory, not the shed - see `_new_investment_task`'s docstring).
     The caller aggregates this across all animal tiles into at most one
-    PICKUP task, at the most urgent priority found."""
+    PICKUP task, at the most urgent priority found.
+
+    `care_aware` (T8.3q, the user's own observation): `CARE` banks a
+    yield bonus (`pending_care_bonus`) on any day both fed and cared for,
+    paid out on the animal's next scheduled production if fed that day -
+    verified directly in `kaggriculture.py`'s `_daily_refresh_animals`
+    and the official "Animal Care" docs. No escape consequence the way
+    `FEED` has (`consecutive_unfed` has no `CARE` analog), so there is no
+    "urgent" tier for this task the way `FEED`'s has - fires at
+    `PRIORITY_MAINTENANCE`, the same tier as `COLLECT_FERTILIZER`
+    (a real, explicit design choice, not swept across tiers: T8.3e's own
+    FERTILIZE investigation found tier placement didn't change a
+    structural single-farmer-capacity rejection, only how *early* it lost
+    - see `kagg.policy.decide._DEFAULT_ANIMAL_CARE_AWARE` for the
+    measured result). Gated (default `False`) since a real turn is
+    genuinely spent on this, mirroring `use_fertilizer`'s own convention.
+    """
     tasks = []
     wheat_pickup_priority = None
     if not tile.get("fed_today", False):
@@ -401,6 +429,8 @@ def _animal_tile_tasks(pos: tuple[int, int], tile: dict, farmer_inventory: dict)
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     if tile.get("fertilizer_available", False):
         tasks.append(Task(PRIORITY_MAINTENANCE, pos, "COLLECT_FERTILIZER"))
+    if care_aware and not tile.get("cared_today", False):
+        tasks.append(Task(PRIORITY_MAINTENANCE, pos, "CARE"))
     return tasks, wheat_pickup_priority
 
 

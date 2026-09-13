@@ -20,5 +20,6 @@
   "liquidate_wheat_reserve": true,
   "rank_season_aware": false,
   "animal_net_of_cost": true,
-  "animal_fertilizer_income_aware": false
+  "animal_fertilizer_income_aware": false,
+  "animal_care_aware": false
 }

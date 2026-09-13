@@ -42,7 +42,9 @@ def _plant_tile(consecutive_unwatered=0, watered_today=False, yield_units=0, pla
     }
 
 
-def _animal_tile(consecutive_unfed=0, fed_today=False, yield_units=0, fertilizer_available=False) -> dict:
+def _animal_tile(
+    consecutive_unfed=0, fed_today=False, yield_units=0, fertilizer_available=False, cared_today=False
+) -> dict:
     return {
         "kind": "COOP",
         "animal": "GOOSE",
@@ -50,7 +52,7 @@ def _animal_tile(consecutive_unfed=0, fed_today=False, yield_units=0, fertilizer
         "yield_units": yield_units,
         "consecutive_unfed": consecutive_unfed,
         "fed_today": fed_today,
-        "cared_today": False,
+        "cared_today": cared_today,
         "fertilizer_available": fertilizer_available,
         "pending_care_bonus": 0,
     }
@@ -223,6 +225,40 @@ def test_build_task_list_flags_available_fertilizer_as_maintenance():
     tiles[6][6] = _animal_tile(fed_today=True, fertilizer_available=True)
     tasks = build_task_list(tiles)
     assert tasks == [Task(priority=PRIORITY_MAINTENANCE, pos=(6, 6), op="COLLECT_FERTILIZER")]
+
+
+def test_build_task_list_does_not_care_by_default():
+    # T8.3q: care_aware defaults to False, matching use_fertilizer's own
+    # gated-by-default convention - a real Kaggle action has a real
+    # single-farmer turn cost.
+    tiles = _empty_tiles()
+    tiles[6][6] = _animal_tile(fed_today=True, cared_today=False)
+    tasks = build_task_list(tiles)
+    assert tasks == []
+
+
+def test_build_task_list_cares_for_an_animal_when_enabled():
+    tiles = _empty_tiles()
+    tiles[6][6] = _animal_tile(fed_today=True, cared_today=False)
+    tasks = build_task_list(tiles, care_aware=True)
+    assert tasks == [Task(priority=PRIORITY_MAINTENANCE, pos=(6, 6), op="CARE")]
+
+
+def test_build_task_list_does_not_recare_an_animal_already_cared_for_today():
+    tiles = _empty_tiles()
+    tiles[6][6] = _animal_tile(fed_today=True, cared_today=True)
+    tasks = build_task_list(tiles, care_aware=True)
+    assert tasks == []
+
+
+def test_build_task_list_can_both_feed_and_care_for_the_same_animal_tile():
+    tiles = _empty_tiles()
+    tiles[6][6] = _animal_tile(consecutive_unfed=1, fed_today=False, cared_today=False)
+    tasks = build_task_list(tiles, care_aware=True, farmer_inventory={"WHEAT": 5})
+    ops = {t.op for t in tasks}
+    assert ops == {"FEED", "CARE"}
+    care_task = next(t for t in tasks if t.op == "CARE")
+    assert care_task.priority == PRIORITY_MAINTENANCE
 
 
 def test_build_task_list_plants_an_empty_tile_when_given_a_crop_hint():

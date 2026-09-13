@@ -439,6 +439,38 @@ _DEFAULT_ANIMAL_NET_OF_COST = True
 # task's own plan predicted a loss here would make.
 _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE = False
 
+# T8.3q Part 2: CARE (kaggriculture.py's own "Animal Care" mechanic,
+# `_daily_refresh_animals`'s `pending_care_bonus`) is a genuinely new task
+# (kagg.policy.tasks's `care_aware` param) plus a new ranking term
+# (kagg.policy.strategy.animal_revenue_per_tile_day's own `care_aware`,
+# via `_animal_full_care_units`'s exact day-by-day simulation - the
+# theoretical ceiling nearly doubles-to-quadruples an animal's raw
+# product yield, dwarfing every other T8.3-series lever). Gates whether
+# both the task and the ranking are active - deliberately one flag for
+# both halves (unlike `use_fertilizer`, which also gates two modules, the
+# ranking side here has no meaning without the task side actually
+# collecting the bonus it promises, and vice versa - see T8.3q Part 1's
+# own fertilizer-income rejection for exactly what happens when a
+# ranking promises a payoff the task layer can't actually realize).
+#
+# **Measured - a real, total, decisive rejection, matching Part 1's own
+# result exactly**: 0/50 on the working block and 0/50 on the held-out
+# block against the checked-in baseline (Wilson [0.0, 0.071] both times).
+# Traced (seed 100, same action-count diagnostic as Part 1): the
+# care-aware agent pursued and placed an animal (BUILD_PASTURE x2,
+# PICKUP=25, FEED=31, PLACE=2) with WATER dropping from 273 to 226 in the
+# same episode, but the episode shows **zero `CARE` actions the entire
+# game** - the theoretical yield-doubling bonus the ranking priced in
+# never gets collected, for the identical reason Part 1's fertilizer
+# income didn't: `CARE` sits at `tasks.PRIORITY_MAINTENANCE`, and the
+# same single farmer already spends every available turn on the animal
+# pipeline plus its existing crop work, leaving nothing for a second
+# MAINTENANCE-tier consumer (`CARE` competes directly with
+# `COLLECT_FERTILIZER` at the same tier, on the same tile, for the same
+# already-absent spare turns). **Shipped default: False** (rejected, not
+# unmeasured) - kept available for the same Stage B re-check as Part 1.
+_DEFAULT_ANIMAL_CARE_AWARE = False
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -645,10 +677,12 @@ def _top_investment_choice(
     animal_fertilizer_income_aware = params.get(
         "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
     )
+    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
     for name in rank_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
         days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
+        animal_care_aware,
     ):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
@@ -720,10 +754,12 @@ def _top_crop_choice(
     animal_fertilizer_income_aware = params.get(
         "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
     )
+    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
     for name in rank_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
         days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
+        animal_care_aware,
     ):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             return name
@@ -850,6 +886,7 @@ def decide(obs: dict, params: dict) -> dict:
     )
 
     use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
+    care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
@@ -859,6 +896,7 @@ def decide(obs: dict, params: dict) -> dict:
         current_day=current_day,
         anchor=params.get("investment_anchor", _DEFAULT_INVESTMENT_ANCHOR),
         use_fertilizer=use_fertilizer,
+        care_aware=care_aware,
     )
     assignment = assign_units(tasks, unit_positions)
 

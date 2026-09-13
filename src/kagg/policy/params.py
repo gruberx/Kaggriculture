@@ -207,6 +207,21 @@ DEFAULT_PARAMS = {
     # full traced story. Kept available for a re-check once Stage B
     # (hired hands) gives real spare labor.
     "animal_fertilizer_income_aware": False,
+    # T8.3q Part 2: CARE (kaggriculture.py's "Animal Care" mechanic) banks
+    # a yield bonus paid out on the animal's next scheduled production -
+    # a real, previously completely unbuilt lever (recomputed directly:
+    # nearly doubles-to-quadruples an animal's raw product yield over a
+    # 30-day season). Gates both the new CARE task
+    # (kagg.policy.tasks.build_task_list's care_aware) and the matching
+    # ranking term (kagg.policy.strategy.animal_revenue_per_tile_day's
+    # care_aware) with one flag.
+    # **Measured and rejected**: 0/50 on both self-play blocks, matching
+    # Part 1's fertilizer-income result exactly - traced to zero real
+    # CARE actions ever firing (same MAINTENANCE-tier single-farmer
+    # capacity wall). See kagg.policy.decide._DEFAULT_ANIMAL_CARE_AWARE
+    # for the full traced story. Kept available for a re-check once
+    # Stage B (hired hands) gives real spare labor.
+    "animal_care_aware": False,
 }
 
 

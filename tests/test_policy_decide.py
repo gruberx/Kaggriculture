@@ -888,6 +888,54 @@ def test_decide_passes_animal_fertilizer_income_aware_through_to_rank_portfolio(
     assert captured and all(args[7] is False for args in captured)
 
 
+def test_decide_defaults_animal_care_aware_to_false_when_unset():
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("animal_care_aware") is False
+    assert decide_module._DEFAULT_ANIMAL_CARE_AWARE is False
+
+
+def test_decide_passes_animal_care_aware_through_to_rank_portfolio(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    captured = []
+    original = decide_module.rank_portfolio
+
+    def spy(*args, **kwargs):
+        captured.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    decide(_obs(), dict(DEFAULT_PARAMS, animal_care_aware=True))
+    assert captured and all(args[8] is True for args in captured)
+
+    captured.clear()
+    decide(_obs(), dict(DEFAULT_PARAMS, animal_care_aware=False))
+    assert captured and all(args[8] is False for args in captured)
+
+
+def test_decide_passes_care_aware_through_to_build_task_list(monkeypatch):
+    # decide() is the only real caller of build_task_list - this is the
+    # glue test for whether params["animal_care_aware"] reaches it;
+    # test_policy_tasks.py's own tests already cover what the flag *does*.
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original = decide_module.build_task_list
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "build_task_list", spy)
+    decide(_obs(), dict(DEFAULT_PARAMS, animal_care_aware=True))
+    assert captured.get("care_aware") is True
+
+    captured.clear()
+    decide(_obs(), dict(DEFAULT_PARAMS, animal_care_aware=False))
+    assert captured.get("care_aware") is False
+
+
 def test_decide_stops_planting_a_late_season_ongoing_crop_when_season_aware():
     # A direct behavioral check, not just a glue check: with only 11 days
     # left, STRAWBERRY (which needs 17 tile-days for its full schedule)
