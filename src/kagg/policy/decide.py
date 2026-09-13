@@ -37,7 +37,7 @@ from kagg.gamelib.constants import ANIMALS, CROPS
 from kagg.gamelib.farm import shed_distance
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
-from kagg.policy.market import market_orders
+from kagg.policy.market import buy_wheat_order, sell_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, should_buy_land
 from kagg.policy.tasks import action_for_unit, assign_units, build_task_list
 
@@ -61,6 +61,15 @@ _DEFAULT_SHED_CAPACITY = 100
 # animal exists on the farm - see the wheat_reserve wiring below and
 # market.sell_orders's own docstring for the real deadlock this avoids.
 _WHEAT_FEED_RESERVE = 10
+
+# T8.5: matches market.py's own module-private
+# _DEFAULT_WHEAT_RESTOCK_THRESHOLD (not imported - underscore-prefixed,
+# module-private there) - needed here now that this module calls
+# sell_orders directly instead of the combined market_orders wrapper, to
+# replicate that wrapper's own belt-and-braces reserve-floor invariant
+# (see the market-assembly block's own comment for why). Keep the two in
+# sync by hand if either default ever changes.
+_DEFAULT_WHEAT_RESTOCK_THRESHOLD = 5
 
 # T8.3d (the user's own observed defect): shed stock left unsold at the
 # episode's last step scores exactly zero (confirmed directly in the
@@ -946,20 +955,36 @@ def decide(obs: dict, params: dict) -> dict:
         "liquidate_wheat_reserve", _DEFAULT_LIQUIDATE_WHEAT_RESERVE
     )
 
-    market = market_orders(
-        shed,
-        obs["market"]["inventory"],
-        obs["market"]["prices"],
-        wheat_on_hand=shed.get("WHEAT", 0),
-        params=params,
-        max_orders=_MAX_MARKET_ORDERS,
-        wheat_reserve=wheat_reserve,
-        liquidate=liquidate,
-        use_fertilizer=use_fertilizer,
-        liquidate_wheat_reserve=liquidate_wheat_reserve,
-        feed_needed=feed_needed,
-    )
+    # T8.5: assembled as `hires + sells + tail`, not "sells first, buys
+    # after" (the pre-T8.5 order) - two deliberate properties, both real,
+    # measured gaps in the old order, not a style preference:
+    #
+    # 1. `hires` sits at index 0 and is never truncated by sells crowding
+    #    the 10-order cap. A hand hired at hour 1 instead of hour 0 loses
+    #    a whole unit-day, and hour 0 - right after the end-of-day
+    #    inventory dump - is exactly when the shed is fullest and `sells`
+    #    is longest, so "sells first" is precisely the ordering most
+    #    likely to starve HIRE of a slot the turn it matters most.
+    # 2. `tail` (land/investment/wheat-restock - all real cash-consuming
+    #    buys) keeps a reserved slot budget but is still emitted *after*
+    #    `sells`, not before: the real interpreter's `_process_market`
+    #    walks the turn's order queue index by index, settling each order
+    #    against the money the *previous* orders in the list already
+    #    changed - a buy placed ahead of a sell would see pre-sale money
+    #    and could fail on cash the agent would otherwise have had that
+    #    same turn.
+    #
+    # `hires_per_day` defaults to 0 (SPEC.md's economic analysis: no
+    # tuning evidence yet that hiring pays for itself), so this reordering
+    # is a no-op by default - `hires` is always empty, and `sells`/`tail`
+    # keep exactly today's relative order and content.
+    target_hires = hires_per_day(params)
+    hires_today = me.get("hires_today", 0)
+    hires: list[list] = []
+    while hires_today + len(hires) < target_hires:
+        hires.append(["HIRE"])
 
+    tail: list[list] = []
     # Seed/animal purchase: arrives next turn (market orders resolve
     # after this turn's unit actions) - the PLANT/PLACE task above
     # naturally starts firing once the seed/animal shows up in a future
@@ -968,35 +993,26 @@ def decide(obs: dict, params: dict) -> dict:
     # came from `_top_investment_choice`'s single top pick - but
     # `fallback_crop` is now a genuinely independent second signal (see
     # its own docstring), so both purchases fire whenever both are
-    # warranted, sharing the same 10-order cap via `len(market) <
-    # _MAX_MARKET_ORDERS` on each. Both still gated on `stuck_animal is
-    # None` - finish placing what's already bought (see the stuck_animal
-    # comment above) before spending on anything else, seed or animal.
-    # Also gated on somewhere to actually use the purchase (T6.5): a seed
-    # needs an empty tile; an animal needs either an empty tile (to build
-    # a fresh structure on) or an existing empty matching structure - it
-    # doesn't need free land specifically, just somewhere to eventually
-    # stand.
-    if (
-        stuck_animal is None
-        and fallback_crop is not None
-        and not have_seed
-        and has_empty_tile
-        and len(market) < _MAX_MARKET_ORDERS
-    ):
+    # warranted. Both still gated on `stuck_animal is None` - finish
+    # placing what's already bought (see the stuck_animal comment above)
+    # before spending on anything else, seed or animal. Also gated on
+    # somewhere to actually use the purchase (T6.5): a seed needs an
+    # empty tile; an animal needs either an empty tile (to build a fresh
+    # structure on) or an existing empty matching structure - it doesn't
+    # need free land specifically, just somewhere to eventually stand.
+    if stuck_animal is None and fallback_crop is not None and not have_seed and has_empty_tile:
         seed_cost = CROPS[fallback_crop]["seed"]
         if me["money"] >= seed_cost:
-            market.append(["BUY_SEED", fallback_crop, 1])
+            tail.append(["BUY_SEED", fallback_crop, 1])
     if (
         acquisition_animal is not None
         and not have_animal_anywhere
         and (has_empty_tile or ANIMALS[acquisition_animal]["structure"] in empty_structure_kinds)
-        and len(market) < _MAX_MARKET_ORDERS
     ):
         animal_cost = ANIMALS[acquisition_animal]["cost"]
         shed_capacity = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
         if me["money"] >= animal_cost and shed_room(shed, shed_capacity) > 0:
-            market.append(["BUY_ANIMAL", acquisition_animal, 1])
+            tail.append(["BUY_ANIMAL", acquisition_animal, 1])
 
     # Land purchase, per the strategic layer's tunable threshold
     # (SPEC-policy.md "1. Strategic layer") plus T8.3's occupancy gates.
@@ -1004,22 +1020,46 @@ def decide(obs: dict, params: dict) -> dict:
     # once, the next turn's observation re-evaluates and queues the next
     # purchase then.
     n_unlocked_extra = len(me.get("unlocked_quadrants", ["NW"])) - 1
-    if len(market) < _MAX_MARKET_ORDERS and should_buy_land(
+    if should_buy_land(
         me["money"], n_unlocked_extra, params,
         free_tiles=free_tiles, unlocked_tiles=unlocked_tiles,
         nearest_free_shed_distance=nearest_free_shed_distance,
     ):
-        market.append(["BUY_LAND"])
+        tail.append(["BUY_LAND"])
 
-    # Hiring: queues the remaining hires needed to reach this day's
-    # target in one go - self-limiting via hires_today without needing an
-    # explicit "only at hour==0" check, since hires_today only resets at
-    # the next day boundary (SPEC.md's economic analysis: default 0 until
-    # tuning measures the real answer, so this is a no-op by default).
-    target_hires = hires_per_day(params)
-    hires_today = me.get("hires_today", 0)
-    while hires_today < target_hires and len(market) < _MAX_MARKET_ORDERS:
-        market.append(["HIRE"])
-        hires_today += 1
+    wheat_order = buy_wheat_order(
+        shed.get("WHEAT", 0), obs["market"]["prices"].get("WHEAT", 0), params, feed_needed=feed_needed
+    )
+    if wheat_order is not None:
+        tail.append(wheat_order)
+
+    # `sells` gets whatever's left after `hires`/`tail` reserve their
+    # slots - mirrors market.market_orders's own belt-and-braces reserve-
+    # floor invariant (not by import; that function operates on a
+    # combined sells+restock list this module no longer builds in one
+    # call - see this block's own docstring above for why the restock
+    # order moved to `tail` instead): once feed is needed and this isn't
+    # a liquidation turn, the *effective* reserve is floored at
+    # `wheat_restock_threshold`, so `sell_orders` can never sell WHEAT
+    # down to a level `buy_wheat_order` (above) would immediately restock
+    # next turn - T8.3l's own fix, preserved here even though the two
+    # calls are no longer bundled.
+    effective_wheat_reserve = wheat_reserve
+    if feed_needed and not liquidate:
+        threshold = params.get("wheat_restock_threshold", _DEFAULT_WHEAT_RESTOCK_THRESHOLD)
+        effective_wheat_reserve = max(wheat_reserve, threshold)
+    sell_max_orders = max(0, _MAX_MARKET_ORDERS - len(hires) - len(tail))
+    sells = sell_orders(
+        shed,
+        obs["market"]["inventory"],
+        params,
+        max_orders=sell_max_orders,
+        wheat_reserve=effective_wheat_reserve,
+        liquidate=liquidate,
+        use_fertilizer=use_fertilizer,
+        liquidate_wheat_reserve=liquidate_wheat_reserve,
+    )
+
+    market = (hires + sells + tail)[:_MAX_MARKET_ORDERS]
 
     return {"farmer": farmer_action, "hands": hand_actions, "market": market[:_MAX_MARKET_ORDERS]}

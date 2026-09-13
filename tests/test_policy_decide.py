@@ -95,6 +95,37 @@ def test_decide_queues_hire_when_hires_per_day_is_positive():
     assert len(hire_orders) == 2
 
 
+def test_hire_is_never_crowded_out_by_sell_orders():
+    # T8.5: the pre-T8.5 order (sells, then buys, HIRE emitted dead
+    # last) could truncate HIRE entirely once enough sellable products
+    # filled the 10-order cap - a hand hired at hour 1 instead of hour 0
+    # loses a whole unit-day. hires + sells + tail puts HIRE at index 0,
+    # never truncated.
+    obs = _obs()
+    obs["private"]["shed"] = {p: 20 for p in PRODUCTS}  # all 9 sellable products
+    params = dict(DEFAULT_PARAMS, hires_per_day=4)
+    action = decide(obs, params)
+    assert action["market"][:4] == [["HIRE"]] * 4
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 4
+    assert len(action["market"]) <= 10
+
+
+def test_investment_buys_keep_a_reserved_slot_and_are_emitted_after_the_sells():
+    # T8.5: BUY_SEED (part of `tail`) must still get a slot even when 9
+    # sellable products alone would otherwise fill all 10, and must be
+    # emitted *after* every SELL order in the list - buys placed ahead of
+    # sells would see pre-sale money in the real interpreter's
+    # index-by-index settlement.
+    obs = _obs()
+    obs["private"]["shed"] = {p: 20 for p in PRODUCTS}
+    action = decide(obs, DEFAULT_PARAMS)  # hires_per_day=0 - no hire competition
+    ops = [o[0] for o in action["market"]]
+    assert "BUY_SEED" in ops
+    sell_positions = [i for i, op in enumerate(ops) if op == "SELL"]
+    buy_seed_position = ops.index("BUY_SEED")
+    assert sell_positions and buy_seed_position > max(sell_positions)
+
+
 def test_decide_passes_investment_anchor_param_to_build_task_list(monkeypatch):
     # T8.1: decide() is the only real caller of build_task_list, so this
     # is the glue test for whether params["investment_anchor"] actually

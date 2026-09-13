@@ -716,8 +716,20 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       production was reached in 0/6 - expected, not a red flag, since `build_task_list` still emits at
       most one new-investment task per turn regardless of hand count (T8.6's job, not T8.4's). 354/354
       full suite (9 new tests), compileall clean, boundary check green.
-- [ ] T8.5 — HIRE order priority (`hires + sells + tail`, buys slot-reserved but emitted after
-      sells to avoid seeing pre-sale money).
+- [x] T8.5 — HIRE order priority. Market list assembled as `hires + sells + tail` (tail =
+      BUY_SEED/BUY_ANIMAL/BUY_LAND/wheat-restock) instead of the old "sells first, HIRE dead last" -
+      `HIRE` now sits at index 0, never truncated by sells crowding the 10-order cap (a hand hired at
+      hour 1 instead of hour 0 loses a whole unit-day, and hour 0 - right after the end-of-day
+      inventory dump - is exactly when `sells` is longest). `tail`'s cash-consuming buys still keep a
+      reserved slot budget but are emitted *after* `sells` - the real interpreter's `_process_market`
+      settles a turn's orders index by index, so a buy ahead of a sell would see pre-sale money.
+      Switched from the combined `market.market_orders()` wrapper to calling `sell_orders`/
+      `buy_wheat_order` directly (replicated `market_orders`'s own belt-and-braces reserve-floor
+      invariant locally, `market.py` untouched - `sell_orders(max_orders=0)` already returns `[]`
+      cleanly, no library change needed). Bit-identical at the shipped `hires_per_day=0` default
+      (confirmed - full suite unchanged, golden table unchanged, the strongest form of the plan's own
+      "neutral expected" acceptance criterion). 356/356 full suite (2 new tests), compileall clean,
+      boundary check green.
 - [ ] T8.6 — Parallel planting + batched seed purchase, bounded by `seeds_on_hand` (atomic PLANT
       validation — load-bearing), `max_plants_per_unit` (real watering-capacity guard), and
       `max_plant_tasks_per_turn`. Must be bit-identical to today at `hires_per_day=0`.
