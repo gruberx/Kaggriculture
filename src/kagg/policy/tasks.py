@@ -51,6 +51,22 @@ PRIORITY_PREVENT_LOSS = 0
 PRIORITY_HARVEST = 1
 PRIORITY_ROUTINE_CARE = 2
 PRIORITY_PLANT = 3
+# T8.15: a real intermediate tier between PLANT and MAINTENANCE - not
+# named in SPEC-policy.md's original four-tier list, added specifically
+# for `water_bonus_window_aware`'s out-of-window watering (see
+# `_plant_tile_tasks`'s own docstring). T8.11 first tried demoting this
+# work all the way to PRIORITY_MAINTENANCE and measured a real, decisive
+# loss (WEED count tripled - see `kagg.policy.decide._DEFAULT_WATER_
+# BONUS_WINDOW_AWARE`'s comment): tied with DIG/COLLECT_FERTILIZER, it
+# could miss 2 consecutive days once PLANT tasks filled the queue ahead
+# of it, converting productive tiles to weed. This tier still yields to
+# PLANT (so PLANT keeps winning the tiles T8.11 was built to free), but
+# outranks true opportunistic maintenance, giving a real shot at being
+# reached before a second consecutive miss. `assign_units` groups tiers
+# via `sorted({t.priority for t in tasks})` - any sortable value works,
+# no other code needs to change to support a value between two existing
+# integer tiers.
+PRIORITY_LOW_VALUE_CARE = 3.5
 PRIORITY_MAINTENANCE = 4
 
 # How much WHEAT to PICKUP in one trip once any is needed for feeding -
@@ -441,11 +457,23 @@ def _plant_tile_tasks(
             # guessing at a mechanism that doesn't exist - left
             # completely untouched, a real, honest scope-narrowing, not
             # an oversight.
+            #
+            # T8.15: demoted to PRIORITY_LOW_VALUE_CARE, not PRIORITY_
+            # MAINTENANCE - T8.11's own first attempt at MAINTENANCE
+            # (tied with DIG/COLLECT_FERTILIZER, below PLANT) was measured
+            # and rejected: PLANT count did rise (+14%, confirming labor
+            # really was freed) but WEED count more than tripled, because
+            # a demoted watering could then miss 2 consecutive days once
+            # PLANT filled the queue ahead of it. PRIORITY_LOW_VALUE_CARE
+            # still yields to PLANT (the whole point) but sits above true
+            # opportunistic maintenance, giving it a real shot at being
+            # reached before a second miss - see that constant's own
+            # docstring.
             cd = CROPS[tile["crop"]]
             if not cd["ongoing"]:
                 age = current_day - tile["planted_day"]
                 if age not in watering_bonus_window(tile["crop"]):
-                    priority = PRIORITY_MAINTENANCE
+                    priority = PRIORITY_LOW_VALUE_CARE
         tasks.append(Task(priority, pos, "WATER"))
     if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(tile, current_day):
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))

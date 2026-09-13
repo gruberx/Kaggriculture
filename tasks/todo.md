@@ -919,6 +919,82 @@ third observation (idle starting capital) was never directly built as its own ta
 diagnosed as a downstream symptom of the same watering-crowding bottleneck T8.11 targeted, and stays
 unresolved for the same reason T8.11 was rejected.
 
+## Stage D — fixing Stage C's three named leads (2026-09-13, same session)
+
+The user's own follow-up after reviewing Stage C's honest rejections: since COW/SHEEP's own
+theoretical full-care+fertilizer profitability ($215-275/tile-day, dwarfing every crop) was never
+actually disproven - every measurement that would test it was contaminated by a separate,
+unrelated architectural bug - fix the three named leads first, then re-test. Investigated and
+confirmed directly against `kaggriculture.py`: the game engine imposes no cap at all on animal
+count/type (`BUY_ANIMAL`/`BUILD_COOP`/`BUILD_PASTURE`/`PLACE` check only tile state and money/shed
+capacity) and `PICKUP` has no structural prerequisite (only `PLACE` needs both an animal in hand and
+a built structure) - both the "one animal type" cap and the serial BUILD-then-PICKUP-then-PLACE
+pipeline are this codebase's own choices, not game rules (see the full plan at
+`.claude/plans/jazzy-jumping-lamport.md` for T8.18/T8.20, not yet built this session).
+
+- [x] T8.14 — `score_portfolio(...)` (new) exposes the raw `{name: score}` dict `rank_portfolio` has
+      always computed internally but never returned; `rank_portfolio` becomes a thin sorting wrapper
+      over it (bit-identical output, its own RED test locks the relationship down). `_top_investment_
+      choice` gains `investment_commit_margin`: an ANIMAL candidate is only returned once its score
+      clears `best_crop_score * (1 + investment_commit_margin)` - otherwise skipped, keep walking the
+      ranking. Scoped to animals only (crops are cheap to reverse; `BUY_ANIMAL` isn't). Default `0.0`
+      (no margin, bit-identical).
+      **Measured alone against the checked-in baseline**: 100% ties at every margin tried (0.05,
+      0.10, 0.20), both blocks - expected, not informative: under today's default
+      (`animal_consumption_horizon_aware=False`), animal scores never come close enough to a crop's
+      for the margin to ever bind. **Measured combined with `animal_consumption_horizon_aware`
+      (T8.10) instead - the real test, since T8.10's own rejection is exactly what this margin
+      targets**: losses dropped from 10/50 (T8.10 alone, working) to 3/50 (margin=0.05) to 0/50
+      (margin=0.10 and 0.20); holdout losses dropped from 10/50 to 6/50 to 2/50 (both 0.10 and 0.20).
+      **Confirms the diagnosis and the fix work exactly as designed** - the hysteresis bug really was
+      the cause, and the margin really suppresses it. Not yet a full accept: `accept_candidate`
+      requires beating the baseline, and this combination only neutralizes the harm (ties, not wins) -
+      animals still rarely get chosen at all under today's baseline valuation, so removing a bad
+      decision doesn't yet create a new good one. `investment_commit_margin` stays at its `0.0`
+      default pending T8.17's fuller test (fertilizer/CARE, where the real upside is expected). 393/393
+      suite green (7 new tests), compileall clean, boundary check green, bit-identical at defaults.
+- [x] T8.15 — `PRIORITY_LOW_VALUE_CARE = 3.5` (new tier, between `PRIORITY_PLANT` and `PRIORITY_
+      MAINTENANCE` - `assign_units` already groups tiers via `sorted({t.priority for t in tasks})`,
+      any sortable value works). `water_bonus_window_aware`'s out-of-window watering demotes here
+      instead of all the way to `PRIORITY_MAINTENANCE` (T8.11's own rejected target).
+      **Measured (re-running `tools/measure_t811.py` unchanged - same flag, new mechanism
+      underneath)**: 27/50 working (54%), 24/50 holdout (48%) - a huge recovery from T8.11's own
+      decisive 7/50 (14%)/3/50 (6%) rejection, confirming the softer tier really does stop the
+      weed-conversion cost, but not yet a statistically decisive win either
+      (`accept_candidate`: False, wide overlapping intervals). Real progress, not a full accept -
+      `water_bonus_window_aware` stays at its `False` default pending further tuning (see below).
+- [x] T8.16(a)+(b) — `pending_task_count` (the value `dynamic_hiring` scales hiring from) now excludes
+      `_ROUTINE_RECURRING_OPS = {WATER, FEED}` - these recur once per tile/animal per day regardless
+      of labor level, so counting them inflated the backlog signal without reflecting genuine
+      marginal work (T8.12's own traced root cause). `hires_per_day` gains `hire_buffer_fraction`
+      (default `0.0`) - the user's own explicit "5-10% запас" ask - scaling the computed target up
+      before clipping to `[min_hires_per_day, max_hires_per_day]`.
+      **Measured (counting fix alone, buffer still at 0.0)**: 31/50 working (62%), 24/50 holdout
+      (48%) - again a huge recovery from T8.12's own decisive 2/50 (4%)/4/50 (8%) rejection, same
+      "real progress, not yet decisive" shape as T8.15. **Measured T8.15+T8.16(a) combined** (testing
+      the plan's own predicted dependency - freed labor giving hiring real work to scale into):
+      29/50 working (58%), 21/50 holdout (42%) - **contrary to the stated prediction, combining did
+      not beat either alone** (holdout actually dipped from 48% to 42%). An honest, informative
+      surprise: the two fixes on their own recover from decisive rejection to parity, but don't
+      compound into a win yet - `min_hires_per_day`/`max_hires_per_day`/`turns_per_task_estimate`/
+      `hire_buffer_fraction` have never actually been swept (T8.16's own plan named this explicitly:
+      "not yet actually swept... any earlier sweep would have been contaminated by (a)'s bug
+      anyway"). **Movement overhead (T8.16(c))**: deliberately not built as separate code - see the
+      plan's own reasoning (the empirical `turns_per_task_estimate` ratio already absorbs it).
+      `dynamic_hiring`/`water_bonus_window_aware` both stay at their `False` defaults - T8.16(d)'s
+      joint `coordinate_ascent` sweep over the four correlated parameters is the next, not-yet-run
+      step this session's evidence points to before either can be fairly judged.
+- [ ] T8.16(d) — joint `coordinate_ascent` sweep over `{min_hires_per_day, max_hires_per_day,
+      turns_per_task_estimate, hire_buffer_fraction}` (SPEC-tuning.md: correlated parameters swept
+      together), with `dynamic_hiring=True` and (optionally) `water_bonus_window_aware=True` - not
+      yet run this session. See the plan file for the full design.
+- [ ] T8.17 — re-measure `animal_consumption_horizon_aware`/`animal_fertilizer_income_aware`/
+      `animal_care_aware` individually then combined, against whatever T8.16(d) lands on - the actual
+      "are COW/SHEEP genuinely profitable" answer. Not yet run.
+- [ ] T8.18, T8.19, T8.20 — parallelize the animal-acquisition pipeline, a small crop basket instead
+      of always the single top pick, and lifting the single-animal-type cap once labor supports it.
+      Investigated and confirmed against `kaggriculture.py` (see the plan file), not yet built.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

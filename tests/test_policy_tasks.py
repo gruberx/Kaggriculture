@@ -14,6 +14,7 @@ consecutive_unwatered>=1 (SPEC-gamelib.md: 2 consecutive misses -> weed).
 from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
 from kagg.policy.tasks import (
     PRIORITY_HARVEST,
+    PRIORITY_LOW_VALUE_CARE,
     PRIORITY_MAINTENANCE,
     PRIORITY_PLANT,
     PRIORITY_PREVENT_LOSS,
@@ -94,11 +95,17 @@ def test_build_task_list_water_bonus_window_aware_demotes_watering_outside_the_b
     # conversion. Gated: default behavior (flag off) keeps this at
     # PRIORITY_ROUTINE_CARE (see test_build_task_list_routine_watering_is_
     # lower_priority_than_prevent_loss, same fixture, flag omitted).
+    #
+    # T8.15: demotes to PRIORITY_LOW_VALUE_CARE, not PRIORITY_MAINTENANCE -
+    # T8.11's own first attempt at PRIORITY_MAINTENANCE was measured and
+    # rejected (WEED count tripled, see kagg.policy.decide's own
+    # _DEFAULT_WATER_BONUS_WINDOW_AWARE comment) because it let watering
+    # miss 2 consecutive days once PLANT filled the queue ahead of it.
     tiles = _empty_tiles()
     tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # age 0, WHEAT
     tasks = build_task_list(tiles, current_day=0, water_bonus_window_aware=True)
     assert len(tasks) == 1
-    assert tasks[0].priority == PRIORITY_MAINTENANCE
+    assert tasks[0].priority == PRIORITY_LOW_VALUE_CARE
     assert tasks[0].op == "WATER"
 
 

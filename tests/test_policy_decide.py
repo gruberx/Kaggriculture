@@ -113,6 +113,51 @@ def test_hire_is_never_crowded_out_by_sell_orders():
     assert len(action["market"]) <= 10
 
 
+def test_decide_dynamic_hiring_excludes_routine_watering_from_the_task_count(monkeypatch):
+    # T8.16(a), fixing T8.12's own traced root cause: len(tasks) counted
+    # routine, recurring WATER (and FEED) the same as genuine bottleneck
+    # work (PLANT/HARVEST/acquisition), over-hiring without a
+    # corresponding gain - see kagg.policy.strategy's own dynamic_hiring
+    # rejection comment. pending_task_count must exclude WATER/FEED
+    # specifically, not just count every queued task.
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    for i in range(5):
+        tiles[0][i] = {
+            "kind": "PLANT", "crop": "WHEAT", "planted_day": 0,
+            "watered_today": False, "consecutive_unwatered": 0, "yield_units": 0,
+            "max_lifespan_step": 120, "fertilized_until_day": -1,
+        }
+
+    captured_tasks = {}
+    original_build = decide_module.build_task_list
+
+    def build_spy(*args, **kwargs):
+        result = original_build(*args, **kwargs)
+        captured_tasks["tasks"] = result
+        return result
+
+    captured_hire_kwargs = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "pending_task_count" in kwargs:
+            captured_hire_kwargs.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "build_task_list", build_spy)
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, dynamic_hiring=True))
+
+    tasks = captured_tasks["tasks"]
+    assert sum(1 for t in tasks if t.op == "WATER") == 5  # sanity: the 5 tiles really queue WATER
+    expected = sum(1 for t in tasks if t.op not in ("WATER", "FEED"))
+    assert captured_hire_kwargs.get("pending_task_count") == expected
+    assert expected < len(tasks)  # the exclusion must actually remove something
+
+
 def test_investment_buys_keep_a_reserved_slot_and_are_emitted_after_the_sells():
     # T8.5: BUY_SEED (part of `tail`) must still get a slot even when 9
     # sellable products alone would otherwise fill all 10, and must be
@@ -337,13 +382,13 @@ def test_decide_passes_net_of_seed_cost_through_to_rank_portfolio(monkeypatch):
     import kagg.policy.decide as decide_module
 
     captured = []
-    original = decide_module.rank_portfolio
+    original = decide_module.score_portfolio
 
     def spy(*args, **kwargs):
         captured.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    monkeypatch.setattr(decide_module, "score_portfolio", spy)
     decide(_obs(), dict(DEFAULT_PARAMS, crop_net_of_seed_cost=False))
     assert captured and all(args[3] is False for args in captured)
 
@@ -531,6 +576,48 @@ def test_top_investment_choice_skips_an_animal_that_cannot_mature_in_time():
     params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
     choice = _top_investment_choice(crashed_melon_inventory, current_day=22, params=params)
     assert choice == ("SHEEP", "animal")
+
+
+def test_top_investment_choice_commit_margin_defaults_to_zero():
+    # T8.14: investment_commit_margin defaults to 0.0 - bit-identical to
+    # every pre-T8.14 caller, including this file's own crashed-MELON
+    # wiring test above (COW at 86.0 vs STRAWBERRY's 36.06 - miles beyond
+    # any margin, so this alone wouldn't distinguish default-off from a
+    # margin - the point is DEFAULT_PARAMS itself carries no such key and
+    # must not error or change behavior).
+    crashed_melon_inventory = {"MELON": MARKET_I0 + 100_000}
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    assert "investment_commit_margin" not in params or params["investment_commit_margin"] == 0.0
+    choice = _top_investment_choice(crashed_melon_inventory, current_day=0, params=params)
+    assert choice == ("COW", "animal")
+
+
+def test_top_investment_choice_commit_margin_blocks_a_narrow_animal_lead():
+    # T8.14, the user's own observation traced directly in this session's
+    # own T8.10 rejection: a razor-thin animal lead over the best crop is
+    # exactly the scenario that let a 2-turn market wobble fire a real,
+    # irreversible BUY_ANIMAL. Constructed directly (verified via
+    # score_portfolio, not guessed): at MILK inventory 10041 with MELON
+    # crashed out of the running, COW scores 39.0 vs STRAWBERRY's own
+    # 36.059 - an 8.16% lead, real but inside a 10% margin. With
+    # investment_commit_margin=0.10, COW must NOT be returned - the
+    # ranking falls through to the next candidate that clears the bar
+    # (a crop needs no margin check at all - only animals do, matching
+    # the exact traced failure mode).
+    market_inventory = {"MELON": MARKET_I0 + 100_000, "EGG": MARKET_I0 + 100_000, "WOOL": MARKET_I0 + 100_000, "MILK": 10041}
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False, investment_commit_margin=0.10)
+    choice = _top_investment_choice(market_inventory, current_day=0, params=params)
+    assert choice == ("STRAWBERRY", "crop")
+
+
+def test_top_investment_choice_commit_margin_allows_a_wide_animal_lead():
+    # Same shape, MILK inventory 10040 - COW scores 40.0 vs STRAWBERRY's
+    # 36.059, an 10.93% lead, just past the same 10% margin. Must still
+    # return the animal - the margin blocks a narrow lead, not every one.
+    market_inventory = {"MELON": MARKET_I0 + 100_000, "EGG": MARKET_I0 + 100_000, "WOOL": MARKET_I0 + 100_000, "MILK": 10040}
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False, investment_commit_margin=0.10)
+    choice = _top_investment_choice(market_inventory, current_day=0, params=params)
+    assert choice == ("COW", "animal")
 
 
 def test_decide_buys_a_seed_for_the_top_crop_alongside_the_top_animal_by_default():
@@ -873,13 +960,13 @@ def test_decide_passes_days_remaining_through_to_rank_portfolio_only_when_a_flag
     import kagg.policy.decide as decide_module
 
     captured = []
-    original = decide_module.rank_portfolio
+    original = decide_module.score_portfolio
 
     def spy(*args, **kwargs):
         captured.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    monkeypatch.setattr(decide_module, "score_portfolio", spy)
     decide(_obs(), dict(DEFAULT_PARAMS, animal_net_of_cost=False))  # both flags off
     assert captured and all(args[4] is None and args[5] is False and args[6] is False for args in captured)
 
@@ -907,13 +994,13 @@ def test_decide_passes_animal_fertilizer_income_aware_through_to_rank_portfolio(
     import kagg.policy.decide as decide_module
 
     captured = []
-    original = decide_module.rank_portfolio
+    original = decide_module.score_portfolio
 
     def spy(*args, **kwargs):
         captured.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    monkeypatch.setattr(decide_module, "score_portfolio", spy)
     decide(_obs(), dict(DEFAULT_PARAMS, animal_fertilizer_income_aware=True))
     assert captured and all(args[7] is True for args in captured)
 
@@ -933,13 +1020,13 @@ def test_decide_passes_animal_care_aware_through_to_rank_portfolio(monkeypatch):
     import kagg.policy.decide as decide_module
 
     captured = []
-    original = decide_module.rank_portfolio
+    original = decide_module.score_portfolio
 
     def spy(*args, **kwargs):
         captured.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    monkeypatch.setattr(decide_module, "score_portfolio", spy)
     decide(_obs(), dict(DEFAULT_PARAMS, animal_care_aware=True))
     assert captured and all(args[8] is True for args in captured)
 

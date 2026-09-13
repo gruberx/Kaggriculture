@@ -364,7 +364,7 @@ def animal_revenue_per_tile_day(
     return product_price / a["interval"]
 
 
-def rank_portfolio(
+def score_portfolio(
     market_inventory: dict,
     crop_tile_counts: dict | None = None,
     unlocked_shops: list | None = None,
@@ -375,10 +375,17 @@ def rank_portfolio(
     animal_fertilizer_income_aware: bool = False,
     animal_care_aware: bool = False,
     animal_consumption_horizon_aware: bool = False,
-) -> list[str]:
-    """All crop and animal names, ranked descending by revenue per
-    tile-day at `market_inventory`'s *current* level for each one's own
-    product (missing entries fall back to MARKET_I0, i.e. base price).
+) -> dict[str, float]:
+    """Every crop and animal name mapped to its own revenue per tile-day
+    at `market_inventory`'s *current* level for its own product (missing
+    entries fall back to MARKET_I0, i.e. base price) - `rank_portfolio`
+    (below) is a thin wrapper sorting this same dict descending; this
+    function exists separately (T8.14) so a caller that needs the raw
+    scores themselves, not just their rank order - `_top_investment_
+    choice`'s own commit-margin check, which compares a candidate
+    animal's score directly against the best crop's score - doesn't have
+    to recompute them by hand or trust a second, potentially-drifting
+    calculation.
 
     `crop_tile_counts` (T8.3f, the user's own observation): how many
     tiles of each crop are already planted on the farm, so a *new* tile's
@@ -478,6 +485,33 @@ def rank_portfolio(
             animal_fertilizer_income_aware, fertilizer_sell_at_inventory, animal_care_aware,
             animal_consumption_horizon_aware, consumption_rate,
         )
+    return scores
+
+
+def rank_portfolio(
+    market_inventory: dict,
+    crop_tile_counts: dict | None = None,
+    unlocked_shops: list | None = None,
+    net_of_seed_cost: bool = False,
+    days_remaining: int | None = None,
+    rank_season_aware: bool = False,
+    animal_net_of_cost: bool = False,
+    animal_fertilizer_income_aware: bool = False,
+    animal_care_aware: bool = False,
+    animal_consumption_horizon_aware: bool = False,
+) -> list[str]:
+    """All crop and animal names, ranked descending by revenue per
+    tile-day - a thin wrapper sorting `score_portfolio`'s own dict (see
+    its docstring for every argument's meaning and measured history).
+    Kept as a separate function (rather than inlining the sort at every
+    call site) since almost every caller only needs the ranking, not the
+    raw numbers.
+    """
+    scores = score_portfolio(
+        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost, days_remaining,
+        rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware, animal_care_aware,
+        animal_consumption_horizon_aware,
+    )
     return sorted(scores, key=scores.__getitem__, reverse=True)
 
 
@@ -566,6 +600,10 @@ _DEFAULT_TURNS_PER_TASK_ESTIMATE = 2.0
 # hire costs $1 regardless, so this is not a blanket "never hire while
 # poor" rule, only the specific reserve the user named.
 _DEFAULT_HIRE_CASH_RESERVE = 0
+
+# T8.16: 0.0 (no buffer) reproduces the pre-T8.16 formula exactly for
+# every caller that doesn't set it - see hires_per_day's own docstring.
+_DEFAULT_HIRE_BUFFER_FRACTION = 0.0
 
 # **dynamic_hiring measured and rejected**: 2/50 working, 4/50 holdout, 0
 # ties either block - matches this task's own stated prediction up front
@@ -743,6 +781,15 @@ def hires_per_day(
     it implicit in the floor alone: when `money` is given and falls below
     it, hiring drops to `min_hires_per_day` regardless of backlog size.
 
+    `hire_buffer_fraction` (T8.16, the user's own explicit ask: "небольшой
+    запас рабочей силы для компенсации всплеска потребности работы, на
+    вскидку 5-10%") scales the raw target up by `(1 + hire_buffer_
+    fraction)` (rounded up) *before* clipping to `[min_hires_per_day,
+    max_hires_per_day]` - a deliberate margin against the backlog signal
+    itself being a noisy, one-turn-snapshot estimate of a fast-changing
+    farm. Default `0.0` (no buffer), reproducing the exact pre-T8.16
+    formula for every caller that doesn't set it.
+
     Graceful fallback to the plain static value (not an error) whenever
     `dynamic_hiring` is off, or on but `pending_task_count` is `None` (no
     task-list information given) - matches `net_of_cost`'s own "no
@@ -765,4 +812,6 @@ def hires_per_day(
     turns_left_today = max(1, turns_per_day - hour)
     needed_unit_turns = pending_task_count * turns_per_task
     target = math.ceil(needed_unit_turns / turns_left_today) - 1
+    buffer_fraction = params.get("hire_buffer_fraction", _DEFAULT_HIRE_BUFFER_FRACTION)
+    target = math.ceil(target * (1 + buffer_fraction))
     return min(max(target, min_hires), max_hires)

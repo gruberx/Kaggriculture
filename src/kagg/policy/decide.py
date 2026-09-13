@@ -38,7 +38,7 @@ from kagg.gamelib.farm import shed_distance
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
 from kagg.policy.market import buy_wheat_order, sell_orders
-from kagg.policy.strategy import hires_per_day, rank_portfolio, should_buy_land
+from kagg.policy.strategy import hires_per_day, rank_portfolio, score_portfolio, should_buy_land
 from kagg.policy.tasks import action_for_unit, assign_units, build_task_list
 
 _MAX_MARKET_ORDERS = 10
@@ -54,6 +54,14 @@ _DEFAULT_SEASON_LENGTH_DAYS = 30
 # default (gamelib.market), a named default rather than a silently
 # assumed literal.
 _DEFAULT_TURNS_PER_DAY = 24
+# T8.16(a): recur once per tile/animal per day regardless of labor level
+# (a tile needs exactly one WATER, an animal exactly one FEED, whether 1
+# or 10 hands exist) - excluded from dynamic_hiring's `pending_task_count`
+# signal, which should reflect genuine *marginal* work that scales with
+# labor, not a standing backlog that doesn't. See the dynamic_hiring
+# rejection comment in kagg.policy.strategy for the traced story this
+# fixes.
+_ROUTINE_RECURRING_OPS = frozenset({"WATER", "FEED"})
 
 # Real default (kaggriculture.json's shedCapacity=100) - like
 # season_length_days above, this isn't exposed in the observation at
@@ -543,6 +551,18 @@ _DEFAULT_ANIMAL_CARE_AWARE = False
 # same convention as T8.3q's fertilizer/CARE rejections.
 _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE = False
 
+# T8.14: exactly the "concrete lead for later" T8.10's own rejection
+# comment above named - a minimum score margin an animal candidate must
+# clear over the best crop before `_top_investment_choice` will return
+# it, protecting against the specific, traced failure mode (a razor-thin,
+# single-turn lead flipped by ordinary intraday market movement firing a
+# real, irreversible BUY_ANIMAL). Default 0.0 (no margin - any animal
+# simply ahead of every crop qualifies), reproducing the exact pre-T8.14
+# behavior for every caller that doesn't set it. Not yet measured in
+# self-play - see `_top_investment_choice`'s own docstring for the
+# mechanism.
+_DEFAULT_INVESTMENT_COMMIT_MARGIN = 0.0
+
 # T8.11, the user's own observation, traced to a real, decisive bottleneck:
 # the real WATER handler only ever adds yield for a one-time crop
 # (WHEAT/CARROT/MELON) on ages inside watering_bonus_window(crop) - every
@@ -806,12 +826,30 @@ def _top_investment_choice(
 
     `crop_tile_counts` (T8.3f), `unlocked_shops` (T8.3i), and
     `net_of_seed_cost` (T8.3k) are all passed straight through to
-    `rank_portfolio` - see its own docstring. `rank_season_aware`/
+    `score_portfolio` - see its own docstring. `rank_season_aware`/
     `animal_net_of_cost`/`animal_fertilizer_income_aware` (T8.3m/T8.3q) are
     read from `params` here (not taken as their own arguments, unlike the
     others) since the first two also govern `days_remaining` itself,
     computed once from the same `season_length_days` this function
     already needs for the maturity checks below.
+
+    `investment_commit_margin` (T8.14, the user's own follow-up after
+    T8.10's rejection): an ANIMAL candidate is only ever returned once its
+    score clears `best_crop_score * (1 + investment_commit_margin)` -
+    otherwise it's skipped (as if it hadn't qualified) and the walk
+    continues to the next candidate. Scoped to animals only, matching the
+    exact failure T8.10 traced: buying an animal is a real, effectively
+    irreversible commitment (`stuck_animal` then finishes acquiring it
+    regardless of what the ranking says next turn), while a crop-to-crop
+    reordering costs at most one seed purchase - so only the animal side
+    needs protection from a razor-thin, single-turn lead that a routine
+    intraday market wobble could flip. `best_crop_score` is computed once
+    (the highest crop score in the same `score_portfolio` call, regardless
+    of maturity - the margin is about *score* separation, not about which
+    crop would ultimately be picked) rather than per-animal-candidate,
+    since it doesn't change while walking the same ranking. Defaults to
+    `0.0` (no margin - any animal that's simply ahead qualifies, exactly
+    the pre-T8.14 behavior for every caller that doesn't set it).
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
@@ -823,16 +861,21 @@ def _top_investment_choice(
     animal_consumption_horizon_aware = params.get(
         "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
     )
+    investment_commit_margin = params.get("investment_commit_margin", _DEFAULT_INVESTMENT_COMMIT_MARGIN)
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
-    for name in rank_portfolio(
+    scores = score_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
         days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
         animal_care_aware, animal_consumption_horizon_aware,
-    ):
+    )
+    best_crop_score = max(scores[c] for c in CROPS)
+    for name in sorted(scores, key=scores.__getitem__, reverse=True):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
                 return name, "crop"
         elif name in ANIMALS:
+            if scores[name] < best_crop_score * (1 + investment_commit_margin):
+                continue
             if _animal_has_time_to_mature(name, current_day, season_length_days):
                 return name, "animal"
     return None
@@ -1155,8 +1198,17 @@ def decide(obs: dict, params: dict) -> dict:
     # the plain `hires_per_day(params)` call it replaces whenever
     # `dynamic_hiring` is off (the shipped default) - the extra arguments
     # are simply unused in that case.
+    #
+    # T8.16(a): pending_task_count excludes `_ROUTINE_RECURRING_OPS`
+    # (WATER/FEED) - T8.12's own traced rejection found `len(tasks)`
+    # counted these the same as genuine bottleneck work (PLANT/HARVEST/
+    # acquisition), over-hiring without a corresponding gain, since a
+    # tile needs exactly one WATER/FEED per day *regardless* of how many
+    # hands exist - more labor doesn't create more of this work, unlike
+    # PLANT/HARVEST, which scale with how many hands are free to act.
+    pending_task_count = sum(1 for t in tasks if t.op not in _ROUTINE_RECURRING_OPS)
     target_hires = hires_per_day(
-        params, pending_task_count=len(tasks), hour=current_hour,
+        params, pending_task_count=pending_task_count, hour=current_hour,
         turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY), money=me["money"],
     )
     hires_today = me.get("hires_today", 0)

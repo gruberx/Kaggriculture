@@ -47,19 +47,27 @@ DEFAULT_PARAMS = {
     # how much work actually needs doing - hires_per_day() gains a
     # dynamic mode that scales the hiring target from the real task
     # backlog (turns_per_task_estimate-weighted) instead.
-    # **Measured and rejected**: 2/50 working, 4/50 holdout - traced to
-    # `len(tasks)` counting recurring watering the same as genuine
-    # bottleneck work, over-hiring up to 5 hands at once with many left
-    # idle (PASS x68 in one traced episode) while cost outran the gain.
-    # See kagg.policy.strategy's own dynamic_hiring rejection comment
-    # (near _DEFAULT_HIRE_CASH_RESERVE) for the full traced story and the
-    # concrete follow-up lead it exposes. Kept available (tested, off by
-    # default) for that future fix.
+    # **Measured and rejected (pre-T8.16(a) fix)**: 2/50 working, 4/50
+    # holdout - traced to `len(tasks)` counting recurring watering the
+    # same as genuine bottleneck work, over-hiring up to 5 hands at once
+    # with many left idle (PASS x68 in one traced episode) while cost
+    # outran the gain. T8.16(a) fixes the exact root cause (routine
+    # WATER/FEED now excluded from the count) - not yet re-measured with
+    # the fix in place. See kagg.policy.strategy's own dynamic_hiring
+    # rejection comment (near _DEFAULT_HIRE_CASH_RESERVE) for the full
+    # traced story. Kept off by default until a real held-out result
+    # accepts turning it on.
     "dynamic_hiring": False,
     "min_hires_per_day": 1,  # matches hires_per_day's own floor
     "max_hires_per_day": 8,  # fib hire #8 costs $21 - still negligible
     "turns_per_task_estimate": 2.0,  # measured ~2.3 turns/task; conservative
     "hire_cash_reserve": 0,  # the user's own "protect starting capital" ask
+    # T8.16, the user's own explicit ask ("небольшой запас рабочей силы
+    # для компенсации всплеска потребности работы, на вскидку 5-10%") -
+    # scales dynamic_hiring's raw target up before clipping to
+    # [min_hires_per_day, max_hires_per_day]. 0.0 (no buffer) reproduces
+    # the pre-T8.16 formula exactly. Not yet swept.
+    "hire_buffer_fraction": 0.0,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,
@@ -274,6 +282,14 @@ DEFAULT_PARAMS = {
     # margin/turn-count gate on investment commitment) it exposes. Kept
     # available (tested, off by default) for that future fix.
     "animal_consumption_horizon_aware": False,
+    # T8.14: exactly the follow-up lead named above - a minimum score
+    # margin an animal candidate must clear over the best crop before
+    # _top_investment_choice will return it, protecting against a
+    # razor-thin, single-turn lead flipping on ordinary market movement.
+    # Default 0.0 (no margin, exact pre-T8.14 behavior). Not yet measured
+    # in self-play - see kagg.policy.decide's own comment for the
+    # mechanism.
+    "investment_commit_margin": 0.0,
     # T8.11, the user's own observation, traced to a real bottleneck: the
     # real WATER handler only adds yield for a one-time crop on ages
     # inside its bonus window - every other day's watering is pure

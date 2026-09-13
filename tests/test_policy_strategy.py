@@ -16,10 +16,12 @@ import pytest
 from kagg.gamelib.constants import MARKET_I0
 from kagg.gamelib.market import expected_daily_consumption
 from kagg.policy.strategy import (
+    _crop_yield_and_tile_days,
     animal_revenue_per_tile_day,
     crop_revenue_per_tile_day,
     hires_per_day,
     rank_portfolio,
+    score_portfolio,
     should_buy_land,
 )
 
@@ -518,6 +520,36 @@ def test_hires_per_day_dynamic_hiring_cash_reserve_defaults_to_zero():
     assert got == 3
 
 
+def test_hires_per_day_dynamic_hiring_respects_a_spare_capacity_buffer():
+    # T8.16, the user's own explicit ask ("небольшой запас рабочей силы
+    # для компенсации всплеска потребности, на вскидку 5-10%"): the
+    # computed target is scaled up by (1 + hire_buffer_fraction) before
+    # clipping to [min, max]. 48 tasks, turns_per_task_estimate=2.0,
+    # 24 turns left -> raw target = ceil(96/24) - 1 = 3; with a 10%
+    # buffer, ceil(3 * 1.10) = ceil(3.3) = 4.
+    params = {"dynamic_hiring": True, "hire_buffer_fraction": 0.10}
+    got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24)
+    assert got == 4
+
+
+def test_hires_per_day_dynamic_hiring_buffer_defaults_to_zero():
+    # No hire_buffer_fraction given - bit-identical to the unbuffered
+    # formula for every pre-T8.16 caller.
+    without_buffer = hires_per_day({"dynamic_hiring": True}, pending_task_count=48, hour=0, turns_per_day=24)
+    with_zero_buffer = hires_per_day(
+        {"dynamic_hiring": True, "hire_buffer_fraction": 0.0}, pending_task_count=48, hour=0, turns_per_day=24
+    )
+    assert without_buffer == with_zero_buffer == 3
+
+
+def test_hires_per_day_dynamic_hiring_buffer_still_respects_max_hires_per_day():
+    # A large buffer must not bypass the ceiling - clipping happens after
+    # the buffer is applied, not instead of it.
+    params = {"dynamic_hiring": True, "hire_buffer_fraction": 1.0, "max_hires_per_day": 3}
+    got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24)
+    assert got == 3
+
+
 def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():
     # T8.3q: kaggriculture.py's _daily_refresh_animals sets
     # fertilizer_available=True every surviving day regardless of
@@ -745,4 +777,46 @@ def test_rank_portfolio_animal_consumption_horizon_aware_defaults_to_false():
     market = {}
     assert rank_portfolio(market, days_remaining=28, animal_net_of_cost=True) == rank_portfolio(
         market, days_remaining=28, animal_net_of_cost=True, animal_consumption_horizon_aware=False
+    )
+
+
+def test_score_portfolio_matches_rank_portfolio_ordering():
+    # T8.14: rank_portfolio is refactored to be a thin wrapper of
+    # score_portfolio - same arguments, same underlying numbers, this
+    # test locks that relationship down directly rather than trusting it
+    # by construction. score_portfolio exposes the raw {name: score}
+    # dict rank_portfolio has always computed internally but never
+    # returned - needed by _top_investment_choice's own commit-margin
+    # check (T8.14), which must compare a candidate's score against the
+    # best crop's score, not just its rank position.
+    market = {"TOMATO": MARKET_I0 - 50}
+    scores = score_portfolio(market, net_of_seed_cost=True)
+    ranking = rank_portfolio(market, net_of_seed_cost=True)
+    assert sorted(scores, key=scores.__getitem__, reverse=True) == ranking
+
+
+def test_score_portfolio_returns_every_crop_and_animal():
+    scores = score_portfolio(_MARKET_AT_I0)
+    assert set(scores) == {"WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON", "GOOSE", "COW", "SHEEP"}
+
+
+def test_score_portfolio_matches_independent_per_item_calculation():
+    # Cross-checked directly against the same independently-verified
+    # crop_revenue_per_tile_day/animal_revenue_per_tile_day calls
+    # test_rank_portfolio_orders_by_marginal_revenue_at_base_price relies
+    # on - score_portfolio must produce the *exact* per-item numbers
+    # rank_portfolio's own ranking is silently built from today, not an
+    # approximation. MELON's own town-center draw (1 unit/day, present
+    # even with no unlocked_shops given) is real, non-zero expected
+    # consumption score_portfolio always folds in - not comparable to a
+    # bare crop_revenue_per_tile_day(..., expected_consumption=0) call.
+    scores = score_portfolio(_MARKET_AT_I0)
+    _, melon_tile_days = _crop_yield_and_tile_days("MELON")
+    melon_consumption = expected_daily_consumption("MELON", []) * melon_tile_days
+    assert scores["MELON"] == pytest.approx(
+        crop_revenue_per_tile_day("MELON", MARKET_I0, expected_consumption=melon_consumption)
+    )
+    cow_consumption = expected_daily_consumption("MILK", []) * 2  # COW's own interval
+    assert scores["COW"] == pytest.approx(
+        animal_revenue_per_tile_day("COW", MARKET_I0, expected_consumption=cow_consumption)
     )
