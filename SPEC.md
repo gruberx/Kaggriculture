@@ -106,7 +106,16 @@ field's worth" is already a T-relative question, not something to rediscover by 
 `hinge` (only shape whose closed form depends on `T`, not just `x`): `u = x/T`, evaluates to
 `u + 8*max(0, u-1)^2`. Below `T` it's linear in `u` (price barely moves - "stays near base under
 ordinary demand"); above `T` the quadratic term takes over and price climbs *steeply*. `f(T) = 1` by
-construction, so `target` keeps the same meaning it has for every other shape.
+construction, so `target` keeps the same meaning it has for every other shape: **`target` means
+"moving `T` units past `I0` shifts the price by `target * base`"** - a directly readable statement
+of how much one full field's worth of surplus/shortfall is worth in dollars, per resource, per side.
+
+Because `linear`'s amplitude already normalizes to `x/T` - exactly `hinge`'s below-knee branch -
+CARROT/TOMATO/EGG's scarcity-side prices from `I0` down to `I0-T` are **identical** to what a plain
+`linear` curve at the same `below_target` would give; the two curves only diverge *past* the knee.
+Tomato and egg's `below_target` (0.40 each) is inherited unchanged from the `linear` curve `hinge`
+replaced there - the redesign only added the steep post-knee acceleration, it didn't retune the
+gentle part.
 
 ### Per-resource table (from the Overview page directly - `P(I0-T)`/`P(I0+T)`/`P(I0+2T)` are worked
 examples, not something this codebase currently computes anywhere)
@@ -123,19 +132,35 @@ examples, not something this codebase currently computes anywhere)
 | Wool | 200 | 105 | log | 0.20 | sq | 3.20 | $240 | $1 | $1 |
 | Fertilizer | 100 | 200 | linear | 0.40 | linear | 0.40 | $140 | $60 | $20 |
 
-Two groups this table makes concrete, both already partially reflected in code but never stated
-together in one place:
+**Every one of the 9 products has its own distinct scarcity/glut pairing - not just two broad
+groups.** Recorded per-product, not glossed over, since the user's own point stands: each pairing is
+a real, potentially exploitable asymmetry, not merely decoration on the two headline patterns below.
 
-- **Premium goods** (base > $100: strawberry, melon, milk, wool) use `above_target > 1` - even a
-  *modest* glut drives them straight to the $1 floor (`P(I0+T)` and `P(I0+2T)` are both $1 for all
-  four). This is exactly `kagg.policy.market.PREMIUM_GOODS`'s own justification (drip-selling), and
-  T8.3f/T8.3g/T8.3h's whole self-impact/opponent-awareness investigation. Bundling and timing sales
-  matters far more for these than for staples - a fully-worked implication of this table, not yet
-  itself exploited (the drip cap is reactive damage control, not a plan built around the curve
-  shape).
-- **`hinge`-shaped scarcity** (carrot, tomato, egg): price stays *near base* under ordinary demand
+| Resource | Scarcity side (below `I0`) | Glut side (above `I0`) | What this means in practice |
+|---|---|---|---|
+| **Wheat** | `sqrt`@0.80 - meaningfully sharp: $45 at exactly `I0-T`, +80% over base | `log`@0.20 - very forgiving: still $19 at `I0+2T`, barely below base | "Panics on scarcity, absorbs gluts" (Overview's own phrase) - safe to overproduce in bulk, costly to let run out (feed-stock implications - see the WHEAT-for-feed lead below) |
+| **Carrot** | `hinge`@1.00 - gentle below `T` (identical to a plain `linear`@1.00 curve there), then steep past it | `sqrt`@0.70 - moderate, crashes to $1 by `I0+2T` | The clearest `hinge` case: a real deficit *beyond* `T` is disproportionately rewarded versus the same deficit at `T` or under |
+| **Tomato** | `hinge`@0.40 - same below-knee-then-steep shape, milder amplitude | `sqrt`@0.60 - moderate | Same `hinge` opportunity as carrot, smaller magnitude (matches its smaller `T`=200, so a real deficit is a smaller absolute quantity to reach) |
+| **Strawberry** | `sqrt`@0.70 - strong: $204 at `I0-T`, +70% over base | `linear`@1.60 - already **$1 at exactly `I0+T`**, not just "eventually" | Premium: rewards genuine scarcity well, punishes even one field's worth of glut completely |
+| **Melon** | `log`@0.20 - very weak: barely above base even at real scarcity | `sq`@3.60 - already **$1 at exactly `I0+T`**, the steepest above-target of all 9 | "Barely reacts to scarcity, crashes hard on overproduction" (Overview's own phrase) - all the risk is on the sell side, none of the upside on the buy side |
+| **Egg** | `hinge`@0.40 - same shape as tomato's, keeps the `linear` curve's target it replaced | `log`@0.20 - very forgiving, still $39 at `I0+2T` | Mirrors wheat's forgiving-glut profile on the sell side, but with carrot/tomato's steep-past-`T` upside on the buy side - arguably the most one-sidedly favorable pairing of the 9 |
+| **Milk** | `sqrt`@0.60 - meaningfully strong: $256 at `I0-T`, +60% over base | `linear`@1.60 - **$1 at exactly `I0+T`** | Premium, but unlike melon/wool actually rewards real scarcity too - the one premium good worth chasing on *both* sides, not just avoiding on the sell side |
+| **Wool** | `log`@0.20 - very weak, mirrors melon | `sq`@3.20 - **$1 at exactly `I0+T`** | "Mirrors melon at a smaller scale" (Overview's own phrase) - same all-risk-on-the-sell-side shape, smaller `T`=105 so it takes fewer units to trigger |
+| **Fertilizer** | `linear`@0.40 | `linear`@0.40 | The only symmetric pairing of the 9 - equally forgiving (or punishing) on both sides, matching its NA "premium" classification |
+
+Two patterns this table makes concrete enough to act on, both only *partially* reflected in code
+today:
+
+- **Premium goods (base > $100: strawberry, melon, milk, wool) use `above_target > 1`, and the
+  table shows exactly how blunt that already is**: all four are floored at $1 already at `I0+T` -
+  not "eventually," not "a modest glut," but *exactly one field's own season of overproduction*.
+  This is `kagg.policy.market.PREMIUM_GOODS`'s own justification (drip-selling) and
+  T8.3f/T8.3g/T8.3h's whole self-impact/opponent-awareness investigation, but the drip cap is
+  reactive damage control, not a plan built around the curve shape itself - MILK is the one
+  exception worth separate handling (it rewards real scarcity, unlike the other three, which don't).
+- **`hinge`-shaped scarcity (carrot, tomato, egg)**: price stays *near base* under ordinary demand
   and only climbs *sharply* once demand runs past `T` - a fundamentally different opportunity shape
-  than the smooth `sqrt`/`log` scarcity curves everything else uses. This is the one genuinely
+  than the smooth `sqrt`/`log` scarcity curves every other product uses. This is the one genuinely
   **unexploited** lever this analysis surfaces: nothing in `kagg.policy` currently distinguishes "a
   hinge product is approaching its `T` deficit knee" from any other scarcity signal - `price()` is
   called generically everywhere (T8.3f/T8.3i's models included), with no shape-aware logic at all.
