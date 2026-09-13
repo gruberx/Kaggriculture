@@ -49,6 +49,11 @@ _MAX_MARKET_ORDERS = 10
 # change it - see _crop_has_time_to_mature's own docstring for why this
 # exists at all.
 _DEFAULT_SEASON_LENGTH_DAYS = 30
+# T8.12: real episode configuration value, not exposed in the observation
+# at all - same shape as expected_daily_consumption's own turns_per_day
+# default (gamelib.market), a named default rather than a silently
+# assumed literal.
+_DEFAULT_TURNS_PER_DAY = 24
 
 # Real default (kaggriculture.json's shedCapacity=100) - like
 # season_length_days above, this isn't exposed in the observation at
@@ -484,6 +489,106 @@ _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE = False
 # split, where the combination masked Part A's own effect).
 _DEFAULT_ANIMAL_CARE_AWARE = False
 
+# T8.10, the user's own observation: rank_portfolio's animal side only
+# ever estimated town/shop consumption over *one production interval*
+# (`rate * a["interval"]`, 1-3 days) - a real, asymmetric gap against the
+# crop side's own already-full-horizon `expected_consumption` (T8.3f/
+# T8.3i). An animal sells into a market the town drains every single day,
+# all season, so a later scheduled unit's real price is far above what a
+# flat one-interval offset credits - traced directly on seed 100's real
+# shop draw: COW's modeled net rate roughly doubled (T8.3m's flat model
+# $46.5/tile-day -> $94.4 with the schedule-day-aware walk, both at
+# days_remaining=28), enough to move it from well behind MELON/STRAWBERRY
+# to directly competitive with them. See
+# kagg.policy.strategy.animal_revenue_per_tile_day's own
+# `consumption_horizon_aware` docstring for the mechanism.
+#
+# **Measured and rejected - a real, decisive, and fully traced result,
+# stated up front prediction wrong**: 1/50 working (39 ties), 0/50
+# held-out (40 ties) against the checked-in baseline. The prediction ("a
+# clear, zero-risk win - a pure formula correction that costs no extra
+# farmer turns") was wrong, and understanding *why* mattered more than
+# the raw number: a first single-seating trace (seed 901) looked like a
+# real loss but turned out to be pure seat-order noise - re-running the
+# checked-in baseline against *itself* (identical code both sides)
+# reproduced the exact same non-tied money split, proving that seed
+# carried zero real signal (`harness.run_paired`'s own seat-swap-and-sum
+# already cancels this, which is exactly why the *paired* result, not a
+# single seating, is the number that matters).
+#
+# The real, non-tied holdout seeds (902/908) traced to a genuine
+# mechanism, not noise: this flag brings COW's modeled rate close enough
+# to STRAWBERRY's that on one seed, ordinary intraday market movement
+# made COW edge out STRAWBERRY for exactly 2 turns (day 12, confirmed by
+# replaying both param sets against the real trajectory turn-by-turn -
+# `_top_investment_choice` agreed on every other turn of the entire
+# 720-turn episode). `_top_investment_choice` has no hysteresis - the
+# single turn it flipped was enough to fire a real BUY_ANIMAL order, and
+# once bought, the existing (correct, deliberate) `stuck_animal` logic
+# commits to *finishing* that acquisition (BUILD_PASTURE, repeated
+# PICKUP, PLACE, repeated FEED - confirmed in the actual episode) rather
+# than abandoning a paid-for animal - diverting real farmer turns from
+# STRAWBERRY/MELON tending into a pipeline for an animal the ranking
+# itself reverted away from on the very next turn. **Not a flaw in the
+# consumption_horizon_aware formula's own accuracy** (the unit tests
+# confirm it computes exactly what it claims) - it exposes a real,
+# previously-dormant architectural gap: nothing in this codebase requires
+# a lead margin or turn-count of sustained ranking before committing
+# capital to an irreversible purchase, and animals were simply always
+# far enough behind crops (pre-T8.10) that this gap never mattered. A
+# concrete lead for later, not built here: gate BUY_ANIMAL on the top
+# choice holding for some minimum number of consecutive turns, or on a
+# minimum score margin over the runner-up, before committing. Kept
+# available (tested, off by default) for that future fix to build on -
+# same convention as T8.3q's fertilizer/CARE rejections.
+_DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE = False
+
+# T8.11, the user's own observation, traced to a real, decisive bottleneck:
+# the real WATER handler only ever adds yield for a one-time crop
+# (WHEAT/CARROT/MELON) on ages inside watering_bonus_window(crop) - every
+# other day's watering is pure anti-weed insurance, not yield. Before this,
+# tasks.py queued WATER at PRIORITY_ROUTINE_CARE every single day
+# regardless, outranking PRIORITY_PLANT - traced directly on seed 100: 20
+# MELON tiles planted at age 0 (window doesn't open until age 6) burned
+# ~140 farmer turns on out-of-window watering over days 3-10 alone, while
+# 4 free tiles and 2 MELON seeds already in hand sat completely unplanted
+# for those same 8 days (192 unit-turns: 148 WATER, 215 movement, 13
+# HARVEST, 0 PLANT) - the exact "labor never reaches PRIORITY_PLANT while
+# routine watering saturates it" mechanism behind the idle capital the
+# user separately flagged. See kagg.policy.tasks._plant_tile_tasks's own
+# `water_bonus_window_aware` docstring for the mechanism and its
+# deliberate one-time-crop-only scope (ongoing crops get zero yield from
+# watering regardless of age - verified directly in kaggriculture.py, not
+# assumed - so they're left untouched). Not yet measured in self-play -
+# **Measured and rejected - the named risk (T8.3e's own precedent) came
+# true, traced directly, not just trusted**: 7/50 working, 3/50 holdout,
+# 0 ties either block (unlike T8.10's mostly-tied result, this mechanism
+# fires on nearly every turn, so its effect is never a coin-flip-close
+# near-tie - it's a real, consistent behavioral shift, just the wrong
+# one). Traced (seed 900, single seat): PLANT count did rise as
+# predicted (42 -> 48, +14% - the freed labor genuinely reached PLANT
+# more often), but WEED count at episode end more than tripled (4 -> 13)
+# and final money fell. Root cause: demoting a *non-urgent* WATER all the
+# way to PRIORITY_MAINTENANCE (tied with DIG/COLLECT_FERTILIZER, below
+# PLANT) conflates "not yield-productive today" with "not needed today" -
+# the real anti-weed rule (2 consecutive misses -> weed) doesn't care
+# whether a watering falls inside the bonus window, only whether the
+# *previous* day was missed. Once PLANT tasks fill the queue ahead of it
+# (exactly the parallel-planting throughput T8.6 built), a demoted
+# routine watering can miss two days running before ever reaching MAINTE-
+# NANCE priority, converting productive tiles to weed - a real, self-
+# inflicted version of the same "promised value the labor budget can't
+# safely capture" pattern as T8.3q's fertilizer/CARE rejections, but this
+# time the cost lands on the *same* task instead of a competing one. A
+# concrete lead for later, not built here: a middle priority tier between
+# ROUTINE_CARE and PLANT (not all the way down to MAINTENANCE) might free
+# some labor without exposing 2-day misses to PLANT-tier contention - or
+# track "turns since last watered" more precisely than the binary urgent/
+# routine split already does. Kept available (tested, off by default) for
+# that future revision - same convention as every other T8.3/T8.10-series
+# rejection.
+_DEFAULT_WATER_BONUS_WINDOW_AWARE = False
+
 # T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
 # `plant_qty` scale with the real labor force (1 + hires_per_day) instead
 # of a hardcoded "one PLANT task per turn" baked in since Phase 3.
@@ -715,11 +820,14 @@ def _top_investment_choice(
         "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
     )
     animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
+    animal_consumption_horizon_aware = params.get(
+        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
+    )
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
     for name in rank_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
         days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
-        animal_care_aware,
+        animal_care_aware, animal_consumption_horizon_aware,
     ):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
@@ -792,11 +900,14 @@ def _top_crop_choice(
         "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
     )
     animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
+    animal_consumption_horizon_aware = params.get(
+        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
+    )
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
     for name in rank_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
         days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
-        animal_care_aware,
+        animal_care_aware, animal_consumption_horizon_aware,
     ):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             return name
@@ -813,6 +924,7 @@ def decide(obs: dict, params: dict) -> dict:
     shed = private.get("shed", {})
 
     current_day = obs.get("day", 0)
+    current_hour = obs.get("hour", 0)
     if params.get("crop_self_impact_aware", _DEFAULT_CROP_SELF_IMPACT_AWARE):
         other_farms = [f for i, f in enumerate(obs["farms"]) if i != player]
         opponent_weight = params.get(
@@ -963,6 +1075,7 @@ def decide(obs: dict, params: dict) -> dict:
 
     use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
     care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
+    water_bonus_window_aware = params.get("water_bonus_window_aware", _DEFAULT_WATER_BONUS_WINDOW_AWARE)
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
@@ -974,6 +1087,7 @@ def decide(obs: dict, params: dict) -> dict:
         use_fertilizer=use_fertilizer,
         plant_qty=plant_qty,
         care_aware=care_aware,
+        water_bonus_window_aware=water_bonus_window_aware,
     )
     assignment = assign_units(tasks, unit_positions)
 
@@ -1034,7 +1148,17 @@ def decide(obs: dict, params: dict) -> dict:
     # tuning evidence yet that hiring pays for itself), so this reordering
     # is a no-op by default - `hires` is always empty, and `sells`/`tail`
     # keep exactly today's relative order and content.
-    target_hires = hires_per_day(params)
+    #
+    # T8.12 (`dynamic_hiring`, off by default): sized from the task
+    # backlog `tasks` already built above, not a second board scan - see
+    # `hires_per_day`'s own docstring for the formula. Bit-identical to
+    # the plain `hires_per_day(params)` call it replaces whenever
+    # `dynamic_hiring` is off (the shipped default) - the extra arguments
+    # are simply unused in that case.
+    target_hires = hires_per_day(
+        params, pending_task_count=len(tasks), hour=current_hour,
+        turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY), money=me["money"],
+    )
     hires_today = me.get("hires_today", 0)
     hires: list[list] = []
     while hires_today + len(hires) < target_hires:

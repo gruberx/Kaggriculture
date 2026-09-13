@@ -43,6 +43,23 @@ DEFAULT_PARAMS = {
     # for the accepted value 1 - see kagg.policy.strategy.
     # _DEFAULT_HIRES_PER_DAY's own comment for the full measured story.
     "hires_per_day": 1,
+    # T8.12, the user's own observation: a flat constant can't reflect
+    # how much work actually needs doing - hires_per_day() gains a
+    # dynamic mode that scales the hiring target from the real task
+    # backlog (turns_per_task_estimate-weighted) instead.
+    # **Measured and rejected**: 2/50 working, 4/50 holdout - traced to
+    # `len(tasks)` counting recurring watering the same as genuine
+    # bottleneck work, over-hiring up to 5 hands at once with many left
+    # idle (PASS x68 in one traced episode) while cost outran the gain.
+    # See kagg.policy.strategy's own dynamic_hiring rejection comment
+    # (near _DEFAULT_HIRE_CASH_RESERVE) for the full traced story and the
+    # concrete follow-up lead it exposes. Kept available (tested, off by
+    # default) for that future fix.
+    "dynamic_hiring": False,
+    "min_hires_per_day": 1,  # matches hires_per_day's own floor
+    "max_hires_per_day": 8,  # fib hire #8 costs $21 - still negligible
+    "turns_per_task_estimate": 2.0,  # measured ~2.3 turns/task; conservative
+    "hire_cash_reserve": 0,  # the user's own "protect starting capital" ask
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,
@@ -236,6 +253,46 @@ DEFAULT_PARAMS = {
     # for the full traced story. Kept available for a re-check once
     # Stage B (hired hands) gives real spare labor.
     "animal_care_aware": False,
+    # T8.10, the user's own observation: rank_portfolio's animal side only
+    # ever estimated town/shop consumption over one production interval
+    # (1-3 days), a real, asymmetric gap against the crop side's own
+    # full-tile-occupancy horizon (T8.3f/T8.3i). Traced on seed 100's real
+    # shop draw: COW's modeled net rate roughly doubled ($46.5 -> $94.4
+    # per tile-day at days_remaining=28) once each scheduled unit is
+    # priced at its own production day's drained market level instead of
+    # one flat offset.
+    # **Measured and rejected**: 1/50 working, 0/50 held-out - traced to
+    # a real mechanism, not noise: bringing COW's score close enough to
+    # STRAWBERRY's lets a 2-turn intraday market wobble flip
+    # _top_investment_choice's pick, and with no hysteresis on that
+    # single-turn pick, one flip is enough to commit real capital
+    # (BUY_ANIMAL) that the existing stuck_animal logic then correctly,
+    # but wastefully, finishes acquiring - diverting real farmer turns
+    # from the crop the ranking reverted back to one turn later. See
+    # kagg.policy.decide._DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE for
+    # the full traced story and the concrete follow-up lead (a lead
+    # margin/turn-count gate on investment commitment) it exposes. Kept
+    # available (tested, off by default) for that future fix.
+    "animal_consumption_horizon_aware": False,
+    # T8.11, the user's own observation, traced to a real bottleneck: the
+    # real WATER handler only adds yield for a one-time crop on ages
+    # inside its bonus window - every other day's watering is pure
+    # anti-weed insurance. Traced on seed 100: 20 MELON tiles at age 0
+    # burned ~140 farmer turns on out-of-window watering over days 3-10
+    # while 4 free tiles and 2 seeds in hand sat unplanted the whole time.
+    # **Measured and rejected**: 7/50 working, 3/50 holdout, 0 ties either
+    # block - traced (seed 900) to a real, self-inflicted weed-conversion
+    # cost: PLANT count did rise (42 -> 48) but WEED count at episode end
+    # more than tripled (4 -> 13), net money down. Demoting a non-urgent
+    # WATER all the way to PRIORITY_MAINTENANCE (tied with DIG, below
+    # PLANT) conflates "not yield-productive today" with "not needed
+    # today" - the anti-weed rule only cares about consecutive misses,
+    # not the bonus window. See kagg.policy.decide._DEFAULT_WATER_BONUS_
+    # WINDOW_AWARE for the full traced story and the concrete follow-up
+    # lead it exposes (a middle priority tier, not all the way to
+    # MAINTENANCE). Kept available (tested, off by default) for that
+    # future revision.
+    "water_bonus_window_aware": False,
     # T8.6 (tasks/plan.md): parallel planting + batched seed purchase -
     # lets plant_qty scale with the real labor force (1 + hires_per_day)
     # instead of the fixed "one PLANT task per turn" baked in since

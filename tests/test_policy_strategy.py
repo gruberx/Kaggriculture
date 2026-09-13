@@ -427,6 +427,97 @@ def test_hires_per_day_reads_the_named_parameter_with_a_measured_default():
     assert hires_per_day({"hires_per_day": 0}) == 0
 
 
+def test_hires_per_day_dynamic_hiring_defaults_to_false():
+    # T8.12, the user's own observation: a constant can't reflect how
+    # much work actually needs doing. Even with a huge pending task
+    # backlog, dynamic_hiring off (the default) must return the plain
+    # static value - bit-identical to every pre-T8.12 caller.
+    assert hires_per_day({}, pending_task_count=1000) == 1
+    assert hires_per_day({"hires_per_day": 3}, pending_task_count=1000) == 3
+
+
+def test_hires_per_day_dynamic_hiring_falls_back_to_static_without_task_info():
+    # dynamic_hiring=True but no pending_task_count given - graceful
+    # fallback to the static value, not an error (matches net_of_cost's
+    # own "no days_remaining -> steady state" convention elsewhere in
+    # this module).
+    params = {"dynamic_hiring": True, "hires_per_day": 2}
+    assert hires_per_day(params) == 2
+
+
+def test_hires_per_day_dynamic_hiring_scales_with_pending_task_count():
+    # 48 pending tasks, turns_per_task_estimate=2.0 (default - the
+    # user's own request: size hiring from the real backlog, not a flat
+    # number), 24 turns left today (hour=0): needed_unit_turns = 96,
+    # target = ceil(96 / 24) - 1 = 3 (minus the farmer's own turn - the
+    # farmer is already one of the labor units working the backlog).
+    params = {"dynamic_hiring": True}
+    got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24)
+    assert got == 3
+
+
+def test_hires_per_day_dynamic_hiring_accounts_for_hours_already_spent_today():
+    # Same 48-task backlog, but only 4 turns left today (hour=20):
+    # needed=96, turns_left=4, target=ceil(96/4)-1=23, clipped to
+    # max_hires_per_day (default 8) - fewer turns left means more hands
+    # needed to clear the same backlog before the day resets.
+    params = {"dynamic_hiring": True}
+    got = hires_per_day(params, pending_task_count=48, hour=20, turns_per_day=24)
+    assert got == 8
+
+
+def test_hires_per_day_dynamic_hiring_never_drops_below_min_hires_per_day():
+    # Zero pending tasks - the formula alone computes a negative target
+    # (ceil(0/24) - 1 = -1). The user's own point: a floor protects
+    # limited starting capital from being spent on labor with nothing yet
+    # to do - defaults to the same value hires_per_day itself already
+    # ships at (1), matching the user's "the constant is still needed at
+    # the start" observation.
+    params = {"dynamic_hiring": True}
+    assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 1
+
+
+def test_hires_per_day_dynamic_hiring_respects_a_custom_min_and_max():
+    params = {"dynamic_hiring": True, "min_hires_per_day": 2, "max_hires_per_day": 4}
+    assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 2
+    assert hires_per_day(params, pending_task_count=10_000, hour=0, turns_per_day=24) == 4
+
+
+def test_hires_per_day_dynamic_hiring_respects_turns_per_task_estimate():
+    params = {"dynamic_hiring": True, "turns_per_task_estimate": 1.0}
+    # 48 tasks * 1.0 turn/task = 48 needed, 24 turns left -> ceil(48/24)-1 = 1
+    assert hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24) == 1
+
+
+def test_hires_per_day_dynamic_hiring_respects_a_cash_reserve():
+    # T8.12, the user's own observation: the starting capital is small
+    # and shouldn't all go to labor before seeds/animals are affordable -
+    # hire_cash_reserve makes that concern an explicit, swept parameter
+    # instead of leaving it implicit inside min_hires_per_day alone.
+    # Below the reserve, hiring stays at the floor regardless of backlog
+    # size.
+    params = {"dynamic_hiring": True, "hire_cash_reserve": 1000}
+    got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24, money=500)
+    assert got == 1  # min_hires_per_day's own default
+
+
+def test_hires_per_day_dynamic_hiring_hires_normally_once_reserve_is_cleared():
+    params = {"dynamic_hiring": True, "hire_cash_reserve": 1000}
+    got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24, money=1500)
+    assert got == 3
+
+
+def test_hires_per_day_dynamic_hiring_cash_reserve_defaults_to_zero():
+    # No hire_cash_reserve given - 0 by default, so even very little
+    # money never blocks hiring on its own (the first hire costs $1 -
+    # affordability is checked elsewhere in decide(), this reserve exists
+    # only for the case the user actually named: protecting the starting
+    # capital, not a blanket "never hire while poor" rule).
+    params = {"dynamic_hiring": True}
+    got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24, money=1)
+    assert got == 3
+
+
 def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():
     # T8.3q: kaggriculture.py's _daily_refresh_animals sets
     # fertilizer_available=True every surviving day regardless of
@@ -553,4 +644,105 @@ def test_rank_portfolio_animal_care_aware_defaults_to_false():
     market = {}
     assert rank_portfolio(market, days_remaining=30, animal_net_of_cost=True) == rank_portfolio(
         market, days_remaining=30, animal_net_of_cost=True, animal_care_aware=False
+    )
+
+
+def test_animal_revenue_per_tile_day_consumption_horizon_aware_matches_independent_calculation():
+    # T8.10, the user's own observation: rank_portfolio's animal-side
+    # consumption estimate only ever covered one production interval
+    # (`expected_consumption = rate * a["interval"]`, 1-3 days), while the
+    # crop side already used the full tile-occupancy horizon (T8.3f). An
+    # animal sells into a market the town drains *every day*, all season -
+    # each scheduled unit should be priced against the market as drained
+    # up to *that unit's own production day*, not a single flat offset.
+    #
+    # GOOSE (first_yield_day=4, interval=1), days_remaining=6:
+    # forecast_animal_schedule gives [4, 5, 6]. At consumption_rate=3/day,
+    # the k-th unit (k=0,1,2) sells at price(EGG, I0 - 3*day + k) for its
+    # own schedule day, not a flat "I0 - 3*interval" offset.
+    from kagg.gamelib.market import price as _price
+
+    days_remaining = 6
+    schedule = [4, 5, 6]
+    rate = 3
+    expected = (
+        sum(_price("EGG", MARKET_I0 - rate * day + k) for k, day in enumerate(schedule))
+        - 300
+        - 2 * days_remaining
+    ) / days_remaining
+    got = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=days_remaining, net_of_cost=True, feed_price=2,
+        consumption_horizon_aware=True, consumption_rate=rate,
+    )
+    assert got == pytest.approx(expected)
+
+
+def test_animal_revenue_per_tile_day_consumption_horizon_aware_lowers_a_late_producers_score():
+    # A late-producing animal (COW: first_yield_day=8) sells most of its
+    # units well after day 0 - by the time its later units sell, heavy
+    # daily town/shop draw has pushed the price up a lot further than the
+    # old flat "one interval" offset ever credited. The horizon-aware walk
+    # must score COW *higher* than the flat-offset model once a real,
+    # sustained consumption rate is given (scarcity raises price).
+    flat = animal_revenue_per_tile_day(
+        "COW", MARKET_I0, expected_consumption=25 * 2, days_remaining=28, net_of_cost=True, feed_price=25,
+    )
+    horizon_aware = animal_revenue_per_tile_day(
+        "COW", MARKET_I0, days_remaining=28, net_of_cost=True, feed_price=25,
+        consumption_horizon_aware=True, consumption_rate=25,
+    )
+    assert horizon_aware > flat
+
+
+def test_animal_revenue_per_tile_day_consumption_horizon_aware_defaults_to_false():
+    without = animal_revenue_per_tile_day(
+        "COW", MARKET_I0, expected_consumption=999, days_remaining=28, net_of_cost=True, feed_price=25,
+    )
+    # consumption_horizon_aware defaults to False - consumption_rate must
+    # be completely ignored, expected_consumption (the old path) still
+    # drives the score, bit-identical to every pre-T8.10 caller.
+    assert animal_revenue_per_tile_day(
+        "COW", MARKET_I0, expected_consumption=999, days_remaining=28, net_of_cost=True, feed_price=25,
+        consumption_rate=12345,
+    ) == pytest.approx(without)
+
+
+def test_animal_revenue_per_tile_day_consumption_horizon_aware_is_a_noop_with_care_aware():
+    # care_aware's day-by-day simulation (_animal_full_care_units) returns
+    # only a total unit count, not a per-unit production day - there is no
+    # `schedule` list to walk consumption against in that branch. Rather
+    # than silently guess a day for each unit, consumption_horizon_aware
+    # is a documented no-op when combined with care_aware (falls back to
+    # the flat expected_consumption path) - a real, named gap, not solved
+    # here (T8.3q's own isolation discipline: measure combinations
+    # separately, never guess one from the other).
+    without = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=6, net_of_cost=True, feed_price=2, care_aware=True,
+    )
+    with_flag = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=6, net_of_cost=True, feed_price=2, care_aware=True,
+        consumption_horizon_aware=True, consumption_rate=3,
+    )
+    assert with_flag == pytest.approx(without)
+
+
+def test_rank_portfolio_animal_consumption_horizon_aware_raises_cows_rank():
+    # T8.10: with a real, sustained draw on MILK (three PIZZA_SHOP +
+    # ICE_CREAM_SHOP, matching seed 100's own real shop draw), the
+    # horizon-aware model must rank COW at least as high as the old flat
+    # one-interval model - the whole point of the fix.
+    market = {}
+    shops = ["PIZZA_SHOP", "PIZZA_SHOP", "PIZZA_SHOP", "ICE_CREAM_SHOP"]
+    flat = rank_portfolio(market, unlocked_shops=shops, days_remaining=28, animal_net_of_cost=True)
+    horizon_aware = rank_portfolio(
+        market, unlocked_shops=shops, days_remaining=28, animal_net_of_cost=True,
+        animal_consumption_horizon_aware=True,
+    )
+    assert horizon_aware.index("COW") <= flat.index("COW")
+
+
+def test_rank_portfolio_animal_consumption_horizon_aware_defaults_to_false():
+    market = {}
+    assert rank_portfolio(market, days_remaining=28, animal_net_of_cost=True) == rank_portfolio(
+        market, days_remaining=28, animal_net_of_cost=True, animal_consumption_horizon_aware=False
     )

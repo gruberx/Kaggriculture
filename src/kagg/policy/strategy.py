@@ -14,6 +14,8 @@ Standard library only - ships inside the submission bundle.
 
 from __future__ import annotations
 
+import math
+
 from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0
 from kagg.gamelib.farm import land_price
 from kagg.gamelib.growth import (
@@ -222,6 +224,8 @@ def animal_revenue_per_tile_day(
     fertilizer_income_aware: bool = False,
     fertilizer_sell_at_inventory: int = MARKET_I0,
     care_aware: bool = False,
+    consumption_horizon_aware: bool = False,
+    consumption_rate: float = 0,
 ) -> float:
     """Steady-state revenue per tile-day for a continuously fed animal -
     or, when `net_of_cost` is set with a real `days_remaining`, net
@@ -297,16 +301,58 @@ def animal_revenue_per_tile_day(
     continuous `CARE`+feeding - see its own docstring for the mechanism
     and the path-dependence that rules out a closed-form shortcut.
     Defaults to `False`, reproducing the exact prior schedule-only count.
+
+    `consumption_horizon_aware`/`consumption_rate` (T8.10, the user's own
+    observation): before this, the animal side of `rank_portfolio` only
+    ever estimated town/shop consumption over *one production interval*
+    (`expected_consumption = rate * a["interval"]`, 1-3 days) - a real,
+    asymmetric gap against `crop_revenue_per_tile_day`'s own
+    `already_committed_units`/`expected_consumption` handling, which
+    already spans the crop's *full* tile-occupancy horizon (T8.3f/T8.3i).
+    An animal sells into a shared market the town drains every single day,
+    all season - by the time a *later* scheduled unit sells, a real,
+    sustained draw has pushed the price up far more than a flat "one
+    interval" offset credits. When set (and a real `schedule` is
+    available, i.e. `care_aware` is off - see below), each unit is priced
+    at its own production day's drained level instead of one shared
+    offset: `price(product, sell_at_inventory - consumption_rate * day +
+    k)` for the k-th unit produced on absolute day `day`, walking
+    `forecast_animal_schedule`'s own list directly rather than just its
+    length. `consumption_rate` is a plain units/day rate (unlike
+    `expected_consumption`, which callers pre-multiply by whatever horizon
+    fits their own model) - `rank_portfolio` computes it once via
+    `gamelib.market.expected_daily_consumption` and reuses it here without
+    re-deriving a horizon.
+
+    Deliberately a no-op when combined with `care_aware=True`: the exact
+    day-by-day `_animal_full_care_units` simulation returns only a total
+    harvested count, not a per-unit production day (banked units can pay
+    out in an unequal, path-dependent burst - see its own docstring), so
+    there is no real `schedule` to walk consumption against without
+    guessing one. Falls back to the flat `expected_consumption` path in
+    that case, exactly as `care_aware=False` already does - a named,
+    honest gap (T8.3q's own isolation discipline: measure a new
+    combination for real rather than assume it from an existing one),
+    not something this task attempts to close. Defaults to `False`
+    (`consumption_rate` unused when off), reproducing the exact prior
+    behavior for every caller that doesn't pass it.
     """
     a = ANIMALS[animal]
     if net_of_cost and days_remaining is not None:
+        schedule = None
         if care_aware:
             units = _animal_full_care_units(animal, days_remaining)
         else:
             schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining)
             units = len(schedule)
-        start = sell_at_inventory - expected_consumption
-        total_revenue = sum(price(a["product"], start + k) for k in range(units))
+        if consumption_horizon_aware and schedule is not None:
+            total_revenue = sum(
+                price(a["product"], sell_at_inventory - consumption_rate * day + k)
+                for k, day in enumerate(schedule)
+            )
+        else:
+            start = sell_at_inventory - expected_consumption
+            total_revenue = sum(price(a["product"], start + k) for k in range(units))
         if fertilizer_income_aware:
             total_revenue += sum(
                 price("FERTILIZER", fertilizer_sell_at_inventory + k) for k in range(days_remaining)
@@ -328,6 +374,7 @@ def rank_portfolio(
     animal_net_of_cost: bool = False,
     animal_fertilizer_income_aware: bool = False,
     animal_care_aware: bool = False,
+    animal_consumption_horizon_aware: bool = False,
 ) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day at `market_inventory`'s *current* level for each one's own
@@ -397,6 +444,15 @@ def rank_portfolio(
     both `animal_net_of_cost` and `animal_fertilizer_income_aware`, for
     the same reason: T8.3b's isolation lesson applies to every new
     mechanism layered on this ranking, not just the first one.
+
+    `animal_consumption_horizon_aware` (T8.10) is passed straight through
+    to `animal_revenue_per_tile_day`, along with a plain units/day
+    `consumption_rate` derived here the same way `feed_price`/
+    `fertilizer_sell_at_inventory` already are - see that function's own
+    docstring for the mechanism. Independently gated from
+    `animal_net_of_cost`/`animal_fertilizer_income_aware`/`animal_care_
+    aware`, same reason as those three. Defaults to `False`, reproducing
+    the exact prior behavior for every caller that doesn't pass it.
     """
     crop_tile_counts = crop_tile_counts or {}
     unlocked_shops = unlocked_shops or []
@@ -415,10 +471,12 @@ def rank_portfolio(
     fertilizer_sell_at_inventory = market_inventory.get("FERTILIZER", MARKET_I0)
     for animal, a in ANIMALS.items():
         inv = market_inventory.get(a["product"], MARKET_I0)
-        expected_consumption = expected_daily_consumption(a["product"], unlocked_shops) * a["interval"]
+        consumption_rate = expected_daily_consumption(a["product"], unlocked_shops)
+        expected_consumption = consumption_rate * a["interval"]
         scores[animal] = animal_revenue_per_tile_day(
             animal, inv, expected_consumption, animal_days_remaining, animal_net_of_cost, feed_price,
             animal_fertilizer_income_aware, fertilizer_sell_at_inventory, animal_care_aware,
+            animal_consumption_horizon_aware, consumption_rate,
         )
     return sorted(scores, key=scores.__getitem__, reverse=True)
 
@@ -480,6 +538,60 @@ _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 15000
 # minimal accepted changes. See `tools/run_hiring_sweep.py` for the full
 # sweep and `tasks/todo.md`'s T8.7 entry for the complete story.
 _DEFAULT_HIRES_PER_DAY = 1
+
+# T8.12: dynamic_hiring is off by default - hires_per_day() reproduces
+# the plain static value for every caller until a real held-out result
+# accepts turning it on, same protocol as every other T8.3/T8.10/T8.11-
+# series flag.
+_DEFAULT_DYNAMIC_HIRING = False
+# Same value as _DEFAULT_HIRES_PER_DAY - the floor exists specifically to
+# protect the season's limited starting capital (the user's own concern),
+# so it defaults to what the plain constant already provided before this
+# task, not a separately-tuned number.
+_DEFAULT_MIN_HIRES_PER_DAY = 1
+# The edge this stays comfortably clear of: fib-priced hire #8 costs $21
+# (the 8th hire that day), $54 cumulative for the day - negligible next
+# to a season's ~$30k of money (see hire_cost's own fib curve), so 8 is a
+# real ceiling on wasted labor, not yet a binding cost constraint.
+_DEFAULT_MAX_HIRES_PER_DAY = 8
+# Derived from a real measurement, not a guess: one traced episode showed
+# 405 movement actions across 313 productive farmer actions (~2.3 turns
+# spent per unit of real work) - 2.0 is a deliberately conservative
+# starting point for a future sweep, not the measured figure itself.
+_DEFAULT_TURNS_PER_TASK_ESTIMATE = 2.0
+# The user's own explicit request: protect the season's limited starting
+# capital from being spent entirely on labor before seeds/animals are
+# even affordable. 0 (no reserve) reproduces min_hires_per_day's own
+# floor-only behavior for every caller that doesn't set it - the first
+# hire costs $1 regardless, so this is not a blanket "never hire while
+# poor" rule, only the specific reserve the user named.
+_DEFAULT_HIRE_CASH_RESERVE = 0
+
+# **dynamic_hiring measured and rejected**: 2/50 working, 4/50 holdout, 0
+# ties either block - matches this task's own stated prediction up front
+# (a win only if T8.11 had already freed labor; close to zero or a loss
+# otherwise, since T8.11 was itself rejected). Traced (seed 900): the
+# candidate hired up to 5 hands at once (1412 total hand-turns vs the
+# checked-in baseline's 690 with 1 hired hand) and PLANT count did rise
+# (45+25=70 vs 20+22=42, +67%), but `PASS` appeared 68 times (hands with
+# genuinely nothing to do that turn) and WATER rose even more sharply
+# than PLANT (609 vs 437 total) - final money fell (28439 vs 32958). Root
+# cause: `len(tasks)` counts every queued action including ones that
+# recur regardless of labor level (routine watering chief among them -
+# T8.11's own unresolved target), so the formula reads a large *standing*
+# backlog as a large *marginal* one and overshoots the labor level T8.6's
+# own geometry-derived caps (`max_plants_per_unit`, `seed_buffer_per_
+# unit`) were tuned against - reproducing the "adding workers past what
+# real bottlenecks justify has zero marginal value" finding T7.4 first
+# observed, now for a different, more specific reason than T7.4's
+# original (invalid, bug-driven) measurement. Not evidence dynamic hiring
+# is a bad idea in principle - only that it needs a real fix to the
+# *task-count* signal (e.g. counting only PLANT/HARVEST/acquisition
+# tasks, or a genuine idle-hand penalty) before it can safely scale
+# labor, and very plausibly needs T8.11's own still-open watering-
+# crowding problem solved first, exactly as predicted. **Shipped
+# default: `dynamic_hiring=False`** (rejected, not unmeasured) - kept
+# available (tested) for that future fix.
 
 # T8.3 (tasks/plan.md): the user's own observed defect - a quadrant
 # sometimes bought while plenty of free tiles remained, because the old
@@ -584,8 +696,14 @@ def should_buy_land(
     return nearest_free_shed_distance is not None and nearest_free_shed_distance >= min_frontier
 
 
-def hires_per_day(params: dict | None = None) -> int:
-    """How many farm hands to hire at the start of each day.
+def hires_per_day(
+    params: dict | None = None,
+    pending_task_count: int | None = None,
+    hour: int = 0,
+    turns_per_day: int = 24,
+    money: float | None = None,
+) -> int:
+    """How many farm hands to hire right now.
 
     Explicitly a tunable parameter, not a fixed policy (SPEC-policy.md):
     the "labor is nearly free, hire many hands" intuition derived from
@@ -597,6 +715,54 @@ def hires_per_day(params: dict | None = None) -> int:
     those were fixed (T8.4/T8.6): every nonzero value tried won decisively
     in direct self-play. See `_DEFAULT_HIRES_PER_DAY`'s own comment for
     the full measured story.
+
+    `dynamic_hiring`/`pending_task_count`/`hour`/`turns_per_day`/`money`
+    (T8.12, the user's own observation): a flat constant can't reflect how
+    much work actually needs doing - the real capacity a labor force needs
+    to clear the *current* task backlog before the day resets. When
+    `params["dynamic_hiring"]` is set and a real `pending_task_count` is
+    given (`decide()` passes `len(tasks)`, the already-built task list -
+    no extra board scan needed), the target scales with the backlog:
+    `ceil(pending_task_count * turns_per_task_estimate / max(1,
+    turns_per_day - hour)) - 1` (the `-1` accounts for the farmer's own
+    turn, already one of the labor units working the backlog), clipped to
+    `[min_hires_per_day, max_hires_per_day]`. `turns_per_task_estimate`
+    (default 2.0) is itself a named, swept parameter, not a guess baked
+    into the formula - derived from a real measurement (405 movement
+    actions across 313 productive farmer actions in one traced episode,
+    ~2.3 turns/task; 2.0 chosen as a deliberately conservative starting
+    point for a future sweep, per SPEC-policy.md's own rule against
+    unswept intuition constants).
+
+    `min_hires_per_day` (default matches `_DEFAULT_HIRES_PER_DAY`, i.e.
+    1) is the user's own explicit concern: the season's limited starting
+    capital shouldn't all go to labor before seeds/animals are even
+    affordable, so a floor protects it the same way the plain constant
+    already did before this task. `hire_cash_reserve` (default 0) makes
+    that same concern an explicit, swept, named gate instead of leaving
+    it implicit in the floor alone: when `money` is given and falls below
+    it, hiring drops to `min_hires_per_day` regardless of backlog size.
+
+    Graceful fallback to the plain static value (not an error) whenever
+    `dynamic_hiring` is off, or on but `pending_task_count` is `None` (no
+    task-list information given) - matches `net_of_cost`'s own "no
+    `days_remaining` -> steady state" convention elsewhere in this
+    module. `dynamic_hiring` defaults to `False`, reproducing the exact
+    prior behavior for every caller that doesn't pass the new arguments.
     """
     params = params or {}
-    return params.get("hires_per_day", _DEFAULT_HIRES_PER_DAY)
+    static = params.get("hires_per_day", _DEFAULT_HIRES_PER_DAY)
+    if not params.get("dynamic_hiring", _DEFAULT_DYNAMIC_HIRING):
+        return static
+    if pending_task_count is None:
+        return static
+    min_hires = params.get("min_hires_per_day", _DEFAULT_MIN_HIRES_PER_DAY)
+    max_hires = params.get("max_hires_per_day", _DEFAULT_MAX_HIRES_PER_DAY)
+    cash_reserve = params.get("hire_cash_reserve", _DEFAULT_HIRE_CASH_RESERVE)
+    if money is not None and money < cash_reserve:
+        return min_hires
+    turns_per_task = params.get("turns_per_task_estimate", _DEFAULT_TURNS_PER_TASK_ESTIMATE)
+    turns_left_today = max(1, turns_per_day - hour)
+    needed_unit_turns = pending_task_count * turns_per_task
+    target = math.ceil(needed_unit_turns / turns_left_today) - 1
+    return min(max(target, min_hires), max_hires)

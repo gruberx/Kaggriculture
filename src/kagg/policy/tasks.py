@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 from kagg.gamelib.constants import ANIMALS, CROPS
 from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
+from kagg.gamelib.growth import watering_bonus_window
 
 # investment_anchor values (params.py's DEFAULT_PARAMS["investment_anchor"]):
 # SHED anchors new-investment placement to the board's shed center - the
@@ -203,6 +204,7 @@ def build_task_list(
     use_fertilizer: bool = True,
     care_aware: bool = False,
     plant_qty: int = 1,
+    water_bonus_window_aware: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -270,6 +272,15 @@ def build_task_list(
     than always-on, since a real Kaggle action has a real single-farmer
     turn cost - see `decide.py`'s `_DEFAULT_ANIMAL_CARE_AWARE` for the
     measured story).
+
+    `water_bonus_window_aware` (T8.11) gates whether an out-of-bonus-
+    window WATER on a one-time crop gets demoted to `PRIORITY_
+    MAINTENANCE` instead of `PRIORITY_ROUTINE_CARE` - see
+    `_plant_tile_tasks`'s own docstring for the mechanism and its
+    deliberate one-time-crop-only scope. Defaults to `False`, reproducing
+    the exact prior behavior (every non-urgent WATER task at `PRIORITY_
+    ROUTINE_CARE` regardless of age) for every caller that doesn't pass
+    it.
     """
     shed = shed or {}
     farmer_inventory = farmer_inventory or {}
@@ -291,7 +302,11 @@ def build_task_list(
             if kind == "WEED":
                 tasks.append(Task(PRIORITY_MAINTENANCE, pos, "DIG"))
             elif kind == "PLANT":
-                tasks.extend(_plant_tile_tasks(pos, tile, current_day, farmer_inventory, use_fertilizer))
+                tasks.extend(
+                    _plant_tile_tasks(
+                        pos, tile, current_day, farmer_inventory, use_fertilizer, water_bonus_window_aware
+                    )
+                )
             elif "animal" in tile:
                 animal_tasks, needs_wheat_priority = _animal_tile_tasks(pos, tile, farmer_inventory, care_aware)
                 tasks.extend(animal_tasks)
@@ -387,12 +402,50 @@ def _new_investment_tasks(
 
 
 def _plant_tile_tasks(
-    pos: tuple[int, int], tile: dict, current_day: int, farmer_inventory: dict, use_fertilizer: bool = True
+    pos: tuple[int, int],
+    tile: dict,
+    current_day: int,
+    farmer_inventory: dict,
+    use_fertilizer: bool = True,
+    water_bonus_window_aware: bool = False,
 ) -> list[Task]:
     tasks = []
     if not tile.get("watered_today", False):
         urgent = tile.get("consecutive_unwatered", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
+        if water_bonus_window_aware and not urgent:
+            # T8.11, the user's own observation: the real WATER handler
+            # (kaggriculture.py:431-443) only ever adds yield for a
+            # *one-time* crop (WHEAT/CARROT/MELON), and only on ages
+            # inside watering_bonus_window(crop) - the same window
+            # _crop_yield_and_tile_days already relies on for the
+            # profitability table. Every other day's watering is purely
+            # anti-weed insurance (avoids consecutive_unwatered reaching
+            # 2), not a source of yield. Traced directly on a real
+            # episode (seed 100): 20 MELON tiles planted at age 0 with a
+            # window that doesn't open until age 6 burned ~140 farmer
+            # turns on out-of-window watering over 8 days alone - turns
+            # that could have gone to PLANT instead (the exact "labor
+            # never reaches PRIORITY_PLANT while a farm-wide watering
+            # tier is saturated" bottleneck this task's own plan traced).
+            #
+            # Deliberately scoped to one-time crops only - verified
+            # directly against the real handler, not assumed: for an
+            # *ongoing* crop (TOMATO/STRAWBERRY), WATER only ever sets
+            # watered_today=True; base production fires purely on
+            # _daily_refresh_plants' own schedule, completely independent
+            # of watering (only the FERTILIZE combo bonus cares whether
+            # the tile was watered that same day). There is no "bonus
+            # window" concept for an ongoing crop's watering the way
+            # there is for a one-time crop, so demoting it here would be
+            # guessing at a mechanism that doesn't exist - left
+            # completely untouched, a real, honest scope-narrowing, not
+            # an oversight.
+            cd = CROPS[tile["crop"]]
+            if not cd["ongoing"]:
+                age = current_day - tile["planted_day"]
+                if age not in watering_bonus_window(tile["crop"]):
+                    priority = PRIORITY_MAINTENANCE
         tasks.append(Task(priority, pos, "WATER"))
     if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(tile, current_day):
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))

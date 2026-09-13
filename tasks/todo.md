@@ -828,6 +828,97 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       keeps moving as more episodes complete, so this snapshot is not a final verdict - re-check
       before drawing conclusions from it.
 
+## Stage C — season-remaining-aware demand, watering-window awareness, dynamic hiring (2026-09-13)
+
+The user's own three observations after reviewing Stage B: (1) animal ranking should model demand
+drained all season, not one production interval; (2) hiring should scale from the real task backlog,
+not a flat constant; (3) ~$1000-1150 sits idle early in the season. Investigation traced a fourth,
+connecting cause not named by the user but found while tracing (1)-(3) together: WATER is queued at
+routine-care priority every day regardless of whether it can add yield, crowding out PLANT exactly
+when idle capital and idle tiles coincide (seed 100: 4 free tiles + 2 seeds in hand + $1150 sat
+untouched for 8 days while 148 of 192 available unit-turns went to WATER, 0 to PLANT).
+
+- [x] T8.10 — `animal_revenue_per_tile_day` gains `consumption_horizon_aware`/`consumption_rate`:
+      prices each scheduled animal-product unit at its own production day's drained market level
+      (`price(product, inv - rate*day + k)`) instead of one flat one-production-interval offset -
+      mirrors what `crop_revenue_per_tile_day` already does across a crop's full tile-occupancy
+      horizon (T8.3f/T8.3i). Traced on seed 100's real shop draw: COW's modeled net rate roughly
+      doubled ($46.5 -> $94.4/tile-day at `days_remaining=28`), enough to move it from well behind
+      MELON/STRAWBERRY to directly competitive with them.
+      **Prediction stated up front: a clear, zero-risk win (pure formula correction, zero extra
+      farmer turns). Measured and rejected, prediction wrong**: 1/50 working (39 ties), 0/50 held-out
+      (40 ties). Traced, not just trusted: a first single-seating trace (seed 901) looked like a real
+      loss but proved to be pure seat-order noise (re-running the checked-in baseline against
+      *itself* reproduced the exact same non-tied split) - the real, non-tied holdout seeds
+      (902/908) traced to a genuine mechanism instead: this flag brings COW's score close enough to
+      STRAWBERRY's that a 2-turn intraday market wobble flipped `_top_investment_choice`'s pick on
+      seed 902/day 12 (confirmed turn-by-turn across the whole 720-turn episode: exactly 2 turns
+      differed). `_top_investment_choice` has no hysteresis - that one flip fired a real `BUY_ANIMAL`
+      order, and the existing (correct, deliberate) `stuck_animal` logic then committed to finishing
+      the acquisition (`BUILD_PASTURE`, repeated `PICKUP`/`FEED`, `PLACE` - all confirmed in the
+      actual episode), diverting real farmer turns from the crop the ranking reverted to one turn
+      later. Not a flaw in the formula's own accuracy (unit-test-verified) - a real, previously-
+      dormant architectural gap: nothing gates an irreversible purchase on a lead margin or sustained
+      turn count, and animals were simply always far enough behind crops pre-T8.10 for this to never
+      matter. **Shipped default: False** (rejected, not unmeasured) - kept available (tested) for a
+      concrete follow-up lead this traced: gate `BUY_ANIMAL` on the top choice holding for some
+      minimum consecutive turns or score margin before committing.
+- [x] T8.11 — `_plant_tile_tasks` gains `water_bonus_window_aware`: demotes a non-urgent WATER on a
+      one-time crop (WHEAT/CARROT/MELON) outside `watering_bonus_window(crop)` from `PRIORITY_
+      ROUTINE_CARE` to `PRIORITY_MAINTENANCE` - such a watering adds zero yield (verified directly
+      against the real WATER handler), only anti-weed insurance. Deliberately scoped to one-time
+      crops only: for an *ongoing* crop (TOMATO/STRAWBERRY), watering never adds yield regardless of
+      age (verified directly in `kaggriculture.py` - base production fires purely on
+      `_daily_refresh_plants`' own schedule, independent of watering), so there is no "bonus window"
+      concept to demote against there at all.
+      **Prediction: a real, informative win but not risk-free** - explicitly named the same
+      FERTILIZE-crowding risk class as T8.3e up front. **Measured and rejected, the named risk came
+      true, traced directly**: 7/50 working, 3/50 holdout, 0 ties either block (fires on nearly every
+      turn, unlike T8.10's mostly-tied result). Traced (seed 900): PLANT count did rise as predicted
+      (42 -> 48, +14%), but WEED count at episode end more than tripled (4 -> 13) and final money
+      fell. Root cause: demoting all the way to `PRIORITY_MAINTENANCE` (tied with `DIG`, below
+      `PLANT`) conflates "not yield-productive today" with "not needed today" - the real anti-weed
+      rule only counts consecutive misses, not the bonus window, and once `PLANT` tasks fill the
+      queue ahead of it (T8.6's own parallel-planting throughput), a demoted watering can miss two
+      days running before reaching `MAINTENANCE`, converting productive tiles to weed. **Shipped
+      default: False** (rejected, not unmeasured) - kept available (tested) for a concrete follow-up
+      lead: a middle priority tier between `ROUTINE_CARE` and `PLANT`, not all the way to
+      `MAINTENANCE`.
+- [x] T8.12 — `hires_per_day` gains a `dynamic_hiring` mode: sizes the hiring target from the task
+      backlog `decide()` already built (`ceil(pending_task_count * turns_per_task_estimate /
+      max(1, turns_per_day - hour)) - 1`, clipped to `[min_hires_per_day, max_hires_per_day]`), rather
+      than a flat constant - the user's own explicit request, with `min_hires_per_day`/
+      `hire_cash_reserve` addressing their own follow-up concern (protect the season's limited
+      starting capital) as named, swept parameters instead of leaving it implicit.
+      **Prediction stated up front, naming the dependency explicitly**: a win only if T8.11 had
+      already freed labor first; close to zero (or a small loss) otherwise, since T8.11 was rejected
+      and the labor supply this would scale into is still saturated by the same out-of-window
+      watering T8.11 tried and failed to free.
+      **Measured and rejected, prediction correct**: 2/50 working, 4/50 holdout, 0 ties either block.
+      Traced (seed 900): hired up to 5 hands at once (1412 total hand-turns vs the checked-in
+      baseline's 690 with 1 hand); PLANT count did rise (45+25=70 vs 20+22=42, +67%), but `PASS`
+      appeared 68 times (hands with genuinely nothing to do) and WATER rose even more sharply than
+      PLANT (609 vs 437 total) - final money fell (28439 vs 32958). Root cause: `len(tasks)` counts
+      every queued action including ones that recur regardless of labor level (routine watering
+      chief among them - T8.11's own unresolved target), so the formula reads a large *standing*
+      backlog as a large *marginal* one and overshoots the labor level T8.6's own geometry-derived
+      caps were tuned against - reproducing T7.4's original "adding workers past real bottlenecks has
+      zero marginal value" finding, now for a genuinely different, non-bug reason. **Shipped default:
+      `dynamic_hiring=False`** (rejected, not unmeasured) - kept available (tested) for a concrete
+      follow-up lead: fix the task-count signal itself (count only PLANT/HARVEST/acquisition tasks,
+      or add a real idle-hand penalty) before this can safely scale labor - very plausibly needs
+      T8.11's own still-open watering-crowding problem solved first, exactly as predicted.
+
+**Net result of this whole investigation**: all three built mechanisms (T8.10/T8.11/T8.12) were
+measured and rejected - a real, honest outcome, not a wasted one. Each rejection is traced to a
+concrete, specific mechanism (not noise, not a bug in the new code) and each names a genuine
+follow-up lead: T8.10 needs investment-choice hysteresis before a more accurate animal valuation is
+safe to act on; T8.11 needs a middle priority tier instead of a full demotion to MAINTENANCE; T8.12
+needs a better task-count signal and very plausibly depends on T8.11's fix landing first. The user's
+third observation (idle starting capital) was never directly built as its own task - it was correctly
+diagnosed as a downstream symptom of the same watering-crowding bottleneck T8.11 targeted, and stays
+unresolved for the same reason T8.11 was rejected.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

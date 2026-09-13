@@ -83,6 +83,75 @@ def test_build_task_list_routine_watering_is_lower_priority_than_prevent_loss():
     assert tasks[0].priority == PRIORITY_ROUTINE_CARE
 
 
+def test_build_task_list_water_bonus_window_aware_demotes_watering_outside_the_bonus_window():
+    # T8.11, the user's own observation (extending the same trace this
+    # module's module docstring already names as unbuilt: "a plausible
+    # refinement, not yet measured to matter" - see _plant_tile_tasks'
+    # own FERTILIZE comment on the old, un-window-aware WATER task).
+    # WHEAT's bonus window is watering_bonus_window("WHEAT") = range(2, 5)
+    # (max_yield_day=4, window_start=(4+1)//2=2) - watering at age 0 gives
+    # zero yield, it only exists to avoid the 2-consecutive-miss weed
+    # conversion. Gated: default behavior (flag off) keeps this at
+    # PRIORITY_ROUTINE_CARE (see test_build_task_list_routine_watering_is_
+    # lower_priority_than_prevent_loss, same fixture, flag omitted).
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # age 0, WHEAT
+    tasks = build_task_list(tiles, current_day=0, water_bonus_window_aware=True)
+    assert len(tasks) == 1
+    assert tasks[0].priority == PRIORITY_MAINTENANCE
+    assert tasks[0].op == "WATER"
+
+
+def test_build_task_list_water_bonus_window_aware_keeps_routine_priority_inside_the_window():
+    # Same WHEAT tile, but at age 2 - inside range(2, 5), watering today
+    # actually adds yield. Must stay at the routine-care tier, not get
+    # demoted just because the flag is on.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # WHEAT
+    tasks = build_task_list(tiles, current_day=2, water_bonus_window_aware=True)
+    assert len(tasks) == 1
+    assert tasks[0].priority == PRIORITY_ROUTINE_CARE
+
+
+def test_build_task_list_water_bonus_window_aware_never_demotes_an_urgent_watering():
+    # consecutive_unwatered >= 1 is the real anti-weed safety valve (2
+    # consecutive misses converts the tile to WEED) - this must never be
+    # touched by the bonus-window optimization, window or no window.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=1, watered_today=False, planted_day=0)  # age 0, WHEAT
+    tasks = build_task_list(tiles, current_day=0, water_bonus_window_aware=True)
+    assert len(tasks) == 1
+    assert tasks[0].priority == PRIORITY_PREVENT_LOSS
+
+
+def test_build_task_list_water_bonus_window_aware_leaves_ongoing_crops_untouched():
+    # T8.11's deliberate scope-narrowing, verified directly against the
+    # real kaggriculture.py handler (not assumed): for an *ongoing* crop
+    # (TOMATO/STRAWBERRY), WATER's own handler only ever sets
+    # watered_today=True - it never touches yield_units at all (base
+    # production fires purely on the _daily_refresh_plants schedule,
+    # independent of watering; only the FERTILIZE *combo* bonus cares
+    # whether the tile was watered that same day). There is no "bonus
+    # window" concept for an ongoing crop's own watering the way there is
+    # for a one-time crop, so this flag must leave ongoing-crop watering
+    # priority completely unchanged, at any age.
+    tiles = _empty_tiles()
+    tile = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)
+    tile["crop"] = "STRAWBERRY"
+    tiles[2][2] = tile
+    tasks = build_task_list(tiles, current_day=0, water_bonus_window_aware=True)
+    assert len(tasks) == 1
+    assert tasks[0].priority == PRIORITY_ROUTINE_CARE
+
+
+def test_build_task_list_water_bonus_window_aware_defaults_to_false():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # WHEAT, age 0
+    without_flag = build_task_list(tiles, current_day=0)
+    with_flag_off = build_task_list(tiles, current_day=0, water_bonus_window_aware=False)
+    assert without_flag == with_flag_off == [Task(PRIORITY_ROUTINE_CARE, (2, 2), "WATER")]
+
+
 def test_build_task_list_fertilizes_a_plant_when_fertilizer_is_on_hand():
     # T8.3e (tasks/plan.md), the user's own observed defect: FERTILIZER
     # was only ever collected and sold, never applied - the real
