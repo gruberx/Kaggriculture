@@ -700,9 +700,22 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       the hard maturity cutoff**, not just at it - exactly the user's own COW/MILK example, confirmed
       directly. 345/345 full suite (31 new tests across three commits), compileall clean, boundary
       check green.
-- [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
-      unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
-      forced, checking the pipeline actually reaches production).
+- [x] T8.4 — `Task.unit_index` + inventory pinning. Added a trailing `unit_index: int | None = None`
+      field to `Task` (positional-construction-safe); pinned wheat `PICKUP`, animal `PICKUP`, `FEED`,
+      `PLACE` to unit 0 (`_PINNED_UNIT_INDEX`) - the exact ops `kaggriculture.py` resolves against the
+      *acting unit's own* inventory, verified directly. `assign_units` gained a pinned-first rule
+      within each tier: a pinned task is matched to its exact unit if free, else dropped for the turn
+      (never handed to a nearer hand, which would resolve against the wrong inventory) - preserves
+      T8.2's stability argument unchanged for the unpinned remainder (same algorithm, smaller free-unit
+      set). Bit-identical at `hires_per_day=0` (golden table unchanged, confirmed) - pinning only
+      matters once more than one unit exists.
+      **Diagnostic run** (6 episodes, `hires_per_day=4` forced, vs starter): directly falsifies half
+      of T7.4's stale "hands have nothing to do" premise - hands are NOT majority-PASS (28-38% PASS
+      across all 6 seeds, the rest real WATER/PLANT/HARVEST/movement work). The other half is still
+      unresolved as expected: `inventories[0]["WHEAT"]` stayed empty in 5/6 seeds and animal
+      production was reached in 0/6 - expected, not a red flag, since `build_task_list` still emits at
+      most one new-investment task per turn regardless of hand count (T8.6's job, not T8.4's). 354/354
+      full suite (9 new tests), compileall clean, boundary check green.
 - [ ] T8.5 — HIRE order priority (`hires + sells + tail`, buys slot-reserved but emitted after
       sells to avoid seeing pre-sale money).
 - [ ] T8.6 — Parallel planting + batched seed purchase, bounded by `seeds_on_hand` (atomic PLANT

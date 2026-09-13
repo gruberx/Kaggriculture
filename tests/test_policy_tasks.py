@@ -611,6 +611,99 @@ def test_assign_units_priority_still_dominates_proximity_with_tier_local_matchin
     assert assignment == [urgent_far]
 
 
+def test_assign_units_gives_a_pinned_task_to_its_own_unit_even_if_farther():
+    # T8.4: a hired hand standing right on the tile must NOT take a
+    # pinned FEED - the real interpreter resolves FEED against the
+    # *acting unit's own* inventory, and only unit 0 ever carries WHEAT
+    # (decide.py's own inventories[0] model) - assigning it to the hand
+    # would silently no-op forever.
+    pinned_feed = Task(priority=PRIORITY_ROUTINE_CARE, pos=(9, 9), op="FEED", unit_index=0)
+    farmer = (0, 0)  # far from the tile
+    hand = (9, 9)  # standing right on it
+    assignment = assign_units([pinned_feed], [farmer, hand])
+    assert assignment == [pinned_feed, None]
+
+
+def test_assign_units_drops_a_pinned_task_when_its_unit_is_already_busy():
+    # Deliberate, accepted consequence (tasks/plan.md T8.4): a pinned
+    # task whose unit is claimed by a higher-priority pinned task in the
+    # same tier is simply not serviced this turn, not handed to a hand
+    # (which would resolve against the wrong inventory).
+    prevent_loss_feed = Task(priority=PRIORITY_PREVENT_LOSS, pos=(1, 1), op="FEED", unit_index=0)
+    routine_pickup = Task(priority=PRIORITY_PREVENT_LOSS, pos=(2, 2), op="PICKUP", item="WHEAT", unit_index=0)
+    assignment = assign_units([prevent_loss_feed, routine_pickup], [(0, 0), (9, 9)])
+    # Only one of the two same-tier, same-unit-pinned tasks can win unit
+    # 0 - pos (1,1) sorts before (2,2), so it wins; the hand at (9,9)
+    # never picks up either (both are pinned to unit 0, never to it).
+    assert assignment == [prevent_loss_feed, None]
+
+
+def test_assign_units_pinned_task_does_not_block_unpinned_work_in_the_same_tier():
+    pinned_place = Task(priority=PRIORITY_PLANT, pos=(0, 0), op="PLACE", animal="COW", unit_index=0)
+    unpinned_plant = Task(priority=PRIORITY_PLANT, pos=(9, 9), op="PLANT", crop="WHEAT")
+    farmer = (0, 0)
+    hand = (9, 9)
+    assignment = assign_units([pinned_place, unpinned_plant], [farmer, hand])
+    assert assignment == [pinned_place, unpinned_plant]
+
+
+def test_assign_units_hands_still_take_unpinned_ops():
+    # Negative control against over-serializing (tasks/plan.md T8.4): a
+    # hand nearer to WATER/HARVEST/DIG/PLANT than the farmer must still
+    # take it - only the inventory-resolving ops are pinned.
+    for op, kwargs in (("WATER", {}), ("HARVEST", {}), ("DIG", {}), ("PLANT", {"crop": "WHEAT"})):
+        task = Task(priority=PRIORITY_HARVEST, pos=(9, 9), op=op, **kwargs)
+        assignment = assign_units([task], [(0, 0), (9, 9)])
+        assert assignment == [None, task], f"{op} was not taken by the nearer hand"
+
+
+def test_build_task_list_pins_wheat_pickup_to_unit_0():
+    tiles = _empty_tiles()
+    tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)  # needs feeding, no WHEAT in hand
+    tasks = build_task_list(tiles, shed={"WHEAT": 5})
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "WHEAT")
+    assert pickup.unit_index == 0
+
+
+def test_build_task_list_pins_feed_to_unit_0():
+    tiles = _empty_tiles()
+    tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(tiles, farmer_inventory={"WHEAT": 5})
+    feed = next(t for t in tasks if t.op == "FEED")
+    assert feed.unit_index == 0
+
+
+def test_build_task_list_pins_place_to_unit_0():
+    tiles = _empty_tiles()
+    tiles[3][3] = {"kind": "PASTURE"}  # matching structure already built, empty
+    tasks = build_task_list(
+        tiles, desired_animal="COW", farmer_inventory={"COW": 1},
+        unit_positions=[(4, 4)],
+    )
+    place = next(t for t in tasks if t.op == "PLACE")
+    assert place.unit_index == 0
+
+
+def test_build_task_list_pins_animal_pickup_to_unit_0():
+    tiles = _empty_tiles()
+    tiles[3][3] = {"kind": "PASTURE"}  # matching structure already built
+    tasks = build_task_list(tiles, desired_animal="COW", shed={"COW": 1})
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "COW")
+    assert pickup.unit_index == 0
+
+
+def test_build_task_list_does_not_pin_water_harvest_dig_plant_or_build():
+    tiles = _empty_tiles()
+    tiles[0][0] = _plant_tile(consecutive_unwatered=1)  # -> WATER
+    tiles[1][1] = _plant_tile(yield_units=1, planted_day=0)  # -> HARVEST (WHEAT matures fast)
+    tiles[2][2] = {"kind": "WEED"}  # -> DIG
+    tasks = build_task_list(tiles, plant_crop="CARROT")  # -> PLANT
+    ops_seen = {t.op for t in tasks}
+    assert {"WATER", "DIG", "PLANT"} <= ops_seen
+    for t in tasks:
+        assert t.unit_index is None, f"{t.op} should not be pinned"
+
+
 def _step_toward(pos: tuple[int, int], target: tuple[int, int]) -> tuple[int, int]:
     if pos == target:
         return pos

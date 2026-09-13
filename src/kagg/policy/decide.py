@@ -822,6 +822,14 @@ def decide(obs: dict, params: dict) -> dict:
     # own indexing convention - hands are index 1+). PLACE/FEED's real
     # handlers consume from here, never the shed directly - see
     # tasks.build_task_list's own docstring for why both are needed.
+    # T8.4: reading only index 0 here is correct *by construction*, not
+    # merely by convention - tasks.py pins every inventory-resolving op
+    # (wheat/animal PICKUP, FEED, PLACE) to unit_index 0, so no other
+    # unit's inventory can ever hold the wheat/animal this function reads
+    # for. See tasks._PINNED_UNIT_INDEX's own docstring for the full
+    # story (the real gap this closes: before T8.4, a hired hand could
+    # silently pick up the wheat/animal into inventories[1+], which
+    # decide() would then never see again).
     farmer_inventory = (private.get("inventories") or [{}])[0]
 
     # Real bug found while implementing T6.4: _top_investment_choice's

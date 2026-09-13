@@ -59,18 +59,39 @@ PRIORITY_MAINTENANCE = 4
 # by import - this module has no dependency on kagg.policy.params.
 _WHEAT_PICKUP_BATCH = 10
 
+# T8.4: decide() models only inventories[0] (`_farmer_inventory`'s own
+# convention, documented there) - correct by construction only because
+# every task the real interpreter resolves against the *acting unit's
+# own* inventory (kaggriculture.py's PICKUP/FEED/PLACE handlers, verified
+# directly) is pinned here to this exact unit index, so a hired hand can
+# never silently pick up wheat/an animal, feed, or place one into an
+# inventory slot decide() never looks at again. WATER/HARVEST/DIG/
+# COLLECT_FERTILIZER/CARE/PLANT (consumes the shared private["seeds"],
+# not any unit's inventory)/BUILD_COOP/BUILD_PASTURE are deliberately
+# left unpinned - a hand doing one of those in parallel is free
+# throughput at no correctness cost.
+_PINNED_UNIT_INDEX = 0
+
 
 @dataclass(frozen=True)
 class Task:
     priority: int
     pos: tuple[int, int]
-    # "WATER"|"HARVEST"|"FEED"|"FERTILIZE"|"PLANT"|"DIG"|
+    # "WATER"|"HARVEST"|"FEED"|"FERTILIZE"|"PLANT"|"DIG"|"CARE"|
     # "COLLECT_FERTILIZER"|"BUILD_COOP"|"BUILD_PASTURE"|"PLACE"|"PICKUP"
     op: str
     crop: str | None = None  # only set for PLANT tasks
     animal: str | None = None  # only set for PLACE tasks
     item: str | None = None  # only set for PICKUP tasks
     qty: int = 1  # only meaningful for PICKUP tasks
+    # T8.4: pins this task to a specific unit index (always 0, the
+    # farmer, in practice today) rather than letting assign_units pick
+    # whichever unit is nearest. Trailing field (with a default), so
+    # every existing positional Task(...) construction in this module
+    # and its tests keeps working unchanged. See
+    # `_UNIT_BOUND_INVENTORY_OPS`/assign_units's own docstring for why
+    # this exists at all and which ops need it.
+    unit_index: int | None = None
 
 
 def _closest_pos(candidates: list[tuple[int, int]], unit_positions) -> tuple[int, int] | None:
@@ -256,7 +277,9 @@ def build_task_list(
         # T8.2's stability argument needs this module to avoid).
         pos = _closest_pos(shed_access_tiles(len(tiles)), unit_positions[:1])
         qty = min(shed["WHEAT"], _WHEAT_PICKUP_BATCH)
-        tasks.append(Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty))
+        tasks.append(
+            Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty, unit_index=_PINNED_UNIT_INDEX)
+        )
 
     investment_task = _new_investment_task(
         empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
@@ -299,14 +322,14 @@ def _new_investment_task(
         animal_in_shed = shed.get(desired_animal, 0) > 0
         if animal_in_hand and matching_structure_tiles:
             pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
-            return Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal)
+            return Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX)
         if not matching_structure_tiles and empty_tiles:
             pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
             build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
             return Task(PRIORITY_PLANT, pos, build_op)
         if matching_structure_tiles and animal_in_shed and not animal_in_hand:
             pos = _closest_pos(shed_access_tiles(board_size), unit_positions[:1])
-            return Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1)
+            return Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)
         return None
     if plant_crop is not None and empty_tiles:
         pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
@@ -422,7 +445,7 @@ def _animal_tile_tasks(
         urgent = tile.get("consecutive_unfed", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
         if farmer_inventory.get("WHEAT", 0) > 0:
-            tasks.append(Task(priority, pos, "FEED"))
+            tasks.append(Task(priority, pos, "FEED", unit_index=_PINNED_UNIT_INDEX))
         else:
             wheat_pickup_priority = priority
     if tile.get("yield_units", 0) > 0:
@@ -459,6 +482,25 @@ def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> li
     never enter it) - re-running this function after each single-tile
     move reproduces the same assignment for any unit still en route.
 
+    T8.4: within each tier, a task with `unit_index` set (wheat/animal
+    `PICKUP`, `FEED`, `PLACE` - see `_PINNED_UNIT_INDEX`'s own docstring
+    for why exactly these ops) is resolved *before* the distance-based
+    matching below, and only ever against that exact unit - never handed
+    to a nearer hand instead. Deliberate, accepted consequence: if the
+    pinned unit is already claimed by a higher-priority pinned task this
+    same tier, the task is simply dropped for this turn (not serviced by
+    anyone) rather than assigned to a unit whose own inventory the real
+    interpreter wouldn't resolve it against - a silent no-op, not a
+    silent wrong-inventory bug. Ties among same-tier pinned tasks break
+    on `pos`, matching the unpinned matching's own tie-break convention.
+    This preserves T8.2's stability argument for the unpinned remainder
+    unchanged (it's the identical algorithm over a - possibly smaller -
+    free-unit set; pinning never depends on unit position, so it
+    introduces no new position-dependence of its own). At `len(unit_
+    positions) == 1` (today's shipped `hires_per_day=0`), pinning changes
+    nothing observable - the one unit is always either the pinned target
+    or not needed at all.
+
     Still "at most one task per unit, one unit per task" (SPEC-policy.md)
     and a bounded greedy assignment, not a search problem - at up to 100
     tiles and a handful of units this is cheap even at its O(tasks^2 *
@@ -473,13 +515,19 @@ def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> li
         if not free_units:
             break
         tier = [t for t in tasks if t.priority == priority]
-        while free_units and tier:
+        pinned = sorted((t for t in tier if t.unit_index is not None), key=lambda t: t.pos)
+        unpinned = [t for t in tier if t.unit_index is None]
+        for t in pinned:
+            if t.unit_index in free_units:
+                assignment[t.unit_index] = t
+                free_units.discard(t.unit_index)
+        while free_units and unpinned:
             _, t_idx, u_idx = min(
                 ((tile_distance(unit_positions[u], t.pos), t.pos, u), t_idx, u)
-                for t_idx, t in enumerate(tier)
+                for t_idx, t in enumerate(unpinned)
                 for u in free_units
             )
-            assignment[u_idx] = tier.pop(t_idx)
+            assignment[u_idx] = unpinned.pop(t_idx)
             free_units.discard(u_idx)
     return assignment
 
