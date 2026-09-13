@@ -266,6 +266,66 @@ _DEFAULT_CROP_SHOP_DEMAND_AWARE = True
 # yield doesn't clear the bar once netted out. $19903 vs $18584 final.
 _DEFAULT_CROP_NET_OF_SEED_COST = True
 
+# T8.3l (the user's own observed defect): the agent was buying and
+# selling 10 WHEAT every single turn with no animal on the farm and none
+# being pursued - traced in a real episode (seed 100): 147 BUY_PRODUCT/
+# SELL pairs, steps 1-387, every turn until the price climbed past
+# wheat_max_buy_price. Root cause: market.buy_wheat_order restocks
+# whenever shed WHEAT falls below wheat_restock_threshold regardless of
+# whether there's anything to feed, and market.sell_orders sells
+# everything above wheat_reserve (0 until an animal is placed) - the two
+# rules fight forever with nothing to break the cycle.
+#
+# Gates whether feed is only restocked when an animal is actually placed
+# or currently the top investment choice - see the wiring below and
+# market.buy_wheat_order/market_orders's own docstrings for the
+# mechanism (including the belt-and-braces reserve-floor invariant in
+# market_orders, which also protects the mechanism if this flag is ever
+# turned off).
+#
+# Correction to this comment's own first draft: the initial prediction
+# here was "~$0 real-game gain" - reasoned from the engine's own quoting
+# rule (kaggriculture.py quotes BUY_PRODUCT at post-buy inventory
+# specifically so a solo round trip nets exactly $0, verified
+# numerically) plus a params-flag-toggle self-play measurement. That
+# measurement turned out to be invalid: toggling this flag off to build
+# a "pre-fix baseline" left market_orders's own reserve-floor invariant
+# (see market.py's docstring) still active, since the invariant fires on
+# the *feed_needed value*, not on this flag - so the synthetic baseline
+# was already accidentally getting most of the real fix, and measured as
+# a near-tie against the real candidate.
+#
+# The correct comparison - this actual code change (write_code_snapshot_
+# agent) against the real previously-committed code before it
+# (snapshot_agent_from_git_ref("HEAD")), both at their own default
+# params, exactly how every other T8.3-series feature in this file was
+# measured - found a real, decisive, reproducible win: 49/50 on the
+# working block (Wilson [0.895, 0.996]) and 47/50 on the held-out block
+# ([0.838, 0.979]), clearing the usual gate cleanly in both directions.
+# Per-seed score deltas are not one-sided in magnitude (seed 101: +1445;
+# seed 103: -888) - the win comes from a small, consistent edge across
+# most seeds and seatings, not one dominant mechanism. The clearest
+# proximate cause traced so far: the wasted WHEAT restock (queued ahead
+# of BUY_SEED/BUY_ANIMAL in the same turn's market list, and the real
+# engine settles a turn's market orders strictly in list order) spends
+# money that a same-turn seed or animal purchase needed, occasionally
+# delaying it a turn when funds are tight in the early game - consistent
+# with, but not yet a complete accounting of, the full measured margin.
+# See tasks/todo.md's T8.3l entry for the full story, including the
+# invalidated first measurement, corrected in place rather than left
+# standing.
+_DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED = True
+
+# T8.3l, found while tracing the wheat ping-pong above: sell_orders was
+# subtracting wheat_reserve even during liquidate (T8.3d), stranding the
+# feed reserve (~10 WHEAT) unsold once an animal had been placed - dead
+# weight per T8.3d's own finding that anything unsold at episode end
+# scores exactly zero. There's no future feeding left to protect the
+# reserve for once liquidation has begun. See market.sell_orders's own
+# docstring for the mechanism; measured alongside the flag above (see
+# tasks/todo.md's T8.3l entry).
+_DEFAULT_LIQUIDATE_WHEAT_RESERVE = True
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -666,21 +726,33 @@ def decide(obs: dict, params: dict) -> dict:
         for i in range(1, len(unit_positions))
     ]
 
-    # Reserve WHEAT from the sell-everything arbitrage once any animal
-    # exists on the farm - see market.sell_orders's own docstring for the
-    # real deadlock this avoids (found during T6.4: the arbitrage's own
-    # SELL emptied the shed before a PICKUP for feeding could ever
-    # complete, starving a placed COW to escape). Matches
-    # tasks._WHEAT_PICKUP_BATCH's batch size, not by import (tasks.py has
-    # no dependency on this module) - keep the two in sync by hand if
-    # either changes.
+    # Reserve WHEAT from routine selling once any animal exists on the
+    # farm - see market.sell_orders's own docstring for the real deadlock
+    # this avoids (found during T6.4: selling everything emptied the shed
+    # before a PICKUP for feeding could ever complete, starving a placed
+    # COW to escape). Matches tasks._WHEAT_PICKUP_BATCH's batch size, not
+    # by import (tasks.py has no dependency on this module) - keep the
+    # two in sync by hand if either changes.
     wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_types else 0
+
+    # T8.3l: feed is only worth restocking when there's an animal placed
+    # or currently being pursued (acquisition_animal) - see
+    # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED's own comment for the real
+    # ping-pong this fixes.
+    feed_needed = (
+        bool(placed_animal_types) or acquisition_animal is not None
+        if params.get("wheat_buy_only_when_feed_needed", _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED)
+        else True
+    )
 
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     liquidation_days_before_end = params.get(
         "liquidation_days_before_end", _DEFAULT_LIQUIDATION_DAYS_BEFORE_END
     )
     liquidate = current_day >= season_length_days - liquidation_days_before_end
+    liquidate_wheat_reserve = params.get(
+        "liquidate_wheat_reserve", _DEFAULT_LIQUIDATE_WHEAT_RESERVE
+    )
 
     market = market_orders(
         shed,
@@ -692,6 +764,8 @@ def decide(obs: dict, params: dict) -> dict:
         wheat_reserve=wheat_reserve,
         liquidate=liquidate,
         use_fertilizer=use_fertilizer,
+        liquidate_wheat_reserve=liquidate_wheat_reserve,
+        feed_needed=feed_needed,
     )
 
     # Seed/animal purchase: arrives next turn (market orders resolve

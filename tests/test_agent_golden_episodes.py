@@ -233,20 +233,22 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.3k policy (crop_net_of_seed_cost=True accepted
-# as the default), reproduced twice before being hardcoded here. Not yet
-# the rigorous >=60% win rate SPEC.md's success criteria call for (that
-# needs Phase 4's paired-seed harness, not three ad-hoc seeds), but a real
-# improvement worth locking in - accepted on an 18W/2L-and-21W/4L self-play
-# result (most games tie exactly; see the module docstring's T8.3k
-# paragraph above for why that's expected here, not a red flag).
+# Recorded against the T8.3l policy (wheat_buy_only_when_feed_needed and
+# liquidate_wheat_reserve both accepted as the default), reproduced twice
+# before being hardcoded here. Not yet the rigorous >=60% win rate
+# SPEC.md's success criteria call for (that needs Phase 4's paired-seed
+# harness, not three ad-hoc seeds), but a real improvement worth locking
+# in - accepted on a 49/50-and-47/50 self-play result against the actual
+# previously-committed code (a params-flag-toggle self-play measurement
+# was tried first and found invalid - see kagg.policy.decide's
+# _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED comment for the full story).
 _GOLDEN = {
-    ("starter", 1): (26366.0, 3421.0),
-    ("starter", 2): (25376.0, 3569.0),
-    ("starter", 3): (25447.0, 3649.0),
-    ("pass", 1): (26106.0, 3000.0),
-    ("pass", 2): (25461.0, 3000.0),
-    ("pass", 3): (27402.0, 3000.0),
+    ("starter", 1): (26386.0, 3421.0),
+    ("starter", 2): (25293.0, 3569.0),
+    ("starter", 3): (25400.0, 3649.0),
+    ("pass", 1): (26075.0, 3000.0),
+    ("pass", 2): (25905.0, 3000.0),
+    ("pass", 3): (27575.0, 3000.0),
 }
 
 

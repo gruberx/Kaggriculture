@@ -719,3 +719,73 @@ def test_decide_assigns_hands_when_present():
     action = decide(obs, DEFAULT_PARAMS)
     assert len(action["hands"]) == 1
     assert action["hands"][0] == ["DIG"]  # already standing on the weed tile
+
+
+def test_decide_does_not_buy_wheat_before_any_animal_exists():
+    # T8.3l: the user's own observed defect - decide() was buying 10
+    # WHEAT every turn shed WHEAT fell below wheat_restock_threshold, then
+    # market.sell_orders sold all of it right back (wheat_reserve is 0
+    # until an animal is placed) - a real, decisive ping-pong traced in a
+    # live episode (147 buy/sell pairs, seed 100), with no crop or animal
+    # ever on the farm. With no animal placed and none being pursued
+    # (crops rank ahead of every animal by default with an empty
+    # market), there is no feed to restock for at all.
+    action = decide(_obs(), DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
+
+
+def test_decide_buys_wheat_once_an_animal_is_being_pursued():
+    # Once an animal is the top investment choice (crops crashed via the
+    # market), feed is needed even before the animal is actually placed -
+    # restocking should already be active so feed is on hand by the time
+    # PLACE fires.
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW ranks first overall
+    obs["private"]["shed"]["WHEAT"] = 0
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == [
+        ["BUY_PRODUCT", "WHEAT", 10]
+    ]
+
+
+def test_decide_buys_wheat_once_an_animal_is_placed():
+    obs = _obs()
+    obs["farms"][0]["tiles"][2][4] = _placed_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 0
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == [
+        ["BUY_PRODUCT", "WHEAT", 10]
+    ]
+
+
+def test_decide_defaults_wheat_buy_only_when_feed_needed_to_true_when_unset():
+    # Mirrors test_decide_defaults_crop_net_of_seed_cost_to_true_when_unset's
+    # pattern: a params dict missing the key entirely must behave like the
+    # documented default (True), not like it's off.
+    params = {k: v for k, v in DEFAULT_PARAMS.items() if k != "wheat_buy_only_when_feed_needed"}
+    action = decide(_obs(), params)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
+
+
+def test_decide_liquidation_ignores_the_wheat_reserve():
+    # T8.3l: sell_orders previously kept wheat_reserve units off the
+    # liquidation sale too, stranding the feed reserve (worthless unsold
+    # at episode end per T8.3d) once an animal had been placed.
+    obs = _obs()
+    obs["day"] = 29  # within liquidation_days_before_end=2 of season end (30)
+    obs["farms"][0]["tiles"][2][4] = _placed_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 10
+    action = decide(obs, DEFAULT_PARAMS)
+    sell_wheat_orders = [o for o in action["market"] if o[0] == "SELL" and o[1] == "WHEAT"]
+    assert sell_wheat_orders == [["SELL", "WHEAT", 10]]
+
+
+def test_decide_defaults_liquidate_wheat_reserve_to_true_when_unset():
+    params = {k: v for k, v in DEFAULT_PARAMS.items() if k != "liquidate_wheat_reserve"}
+    obs = _obs()
+    obs["day"] = 29
+    obs["farms"][0]["tiles"][2][4] = _placed_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 10
+    action = decide(obs, params)
+    sell_wheat_orders = [o for o in action["market"] if o[0] == "SELL" and o[1] == "WHEAT"]
+    assert sell_wheat_orders == [["SELL", "WHEAT", 10]]

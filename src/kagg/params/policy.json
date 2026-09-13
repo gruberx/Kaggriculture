@@ -15,5 +15,7 @@
   "crop_self_impact_aware": true,
   "crop_self_impact_opponent_weight": 0.0,
   "crop_shop_demand_aware": true,
-  "crop_net_of_seed_cost": true
+  "crop_net_of_seed_cost": true,
+  "wheat_buy_only_when_feed_needed": true,
+  "liquidate_wheat_reserve": true
 }

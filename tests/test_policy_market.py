@@ -232,3 +232,62 @@ def test_market_orders_total_never_exceeds_max_orders():
         max_orders=10,
     )
     assert len(orders) <= 10
+
+
+def test_buy_wheat_order_does_not_buy_when_no_feed_is_needed():
+    # T8.3l: the user's own observed defect - the agent was buying and
+    # selling 10 WHEAT every single turn before any animal was ever
+    # placed or even being pursued. feed_needed=False means there is no
+    # animal to feed at all, so restocking has no purpose yet.
+    order = buy_wheat_order(
+        wheat_on_hand=0, wheat_price=25, params={"wheat_restock_threshold": 5}, feed_needed=False
+    )
+    assert order is None
+
+
+def test_buy_wheat_order_still_buys_when_feed_is_needed():
+    # Guards the default (feed_needed=True) - every existing caller and
+    # test above this one relies on the restock logic firing unchanged.
+    order = buy_wheat_order(
+        wheat_on_hand=0, wheat_price=25, params={"wheat_restock_threshold": 5, "wheat_restock_qty": 10}
+    )
+    assert order == ["BUY_PRODUCT", "WHEAT", 10]
+
+
+def test_market_orders_does_not_ping_pong_wheat():
+    # T8.3l: direct regression test for the reported symptom. Traced in a
+    # real self-play episode (seed 100): with wheat_reserve=0 (no animal
+    # placed yet), buy_wheat_order tops the shed back up to
+    # wheat_restock_qty every turn immediately after sell_orders empties
+    # it below wheat_restock_threshold - restock and sell-everything
+    # fight each other forever, 147 buy/sell pairs in one episode. The
+    # fix: market_orders never lets the reserve it sells down to fall
+    # below the restock threshold whenever feed is actually needed (a
+    # belt-and-braces invariant, not just gating the buy side) - so
+    # there's nothing left for a restock to react to.
+    shed = {p: 0 for p in PRODUCTS}
+    shed["WHEAT"] = 10
+    orders = market_orders(
+        shed,
+        _BASE_MARKET_INVENTORY,
+        market_prices={"WHEAT": 25},
+        wheat_on_hand=10,
+        params={"wheat_restock_threshold": 5, "wheat_restock_qty": 10},
+        feed_needed=True,
+    )
+    assert [o for o in orders if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
+    sell_orders_emitted = [o for o in orders if o[0] == "SELL" and o[1] == "WHEAT"]
+    remaining = 10 - (sell_orders_emitted[0][2] if sell_orders_emitted else 0)
+    assert remaining >= 5
+
+
+def test_sell_orders_ignores_the_wheat_reserve_when_liquidating():
+    # T8.3l: sell_orders previously subtracted wheat_reserve even under
+    # liquidate=True, stranding the feed reserve (~10 WHEAT, worthless
+    # unsold at episode end per T8.3d) once an animal had been placed.
+    # There is no future feeding to protect it for once liquidation has
+    # begun.
+    shed = {p: 0 for p in PRODUCTS}
+    shed["WHEAT"] = 10
+    orders = sell_orders(shed, _BASE_MARKET_INVENTORY, wheat_reserve=10, liquidate=True)
+    assert orders == [["SELL", "WHEAT", 10]]

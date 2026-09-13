@@ -579,6 +579,49 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       of 6 seeds changed this time, a smaller footprint than T8.3f/T8.3i, consistent with the
       narrow-crossover-window finding. 300/300 full suite (new tests across `test_policy_strategy.py`
       and `test_policy_decide.py`), compileall clean, boundary check green.
+- [x] T8.3l — The user's own observed defect: "our agent looks like it constantly buys and sells 10
+      WHEAT." Confirmed and traced in a real episode (seed 100): 147 `BUY_PRODUCT`/`SELL` pairs,
+      every single turn from step 1 to 387, stopping only once the price climbed past
+      `wheat_max_buy_price`. Root cause - two rules fighting with nothing to break the cycle:
+      `buy_wheat_order` restocks whenever shed WHEAT falls below `wheat_restock_threshold`,
+      regardless of whether anything needs feeding; `sell_orders` sells everything above
+      `wheat_reserve`, which is 0 until an animal is actually placed.
+      **Built:** `buy_wheat_order`/`market_orders` gained `feed_needed` (only restock when an animal
+      is placed or currently the top investment choice - `decide.py` computes this from
+      `placed_animal_types`/`acquisition_animal`, both already tracked there); `market_orders` also
+      gained a belt-and-braces invariant that floors the *effective* wheat reserve at
+      `wheat_restock_threshold` whenever feed is needed and it isn't a liquidation turn, so
+      `sell_orders` can never again sell WHEAT down to a level `buy_wheat_order` immediately restocks
+      - protects the fix even if the gate flag is ever disabled. Separately,
+      `sell_orders`/`market_orders` gained `liquidate_wheat_reserve` (default on): a second real bug
+      found while tracing the first - the feed reserve was being kept off the table even during
+      end-of-season liquidation (T8.3d), stranding ~10 WHEAT unsold (worth exactly $0 per T8.3d's own
+      finding) once an animal had been placed.
+      **A real, invalidated-and-corrected-in-place measurement, worth recording for next time:** a
+      first self-play attempt (toggling both new flags off as a synthetic "old" baseline) predicted
+      only a near-$0 real-game gain, reasoned from the engine's own quoting rule
+      (`kaggriculture.py`: `BUY_PRODUCT` is quoted at post-buy inventory specifically so a round trip
+      nets $0 - verified numerically). That measurement was **wrong, not just weak**: disabling the
+      gate flag left the new reserve-floor invariant *still active* (it fires on the `feed_needed`
+      value, not the flag), so the "baseline" was already getting most of the real fix, and measured
+      as a near-tie against the actual candidate - invalid, not merely inconclusive.
+      **The correct comparison** - this code change (`write_code_snapshot_agent`) against the real
+      previously-committed code (`snapshot_agent_from_git_ref("HEAD")`), exactly how every other
+      T8.3-series feature in this project has been measured - found a real, decisive, reproducible
+      win: **49/50 on the working block** (Wilson [0.895, 0.996]) and **47/50 on the held-out block**
+      ([0.838, 0.979]). Per-seed score deltas are not one-sided in magnitude (seed 101: +1445; seed
+      103: -888) - the win is a small, consistent edge across most seeds and seatings, not one
+      dominant mechanism. The clearest proximate cause traced: a same-turn WHEAT restock is queued
+      ahead of `BUY_SEED`/`BUY_ANIMAL` in the market-order list, and the real engine settles a turn's
+      orders strictly in list order - spending money on an unneeded restock can delay a same-turn
+      seed/animal purchase when funds are tight early in the game. Not a complete accounting of the
+      full measured margin, but consistent with it.
+      **Accepted** as the default (`wheat_buy_only_when_feed_needed=True`,
+      `liquidate_wheat_reserve=True`). Golden table re-recorded (all 6 seeds changed - the largest
+      footprint of any T8.3-series flag, matching the win rate). 310/310 full suite (new tests in
+      `test_policy_market.py` and `test_policy_decide.py`), compileall clean, boundary check green. A
+      fresh episode trace confirms the ping-pong is gone: seed 100 now shows 7 WHEAT buy/sell pairs
+      total (all genuinely feed-related), down from 147.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

@@ -8,6 +8,23 @@ structure, but those are never a SELL candidate here. Only WHEAT (and
 FERTILIZER, not implemented in this module) can be bought back from the
 market at all.
 
+T8.3l correction: an earlier version of this docstring (and
+`sell_orders`'s own, below) called the wheat buy/sell round-trip "a real,
+deliberate small income source (T3.6)". That was wrong, and the wrongness
+had a real, decisive symptom - the user's own observation of the agent
+"constantly buying and selling 10 WHEAT". Traced directly in the real
+engine (`kaggriculture.py`'s `_process_market`): `BUY_PRODUCT` is quoted
+at the *post-buy* inventory specifically "so a buy/sell round-trip
+against an unchanged market nets zero" - verified numerically, a solo
+10-unit round trip nets exactly $0. There never was an arbitrage to
+exploit; `buy_wheat_order` firing with no animal to feed at all was just
+churn with no purpose, made *worse* by racing against `sell_orders`'
+"sell everything above the reserve" rule (reserve is 0 until an animal is
+placed) - 147 buy/sell pairs in one traced episode (seed 100), every
+single turn from step 1 to 387. See `wheat_buy_only_when_feed_needed`
+below for the fix and its measured (near-zero, honestly reported) real-
+game impact.
+
 FERTILIZER (T8.3e) is technically a PRODUCT (sellable in principle - it's
 in the PRODUCTS list) but is excluded from the *routine* sell loop below:
 it exists to be applied via kagg.policy.tasks's FERTILIZE task (a real
@@ -68,6 +85,7 @@ def sell_orders(
     wheat_reserve: int = 0,
     liquidate: bool = False,
     use_fertilizer: bool = True,
+    liquidate_wheat_reserve: bool = True,
 ) -> list[list]:
     """Sell orders for this turn, one per sellable item with stock and a
     price that clears its margin, capped at `max_orders` (kept as an
@@ -83,16 +101,21 @@ def sell_orders(
     down unit-by-unit within that same turn).
 
     `wheat_reserve` keeps that many WHEAT units off the sell list
-    regardless of price. Real bug found while implementing T6.4: the
-    wheat buy/sell arbitrage (a real, deliberate small income source -
-    T3.6) sold 100% of shed WHEAT every turn it was profitable, which
-    raced against any attempt to PICKUP wheat for feeding a placed
-    animal - a direct episode trace showed the shed's WHEAT flickering
-    0/10 every single turn, so the farmer could never complete a PICKUP
-    before the arbitrage's own SELL order emptied the shed again, and a
-    placed COW starved and escaped. `decide()` sets this to a positive
-    reserve once any animal exists on the farm - the arbitrage still
-    runs on whatever's left above the reserve.
+    regardless of price. Real bug found while implementing T6.4: selling
+    100% of shed WHEAT every turn the price cleared its margin raced
+    against any attempt to PICKUP wheat for feeding a placed animal - a
+    direct episode trace showed the shed's WHEAT flickering 0/10 every
+    single turn, so the farmer could never complete a PICKUP before the
+    routine sell order emptied the shed again, and a placed COW starved
+    and escaped. `decide()` sets this to a positive reserve once any
+    animal exists on the farm.
+
+    `liquidate_wheat_reserve` (T8.3l): once `liquidate` is set (T8.3d -
+    no time left for the reserve to ever be fed with), holding back
+    `wheat_reserve` units makes no sense - they'd strand unsold at
+    episode end just like any other stock T8.3d already fixed for.
+    Defaults to True (ignore the reserve during liquidation); kept
+    overridable to isolate it in self-play.
 
     `liquidate` (T8.3d, the user's own observed defect): both the margin
     check and the premium-goods drip cap exist to protect *future*
@@ -127,7 +150,7 @@ def sell_orders(
         if item in _NEVER_ROUTINELY_SOLD and use_fertilizer and not liquidate:
             continue
         count = shed.get(item, 0)
-        if item == "WHEAT":
+        if item == "WHEAT" and not (liquidate and liquidate_wheat_reserve):
             count = max(0, count - wheat_reserve)
         if count <= 0:
             continue
@@ -146,7 +169,9 @@ _DEFAULT_WHEAT_RESTOCK_QTY = 10
 _DEFAULT_WHEAT_MAX_BUY_PRICE = 40
 
 
-def buy_wheat_order(wheat_on_hand: int, wheat_price: int, params: dict | None = None) -> list | None:
+def buy_wheat_order(
+    wheat_on_hand: int, wheat_price: int, params: dict | None = None, feed_needed: bool = True
+) -> list | None:
     """A `["BUY_PRODUCT", "WHEAT", n]` order if on-hand wheat is running
     low and the price isn't too expensive to restock at, else `None`.
 
@@ -154,7 +179,20 @@ def buy_wheat_order(wheat_on_hand: int, wheat_price: int, params: dict | None = 
     could emit any other item (SPEC-policy.md: feed-stock buying is
     specifically about keeping animal feeding from lapsing into the
     two-consecutive-missed-days escape condition, which needs WHEAT).
+
+    `feed_needed` (T8.3l, the user's own observed defect): restocking has
+    no purpose at all when there is no animal placed and none being
+    pursued - yet this fired unconditionally on shed WHEAT alone, which
+    combined with `sell_orders` selling everything above a reserve of 0
+    (no animal yet) produced a real, decisive ping-pong: buy 10, sell 10,
+    every single turn (147 pairs in one traced episode, seed 100) until
+    the price climbed past `wheat_max_buy_price`. `decide()` sets this to
+    False whenever no animal is placed and none is the current investment
+    choice. Defaults to True so every existing caller keeps restocking
+    unconditionally, matching pre-T8.3l behavior.
     """
+    if not feed_needed:
+        return None
     params = params or {}
     threshold = params.get("wheat_restock_threshold", _DEFAULT_WHEAT_RESTOCK_THRESHOLD)
     if wheat_on_hand >= threshold:
@@ -176,25 +214,42 @@ def market_orders(
     wheat_reserve: int = 0,
     liquidate: bool = False,
     use_fertilizer: bool = True,
+    liquidate_wheat_reserve: bool = True,
+    feed_needed: bool = True,
 ) -> list[list]:
     """This turn's full market-layer order list: sells first, then a
     wheat restock if there's still room under `max_orders` - never more
     than `max_orders` total, matching `maxMarketOrdersPerTurn`.
 
-    `wheat_reserve`, `liquidate`, and `use_fertilizer` are passed straight
-    through to `sell_orders` - see its own docstring for why they exist.
+    `wheat_reserve`, `liquidate`, `use_fertilizer`, and
+    `liquidate_wheat_reserve` are passed straight through to
+    `sell_orders` - see its own docstring for why they exist.
+
+    `feed_needed` (T8.3l) is passed straight through to `buy_wheat_order`
+    - see its own docstring. It also raises the *effective* reserve
+    passed to `sell_orders` up to at least `wheat_restock_threshold`
+    whenever feed is needed and this isn't a liquidation turn: a
+    belt-and-braces invariant, not just a gate on the buy side, so
+    `sell_orders` can never again sell WHEAT down to a level that
+    `buy_wheat_order` immediately restocks the next turn - the exact
+    ping-pong this was built to fix (see this module's own docstring).
     """
+    effective_wheat_reserve = wheat_reserve
+    if feed_needed and not liquidate:
+        threshold = (params or {}).get("wheat_restock_threshold", _DEFAULT_WHEAT_RESTOCK_THRESHOLD)
+        effective_wheat_reserve = max(wheat_reserve, threshold)
     orders = sell_orders(
         shed,
         market_inventory,
         params,
         max_orders=max_orders,
-        wheat_reserve=wheat_reserve,
+        wheat_reserve=effective_wheat_reserve,
         liquidate=liquidate,
         use_fertilizer=use_fertilizer,
+        liquidate_wheat_reserve=liquidate_wheat_reserve,
     )
     if len(orders) < max_orders:
-        wheat_order = buy_wheat_order(wheat_on_hand, market_prices.get("WHEAT", 0), params)
+        wheat_order = buy_wheat_order(wheat_on_hand, market_prices.get("WHEAT", 0), params, feed_needed=feed_needed)
         if wheat_order is not None:
             orders.append(wheat_order)
     return orders

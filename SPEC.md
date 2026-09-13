@@ -184,7 +184,25 @@ today:
   animals too**, via the same `BUY_PRODUCT` (or their own wheat harvest) against the *same* shared
   market - a second, distinct kind of opponent-driven price effect from the T8.3g/T8.3h one (which
   was about opponent *crop* tiles pushing supply up; this one is about opponent *animal feeding*
-  pushing WHEAT demand up, tightening supply instead).
+  pushing WHEAT demand up, tightening supply instead). Both still unimplemented.
+- **T8.3l - the "wheat arbitrage" doesn't exist; the engine's own quoting rule zeros it out.**
+  `BUY_PRODUCT` is quoted at *post-buy* inventory specifically "so a buy/sell round-trip against an
+  unchanged market nets zero" (`kaggriculture.py`'s own comment, verified numerically: a solo 10-unit
+  round trip nets exactly $0). A real, user-observed defect exploited this misunderstanding
+  unknowingly: `buy_wheat_order` restocked WHEAT purely on shed count, with no check for whether any
+  animal existed to feed - racing forever against `sell_orders`' "sell everything above the reserve"
+  rule (reserve is 0 with no animal placed), producing 147 buy/sell pairs in a single traced episode
+  with no animal ever involved. Fixed (`wheat_buy_only_when_feed_needed`, `liquidate_wheat_reserve`):
+  restock only when an animal is placed or being pursued, and stop protecting the feed reserve once
+  liquidation has begun (it would otherwise strand ~10 WHEAT unsold, worth exactly $0 per T8.3d).
+  **Measurement caveat worth recording for next time**: a first self-play measurement via
+  params-flag toggling looked like a near-tie and was wrong - toggling the gate flag off left a
+  *different*, always-on part of the same fix (a reserve-floor invariant in `market_orders`) still
+  active, so the synthetic "old" baseline wasn't actually reproducing the old bug. The correct
+  comparison used the real previously-committed code as the baseline
+  (`tools/tuning.py::snapshot_agent_from_git_ref`), which found a real, decisive win (49/50 working,
+  47/50 held-out) - see `kagg.policy.decide`'s `_DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED` comment for
+  the full story, including the corrected-in-place first measurement.
 - **Animal count is currently capped at one-per-type by a hard rule** (`decide.py`: "never pursue a
   second instance of an animal type we already have placed and alive"), not by price awareness -
   so unconstrained WOOL/MILK/EGG overproduction from stacking animals is a structural

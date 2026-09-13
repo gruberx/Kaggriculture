@@ -142,6 +142,28 @@ DEFAULT_PARAMS = {
     # kagg.policy.decide's _DEFAULT_CROP_NET_OF_SEED_COST comment for the
     # full measured story.
     "crop_net_of_seed_cost": True,
+    # T8.3l: the user's own observed defect - "our agent looks like it
+    # constantly buys and sells 10 WHEAT". Confirmed, traced to a real
+    # two-rule conflict (buy_wheat_order restocks on shed WHEAT alone;
+    # sell_orders sells everything above a reserve that's 0 until an
+    # animal is placed) - 147 buy/sell pairs in one traced episode with
+    # no animal ever involved. Only restock feed when an animal is
+    # placed or currently the top investment choice. Accepted: a real,
+    # decisive win against the actual previously-committed code (49/50
+    # working block, 47/50 held-out) - a first self-play measurement via
+    # params-flag toggling suggested only a near-$0 gain, but that
+    # measurement was itself invalid (the toggle didn't isolate the fix
+    # cleanly) and is corrected in place, not left standing - see
+    # kagg.policy.decide's _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED
+    # comment for the full story.
+    "wheat_buy_only_when_feed_needed": True,
+    # T8.3l, found while tracing the same defect: sell_orders was also
+    # keeping wheat_reserve off the table during end-of-season
+    # liquidation (T8.3d), stranding ~10 WHEAT unsold once an animal had
+    # been placed - dead weight per T8.3d's own finding that anything
+    # unsold at episode end scores exactly zero. See kagg.policy.decide's
+    # _DEFAULT_LIQUIDATE_WHEAT_RESERVE comment for the full story.
+    "liquidate_wheat_reserve": True,
 }
 
 
