@@ -165,6 +165,32 @@ def _compact_position(candidates, board_size: int, anchor: str, unit_positions) 
     return min(candidates, key=lambda pos: (shed_distance(pos, board_size), pos))
 
 
+def _compact_positions(candidates, board_size: int, anchor: str, unit_positions, n: int) -> list:
+    """Up to `n` distinct candidate positions (T8.6, for planting more
+    than one tile in parallel per turn), picked one at a time via
+    `_compact_position` itself - never a reimplementation of its
+    selection logic, for the identical reason `anchor="UNIT"` delegates
+    to `_closest_pos` verbatim rather than reimplementing it (see
+    `_compact_position`'s own docstring: an earlier version's
+    reimplementation silently used a different tie-break than the real
+    one and changed real episode outcomes). The first position picked is
+    therefore bit-identical to what `_compact_position` alone would
+    return for the same candidate set; each subsequent position is "the
+    best remaining candidate" by the same rule, a straightforward greedy
+    extension, not a different algorithm. `n <= 0` or no candidates
+    returns an empty list.
+    """
+    remaining = list(candidates)
+    picked: list = []
+    for _ in range(n):
+        pos = _compact_position(remaining, board_size, anchor, unit_positions)
+        if pos is None:
+            break
+        picked.append(pos)
+        remaining.remove(pos)
+    return picked
+
+
 def build_task_list(
     tiles,
     unit_positions=(),
@@ -176,14 +202,26 @@ def build_task_list(
     anchor: str = _ANCHOR_SHED,
     use_fertilizer: bool = True,
     care_aware: bool = False,
+    plant_qty: int = 1,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
-    `plant_crop` is the crop to plant on the nearest empty tile, if any
-    (sourced from the strategic layer's portfolio ranking - see
-    SPEC-policy.md "1. Strategic layer" / kagg.policy.strategy) - `None`
-    means don't plant this turn (no seeds available, or nothing worth
-    planting).
+    `plant_crop` is the crop to plant, if any (sourced from the strategic
+    layer's portfolio ranking - see SPEC-policy.md "1. Strategic layer" /
+    kagg.policy.strategy) - `None` means don't plant this turn (no seeds
+    available, or nothing worth planting). `plant_qty` (T8.6) is how many
+    *distinct* empty tiles to propose a PLANT task for in one call -
+    defaults to 1, reproducing the original "plant the single nearest
+    empty tile" behavior exactly; `decide()` computes a real value scaled
+    to the current labor force (`1 + hires_per_day(params)`) and seed
+    stock on hand, capped by a real watering-capacity safety valve - see
+    its own `plant_qty` comment for the formula. Capped internally at
+    `len(empty_tiles)` and at `plant_qty` itself by `_compact_positions`;
+    this function does not re-check seed stock (`decide()`'s own
+    `plant_qty` computation already bounds it by `seeds[crop]` - see its
+    own docstring for why that specific bound is load-bearing, not just
+    a nicety: the real interpreter drops *every* PLANT request for a crop
+    in a turn once demand exceeds seeds held).
 
     `desired_animal` (T6.2/T6.3/T6.4) generalizes the same idea to animal
     acquisition, now a real multi-step pipeline: builds the matching
@@ -192,7 +230,7 @@ def build_task_list(
     does not wait on already owning the animal - it runs in parallel with
     the BUY_ANIMAL order); PICKUPs a bought animal from the shed into the
     farmer's own inventory once a matching structure exists (T6.4's real
-    finding - see `_new_investment_task`'s docstring for why this step
+    finding - see `_new_investment_tasks`'s docstring for why this step
     exists at all); then PLACEs it once actually held. `shed` and
     `farmer_inventory` are both needed because they mean different
     things: `shed` is what's been bought (BUY_ANIMAL delivers there, not
@@ -281,12 +319,12 @@ def build_task_list(
             Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty, unit_index=_PINNED_UNIT_INDEX)
         )
 
-    investment_task = _new_investment_task(
-        empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
-        plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor,
+    tasks.extend(
+        _new_investment_tasks(
+            empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
+            plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor, plant_qty,
+        )
     )
-    if investment_task is not None:
-        tasks.append(investment_task)
 
     # (priority, pos): deterministic and unit-position-independent (T8.2,
     # tasks/plan.md) - proximity-based servicing now lives entirely in
@@ -298,10 +336,11 @@ def build_task_list(
     return tasks
 
 
-def _new_investment_task(
+def _new_investment_tasks(
     empty_tiles, matching_structure_tiles, unit_positions, board_size,
     plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor=_ANCHOR_SHED,
-) -> Task | None:
+    plant_qty: int = 1,
+) -> list[Task]:
     """T6.4's real finding, not anticipated when T6.2 first wrote this
     pipeline: PLACE's real handler (kaggriculture.py) consumes the animal
     from the *acting unit's own inventory*, not the shed - BUY_ANIMAL
@@ -316,25 +355,35 @@ def _new_investment_task(
     access tile to stand on instead, always anchored to the farmer alone
     (`unit_positions[:1]`) regardless of `anchor` - see build_task_list's
     matching comment for why.
+
+    The animal pipeline still ever proposes at most one task per call
+    (BUILD_*/PICKUP/PLACE all stay singular - T8.6 only parallelizes
+    planting, not animal acquisition, which is already a serial,
+    single-animal-at-a-time pipeline by design - see `decide.py`'s own
+    "never buy a second instance of an already-placed animal type"
+    comment). Only the `plant_crop` branch can return more than one task,
+    up to `plant_qty` (T8.6), one PLANT task per distinct empty tile via
+    `_compact_positions` - see its own docstring for why this reuses
+    `_compact_position`'s selection logic rather than reimplementing it.
     """
     if desired_animal is not None:
         animal_in_hand = farmer_inventory.get(desired_animal, 0) > 0
         animal_in_shed = shed.get(desired_animal, 0) > 0
         if animal_in_hand and matching_structure_tiles:
             pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
-            return Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX)
+            return [Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX)]
         if not matching_structure_tiles and empty_tiles:
             pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
             build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
-            return Task(PRIORITY_PLANT, pos, build_op)
+            return [Task(PRIORITY_PLANT, pos, build_op)]
         if matching_structure_tiles and animal_in_shed and not animal_in_hand:
             pos = _closest_pos(shed_access_tiles(board_size), unit_positions[:1])
-            return Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)
-        return None
-    if plant_crop is not None and empty_tiles:
-        pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
-        return Task(PRIORITY_PLANT, pos, "PLANT", crop=plant_crop)
-    return None
+            return [Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)]
+        return []
+    if plant_crop is not None and empty_tiles and plant_qty > 0:
+        positions = _compact_positions(empty_tiles, board_size, anchor, unit_positions, plant_qty)
+        return [Task(PRIORITY_PLANT, pos, "PLANT", crop=plant_crop) for pos in positions]
+    return []
 
 
 def _plant_tile_tasks(
@@ -420,7 +469,7 @@ def _animal_tile_tasks(
     `None` unless this tile needs feeding and the farmer isn't currently
     carrying any WHEAT to do it with (T6.4's finding, same root cause as
     PLACE's: FEED's real handler consumes from the acting unit's own
-    inventory, not the shed - see `_new_investment_task`'s docstring).
+    inventory, not the shed - see `_new_investment_tasks`'s docstring).
     The caller aggregates this across all animal tiles into at most one
     PICKUP task, at the most urgent priority found.
 

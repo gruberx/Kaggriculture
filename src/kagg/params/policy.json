@@ -21,5 +21,9 @@
   "rank_season_aware": false,
   "animal_net_of_cost": true,
   "animal_fertilizer_income_aware": false,
-  "animal_care_aware": false
+  "animal_care_aware": false,
+  "max_plants_per_unit": 100,
+  "max_plant_tasks_per_turn": 8,
+  "seed_buffer_per_unit": 1,
+  "seed_cash_reserve": 0
 }

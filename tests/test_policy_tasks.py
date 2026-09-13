@@ -278,10 +278,38 @@ def test_build_task_list_does_not_plant_without_a_crop_hint():
 
 def test_build_task_list_only_plants_one_tile_per_call():
     # One PLANT action consumes one seed; the task list represents *this
-    # turn's* candidate work, not "plant the whole farm at once."
+    # turn's* candidate work, not "plant the whole farm at once." Default
+    # plant_qty=1 reproduces this exactly - T8.6 only changes behavior
+    # when a caller asks for more.
     tiles = _empty_tiles()
     tasks = build_task_list(tiles, plant_crop="CARROT")
     assert len([t for t in tasks if t.op == "PLANT"]) == 1
+
+
+def test_build_task_list_plants_multiple_distinct_tiles_when_plant_qty_is_given():
+    # T8.6: parallel planting - one PLANT task per available unit, up to
+    # plant_qty, each on its own distinct empty tile.
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, plant_crop="CARROT", plant_qty=3, unit_positions=[(4, 4)])
+    plant_tasks = [t for t in tasks if t.op == "PLANT"]
+    assert len(plant_tasks) == 3
+    positions = {t.pos for t in plant_tasks}
+    assert len(positions) == 3  # all distinct
+    for t in plant_tasks:
+        assert t.crop == "CARROT"
+
+
+def test_build_task_list_caps_plant_qty_at_available_empty_tiles():
+    tiles = [[{"kind": "WEED"} for _ in range(10)] for _ in range(10)]
+    tiles[0][0] = None  # exactly one empty tile
+    tasks = build_task_list(tiles, plant_crop="CARROT", plant_qty=5)
+    assert len([t for t in tasks if t.op == "PLANT"]) == 1
+
+
+def test_build_task_list_plant_qty_zero_plants_nothing():
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, plant_crop="CARROT", plant_qty=0)
+    assert tasks == []
 
 
 def test_build_task_list_plants_the_nearest_empty_tile_not_the_first_scanned():

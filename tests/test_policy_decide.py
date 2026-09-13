@@ -991,3 +991,78 @@ def test_decide_stops_planting_a_late_season_ongoing_crop_when_season_aware():
     action_aware = decide(obs, dict(DEFAULT_PARAMS, rank_season_aware=True))
     seeds_aware = [o[1] for o in action_aware["market"] if o[0] == "BUY_SEED"]
     assert "STRAWBERRY" not in seeds_aware
+
+
+def test_decide_never_requests_more_plants_than_seeds_on_hand(monkeypatch):
+    # T8.6: reproduces the real interpreter's own atomic PLANT validation
+    # (kaggriculture.py: "blocked = {crop for crop, n in
+    # plant_demand.items() if n > seeds.get(crop, 0)}" - if total PLANT
+    # requests for a crop this turn exceed seeds held, ALL of them are
+    # dropped, not just the excess). plant_qty must never exceed seeds on
+    # hand, for every labor level - a permanent regression guard, swept
+    # rather than checked at one point.
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original = decide_module.build_task_list
+
+    def spy(*args, **kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "build_task_list", spy)
+
+    for n_seeds in range(4):  # 0..3
+        for hires in range(6):  # 0..5
+            obs = _obs()
+            obs["private"]["seeds"] = {crop: n_seeds for crop in CROPS}
+            decide(obs, dict(DEFAULT_PARAMS, hires_per_day=hires))
+            plant_qty = captured.get("plant_qty", 0)
+            assert plant_qty <= n_seeds, f"n_seeds={n_seeds} hires={hires}: plant_qty={plant_qty}"
+
+
+def test_decide_batches_seed_purchase_into_one_order_when_labor_allows_more_than_one():
+    # T8.6: seeds are bought as one BUY_SEED order with a quantity, not N
+    # separate orders - costs exactly one market slot regardless of how
+    # many seeds are requested (verified: the real interpreter's
+    # _parse_order reads order[2] as the full remaining count).
+    obs = _obs()
+    params = dict(DEFAULT_PARAMS, hires_per_day=3, seed_buffer_per_unit=2)  # labor_units=4, target=8
+    action = decide(obs, params)
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert len(buy_seed_orders) == 1
+    assert buy_seed_orders[0][2] == 8  # one order, quantity 8 - not eight orders of 1
+
+
+def test_decide_plant_qty_stops_at_the_watering_capacity_cap(monkeypatch):
+    # T8.6: max_plants_per_unit is a real structural safeguard, not a
+    # formality - a tile weeds at consecutive_unwatered>=2, so planted
+    # area beyond what labor can water converts seed spend into WEEDs.
+    # Forces plant_budget (not labor_units, seeds, or
+    # max_plant_tasks_per_turn) to be the binding constraint.
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original = decide_module.build_task_list
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "build_task_list", spy)
+
+    obs = _obs()
+    for i in range(10):
+        obs["farms"][0]["tiles"][5][i] = {
+            "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": True,
+            "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+            "fertilized_until_day": -1,
+        }
+    obs["private"]["seeds"] = {crop: 10 for crop in CROPS}
+    params = dict(DEFAULT_PARAMS, hires_per_day=5, max_plants_per_unit=2, max_plant_tasks_per_turn=8)
+    # labor_units=6, plant_budget=max(0, 2*6 - 10)=2 - strictly below
+    # labor_units(6)/seeds(10)/max_plant_tasks_per_turn(8), so it's the
+    # only term that can be observed binding here.
+    decide(obs, params)
+    assert captured.get("plant_qty") == 2

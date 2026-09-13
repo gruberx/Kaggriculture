@@ -222,6 +222,19 @@ DEFAULT_PARAMS = {
     # for the full traced story. Kept available for a re-check once
     # Stage B (hired hands) gives real spare labor.
     "animal_care_aware": False,
+    # T8.6 (tasks/plan.md): parallel planting + batched seed purchase -
+    # lets plant_qty scale with the real labor force (1 + hires_per_day)
+    # instead of the fixed "one PLANT task per turn" baked in since
+    # Phase 3. Chosen so labor_units=1 (today's shipped hires_per_day=0)
+    # reproduces exactly today's behavior bit-identically (confirmed -
+    # golden table unchanged). See kagg.policy.decide's own plant_qty
+    # comment for the exact formula. None of these four are tuned yet -
+    # T8.7 sweeps hires_per_day itself; these stay at their
+    # geometry-derived, behavior-preserving defaults until then.
+    "max_plants_per_unit": 100,  # the board size - cannot bind at labor_units=1
+    "max_plant_tasks_per_turn": 8,
+    "seed_buffer_per_unit": 1,
+    "seed_cash_reserve": 0,
 }
 
 

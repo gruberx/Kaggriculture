@@ -730,9 +730,40 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       (confirmed - full suite unchanged, golden table unchanged, the strongest form of the plan's own
       "neutral expected" acceptance criterion). 356/356 full suite (2 new tests), compileall clean,
       boundary check green.
-- [ ] T8.6 — Parallel planting + batched seed purchase, bounded by `seeds_on_hand` (atomic PLANT
-      validation — load-bearing), `max_plants_per_unit` (real watering-capacity guard), and
-      `max_plant_tasks_per_turn`. Must be bit-identical to today at `hires_per_day=0`.
+- [x] T8.6 — Parallel planting + batched seed purchase. `_new_investment_task` → `_new_investment_
+      tasks` (returns a list; the animal pipeline stays singular by design - only planting
+      parallelizes). New `_compact_positions` picks up to `plant_qty` distinct tiles by calling the
+      existing, already-tested `_compact_position` one at a time (never a reimplementation of its
+      selection logic - the exact mistake that historically shifted golden episodes once already).
+      `decide()` computes `labor_units = 1 + hires_per_day(params)`, `plant_budget = max(0,
+      max_plants_per_unit * labor_units - n_plant_tiles)` (a real structural safeguard against
+      planting beyond watering capacity, not a formality - unwaterable excess converts seed spend
+      into WEEDs), `plant_qty = min(seeds_held, free_tiles, labor_units, plant_budget,
+      max_plant_tasks_per_turn)`. `plant_qty <= seeds_held` is load-bearing - verified directly
+      against the real interpreter's own atomic PLANT validation (`kaggriculture.py`: exceeding
+      seeds held drops *every* PLANT request for that crop this turn, not just the excess). Seeds
+      now bought as one batched `BUY_SEED` order up to `seed_buffer_per_unit * labor_units` (one
+      market slot regardless of quantity - `_parse_order` reads `order[2]` as the full count).
+      New params (`max_plants_per_unit=100`, `max_plant_tasks_per_turn=8`, `seed_buffer_per_unit=1`,
+      `seed_cash_reserve=0`) chosen so `labor_units=1` reproduces today bit-identically - confirmed,
+      golden table unchanged, full suite unchanged.
+      **Diagnostic, run twice to isolate the real cause of a real, informative negative result**: a
+      first pass (default params, `hires_per_day=4` forced) showed real, large crop-side gains
+      (PASS fraction dropped further to 15-18%, PLANT/WATER/HARVEST throughput up substantially,
+      final money +15-20% over the T8.4-only diagnostic) but animal production still never reached
+      in 6/6 seeds - traced, not assumed a bug: a second pass with `animal_net_of_cost=False`
+      (steady-state ranking, matching T8.4's own diagnostic intent of testing the *pipeline* rather
+      than today's economics) reached real animal production in 3/3 seeds checked
+      (`inventories[0]["WHEAT"]` non-empty, MILK/WOOL/EGG all reached). Confirms the pipeline itself
+      is now genuinely fixed by T8.4+T8.6 together - the default-params result simply reflects
+      T8.3m/T8.3q's already-accepted economics correctly *not* wanting an animal without
+      fertilizer/CARE, not a labor or pipeline defect.
+      **Monoculture risk flagged, not yet triggered**: `_top_investment_choice` returns one crop, so
+      parallel planting at `hires_per_day>0` could in principle plant several of the same crop daily
+      and crater its own price - not observable yet at the shipped `hires_per_day=0` default;
+      revisit once T8.7 accepts a nonzero value (watch the per-episode price series, not just final
+      money - `crop_self_impact_aware`'s existing self-impact walk already partially self-corrects).
+      362/362 full suite (10 new tests), compileall clean, boundary check green.
 - [ ] T8.7 — Re-run the hiring sweep (direct self-play only, no panel blending). Prediction stated
       up front: if `hires_per_day=0` still wins after T8.4/T8.6, the bottleneck isn't labor —
       that's the most informative possible negative result here.

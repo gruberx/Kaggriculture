@@ -484,6 +484,30 @@ _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE = False
 # split, where the combination masked Part A's own effect).
 _DEFAULT_ANIMAL_CARE_AWARE = False
 
+# T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
+# `plant_qty` scale with the real labor force (1 + hires_per_day) instead
+# of a hardcoded "one PLANT task per turn" baked in since Phase 3.
+# Chosen, per the plan's own design, so labor_units=1 (today's shipped
+# hires_per_day=0) reproduces exactly today's behavior:
+#   - max_plants_per_unit=100 (the board size - structurally unreachable
+#     at labor_units=1, a real but not-yet-binding safety valve against
+#     planting more than the labor force can water; a tile weeds at
+#     consecutive_unwatered>=2, converting unwaterable excess planting
+#     into MAINTENANCE-tier DIG work).
+#   - max_plant_tasks_per_turn=8 (a flat per-turn cap, independent of
+#     labor_units).
+#   - seed_buffer_per_unit=1 (how many seeds of the target crop to try to
+#     keep on hand per labor unit, so a burst of parallel planting next
+#     turn doesn't stall on a just-in-time single-seed purchase).
+#   - seed_cash_reserve=0 (dollars to leave unspent when batch-buying
+#     seed - a no-op floor by default).
+# None of these four are tuned yet - see kagg.policy.decide's own
+# plant_qty/seed-purchase comments for the exact formulas.
+_DEFAULT_MAX_PLANTS_PER_UNIT = 100
+_DEFAULT_MAX_PLANT_TASKS_PER_TURN = 8
+_DEFAULT_SEED_BUFFER_PER_UNIT = 1
+_DEFAULT_SEED_CASH_RESERVE = 0
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -855,18 +879,22 @@ def decide(obs: dict, params: dict) -> dict:
     stuck_animal = next(
         (a for a in ANIMALS if shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0), None
     )
-    # One scan covers five questions at once: which animal types are
+    # One scan covers six questions at once: which animal types are
     # already placed (stuck/already-have-one logic above), whether any
     # empty tile exists at all, which structure kinds already sit empty
     # (T6.5: BUY_SEED/BUY_ANIMAL shouldn't fire with nowhere to use them -
-    # a full farm just accumulates unused seeds/animals), and (T8.3) how
-    # much unlocked land is free and how far the nearest free tile is
-    # from the shed - should_buy_land's occupancy-aware gates.
+    # a full farm just accumulates unused seeds/animals), how much
+    # unlocked land is free and how far the nearest free tile is from the
+    # shed (T8.3, should_buy_land's occupancy-aware gates), and (T8.6)
+    # how many tiles are already committed to a plant - the real
+    # denominator plant_budget needs to know how much more planting the
+    # current labor force can still take on.
     placed_animal_types: set[str] = set()
     free_tiles = 0
     unlocked_tiles = 0
     nearest_free_shed_distance: int | None = None
     empty_structure_kinds: set[str] = set()
+    n_plant_tiles = 0
     board_size = len(me["tiles"])
     for y, row in enumerate(me["tiles"]):
         for x, tile in enumerate(row):
@@ -882,6 +910,8 @@ def decide(obs: dict, params: dict) -> dict:
                     placed_animal_types.add(tile["animal"])
                 elif tile.get("kind") in ("COOP", "PASTURE"):
                     empty_structure_kinds.add(tile["kind"])
+                elif tile.get("kind") == "PLANT":
+                    n_plant_tiles += 1
     has_empty_tile = free_tiles > 0
     if stuck_animal is not None:
         acquisition_animal = stuck_animal
@@ -906,6 +936,31 @@ def decide(obs: dict, params: dict) -> dict:
         shed.get(acquisition_animal, 0) > 0 or farmer_inventory.get(acquisition_animal, 0) > 0
     )
 
+    # T8.6: labor_units is 1 (the farmer) plus however many hands
+    # hires_per_day(params) targets hiring today - the real capacity this
+    # turn's planting decision should scale with, not the fixed "one tile
+    # per turn" assumption baked in since Phase 3. plant_budget guards
+    # against planting more than the labor force can realistically water
+    # (a tile weeds at consecutive_unwatered>=2, so unwaterable excess
+    # planting converts seed spend into WEEDs that then consume
+    # MAINTENANCE-tier actions) - max_plants_per_unit defaults to 100
+    # (the board size, structurally unreachable), so it's a real, tunable
+    # safety valve, not yet a binding constraint at labor_units=1.
+    # max_plant_tasks_per_turn caps how many PLANT tasks one
+    # build_task_list call ever proposes, independent of the other three
+    # bounds. At the shipped hires_per_day=0 (labor_units=1), plant_qty
+    # collapses to min(seeds_held, free_tiles, 1, ...) - never more than
+    # 1 - reproducing today's exact single-PLANT-per-turn behavior.
+    labor_units = 1 + hires_per_day(params)
+    max_plants_per_unit = params.get("max_plants_per_unit", _DEFAULT_MAX_PLANTS_PER_UNIT)
+    plant_budget = max(0, max_plants_per_unit * labor_units - n_plant_tiles)
+    max_plant_tasks_per_turn = params.get("max_plant_tasks_per_turn", _DEFAULT_MAX_PLANT_TASKS_PER_TURN)
+    plant_qty = (
+        min(seeds.get(plant_crop, 0), free_tiles, labor_units, plant_budget, max_plant_tasks_per_turn)
+        if plant_crop is not None
+        else 0
+    )
+
     use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
     care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
 
@@ -917,6 +972,7 @@ def decide(obs: dict, params: dict) -> dict:
         current_day=current_day,
         anchor=params.get("investment_anchor", _DEFAULT_INVESTMENT_ANCHOR),
         use_fertilizer=use_fertilizer,
+        plant_qty=plant_qty,
         care_aware=care_aware,
     )
     assignment = assign_units(tasks, unit_positions)
@@ -1000,10 +1056,30 @@ def decide(obs: dict, params: dict) -> dict:
     # empty tile; an animal needs either an empty tile (to build a fresh
     # structure on) or an existing empty matching structure - it doesn't
     # need free land specifically, just somewhere to eventually stand.
-    if stuck_animal is None and fallback_crop is not None and not have_seed and has_empty_tile:
+    # T8.6: bought as one batched order up to seed_buffer_per_unit *
+    # labor_units seeds - not the old flat "1 if none on hand" - so a
+    # burst of parallel PLANT tasks next turn isn't stalled behind a
+    # just-in-time single-seed purchase. One market order regardless of
+    # quantity (verified: the real interpreter's _parse_order reads
+    # order[2] as the full remaining count), which matters for T8.5's
+    # slot arithmetic - buying 5 seeds costs exactly the same one `tail`
+    # slot as buying 1. At labor_units=1/seed_buffer_per_unit=1 (today's
+    # shipped defaults) seed_target=1, so `needed` is nonzero under
+    # exactly the same condition the old `not have_seed` gate checked
+    # (seeds_held==0) and buys exactly 1 - bit-identical.
+    if stuck_animal is None and fallback_crop is not None and has_empty_tile:
         seed_cost = CROPS[fallback_crop]["seed"]
-        if me["money"] >= seed_cost:
-            tail.append(["BUY_SEED", fallback_crop, 1])
+        seeds_held = seeds.get(fallback_crop, 0)
+        seed_buffer_per_unit = params.get("seed_buffer_per_unit", _DEFAULT_SEED_BUFFER_PER_UNIT)
+        seed_target = labor_units * seed_buffer_per_unit
+        needed = max(0, seed_target - seeds_held)
+        if needed > 0:
+            seed_cash_reserve = params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
+            spendable = max(0, me["money"] - seed_cash_reserve)  # max(0, ...) before // - avoids
+            affordable = int(spendable // seed_cost)  # negative-floor-division surprises
+            buy_qty = min(needed, affordable)
+            if buy_qty > 0:
+                tail.append(["BUY_SEED", fallback_crop, buy_qty])
     if (
         acquisition_animal is not None
         and not have_animal_anywhere
