@@ -469,6 +469,10 @@ _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE = False
 # `COLLECT_FERTILIZER` at the same tier, on the same tile, for the same
 # already-absent spare turns). **Shipped default: False** (rejected, not
 # unmeasured) - kept available for the same Stage B re-check as Part 1.
+# Confirmed combined with Part 1 too (both flags on at once): 0/50 on
+# both self-play blocks, consistent with each mechanism's own individual
+# rejection - no confounding, no surprise (unlike T8.3m's Part A/Part B
+# split, where the combination masked Part A's own effect).
 _DEFAULT_ANIMAL_CARE_AWARE = False
 
 # T8.1: anchors new-investment tile placement to the shed rather than the

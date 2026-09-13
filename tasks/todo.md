@@ -659,6 +659,47 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       mechanics independent of today's accepted economics). Golden table re-recorded - all 6 seeds
       improved (none decreased), e.g. starter/seed1: 26386 -> 27524. 324/324 full suite (18 new
       tests), compileall clean, boundary check green.
+- [x] T8.3q — The user's own follow-up: asked for the full animal production cycle explained day by
+      day, then pushed back on T8.3m's implied "animals are worthless" conclusion with a real
+      counter-estimate (~11 MILK units over 30 days should net real profit). Investigated by reading
+      the official "How to Play" page fresh (`mcp__kaggle-mcp__list_competition_pages`) and
+      `kaggriculture.py`'s `_daily_refresh_animals` directly - found the user was right, and the gap
+      was real and large: two completely unmodeled revenue streams.
+      **Part 1 (fertilizer by-product income)**: every placed animal sets `fertilizer_available=True`
+      at the end of every surviving day regardless of feeding/care - recomputed directly, ~$2,819
+      over 30 days for one animal, more than its own product revenue. Built as
+      `animal_fertilizer_income_aware` (`strategy.py`'s `animal_revenue_per_tile_day`, `rank_
+      portfolio`, `decide.py`). **Measured - a real, total, decisive rejection**: 0/50 on both
+      self-play blocks against the checked-in baseline, contrary to this task's own stated
+      prediction. Traced (seed 100, action-count diagnostic): the fertilizer-aware agent pursued and
+      placed an animal the baseline never touched, but the episode shows **zero
+      `COLLECT_FERTILIZER` actions the entire game** - the promised revenue never gets collected
+      because the task sits at the lowest priority and the single farmer has no spare turns for it
+      on top of the animal pipeline plus crop work. The same class of defect as T8.3e's FERTILIZE
+      rejection.
+      **Part 2 (`CARE`)**: kaggriculture.py's completely unbuilt "Animal Care" mechanic
+      (`pending_care_bonus`) banks a yield bonus paid out on the animal's next scheduled production -
+      exact day-by-day simulation (mirroring the real mechanic precisely, since the banking is
+      genuinely path-dependent - SHEEP's 5-day pre-production banking window hits `max_held` on its
+      very first tick) found this roughly doubles (GOOSE) to quadruples (SHEEP) an animal's raw
+      product yield over 30 days, the single largest lever found in the whole T8.3 investigation.
+      Built as a new `CARE` task (`tasks.py`, `PRIORITY_MAINTENANCE`) + `animal_care_aware`
+      ranking term. **Measured - the identical result as Part 1**: 0/50 on both self-play blocks,
+      traced to zero `CARE` actions ever firing, for the identical structural reason. Combined
+      (both flags together): also 0/50, no confounding.
+      **Shipped defaults: both False** (rejected, not unmeasured) - both mechanisms stay in the
+      codebase, tested and available, for a re-check once Stage B (hired hands) gives real spare
+      MAINTENANCE-tier capacity.
+      **Documentation deliverable**: `tools/economic_profitability_table.py` (generates min/max net
+      $/tile-day for all 9 products from real code, plus a `days_remaining` sweep showing
+      profitability degrades - or cliffs - as season end approaches) feeds a new "Net profitability
+      per tile-day" subsection in `SPEC.md`'s Economic analysis, directly answering the user's
+      original ask. Key finding: **one-time crops are a step function** (flat until `max_yield_day`
+      no longer fits, then impossible - no partial credit), **ongoing crops degrade gradually near
+      the cliff**, and **animals without the two rejected mechanisms go net-negative ~10 days before
+      the hard maturity cutoff**, not just at it - exactly the user's own COW/MILK example, confirmed
+      directly. 345/345 full suite (31 new tests across three commits), compileall clean, boundary
+      check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

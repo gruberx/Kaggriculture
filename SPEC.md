@@ -171,6 +171,79 @@ today:
   while the payoff is disproportionate to the still-modest current price. Recorded here as a
   concrete idea, not built - see "Not planned yet" in `tasks/todo.md`.
 
+### Net profitability per tile-day (T8.3q, the user's own request after pushing back on T8.3m's
+initial animal-cost estimate)
+
+Generated from real code (`tools/economic_profitability_table.py`, re-run whenever game constants or
+the pricing model change - not hand-arithmetic that could silently drift), not the Overview page's
+own raw price table above. **Min** = bare-survival care (watered/fed every other day - the engine's
+own "no 2 consecutive misses" rule; verified directly that the *base* production unit never checks
+same-day watering/feeding, only the escape/weed counter does - so this is a real, cheap, safe floor,
+not a worst case), no fertilizer, no `CARE`, no fertilizer collection. **Max** = full daily
+watering/feeding, fertilizer applied only where it actually clears its own cost, full daily `CARE` +
+`COLLECT_FERTILIZER` for animals - a **labor-unconstrained ceiling** (a dedicated worker per tile),
+not a claim today's single farmer can capture it. Both computed at day 0 (30 days remaining):
+
+| Product | Min net $/tile-day | Max net $/tile-day |
+|---|---|---|
+| Wheat | 12.6 | 7.0 (fertilizer is a net loss - its $100 cost exceeds 2 extra $25 units' worth) |
+| Carrot | 12.2 | 3.8 (same reason, worse - fertilizer costs more than the crop is worth) |
+| Melon | 90.0 | 109.2 (fertilizer adds nothing - `max_yield` is already reached by watering alone) |
+| Tomato | 14.9 | 14.9 (fertilizer adds *zero* yield ever - proven structurally, not measured: each
+  scheduled tick caps at `max_yield` in exactly the same number of ticks whether doubled or not) |
+| Strawberry | 21.6 | 21.6 (same as tomato) |
+| Goose | 18.8 | **145.5** |
+| Cow | 33.6 | **215.0** |
+| Sheep | 30.4 | **274.8** |
+
+**Fertilizer and `CARE` are why the animal max column dwarfs every crop, including melon** -
+verified directly in `kaggriculture.py`, not assumed: every placed animal sets
+`fertilizer_available = True` at the end of *every* surviving day regardless of feeding/care (~$2,819
+extra revenue over 30 days for one animal, more than its own MILK/EGG/WOOL revenue), and `CARE`
+(`_daily_refresh_animals`'s `pending_care_bonus`, completely unbuilt before T8.3q) banks a yield
+bonus paid out on the next scheduled production - a real, path-dependent mechanic (confirmed by exact
+day-by-day simulation, not a closed-form guess: SHEEP's 5-day pre-production banking window lets its
+very first tick alone hit `max_held`) that alone roughly doubles-to-quadruples an animal's raw product
+yield. **Both measured via real self-play and rejected as defaults** (T8.3q): 0/50 on both self-play
+blocks for each mechanism alone, and 0/50 combined - traced directly to zero `COLLECT_FERTILIZER`/
+`CARE` actions ever firing in a real episode, because the single farmer already spends every turn on
+the animal pipeline plus its crop work. This table's max column is the real theoretical ceiling these
+mechanisms unlock, useful for calibrating Stage B (hired hands) - not evidence they should be
+defaults today.
+
+**Profitability is not constant across the season - it degrades (or cliffs) as season end
+approaches**, swept via `days_remaining` (the same mechanism `animal_net_of_cost`/`rank_season_aware`
+already use), not just the single day-0 snapshot above:
+
+- **One-time crops (wheat/carrot/melon) are a step function, not a slope**: net $/tile-day stays
+  perfectly flat right up to the exact day `max_yield_day` no longer fits, then drops straight to
+  "impossible" - `HARVEST` blocks below `first_yield_day` regardless of yield already banked, so
+  there is no partial-credit zone. Wheat: flat $17.4 through 6 days remaining, impossible at 4.
+  Melon: flat $109.2 through 15, impossible at 12.
+- **Ongoing crops (tomato/strawberry) degrade gradually near the cliff**, since fewer scheduled
+  ticks fit as the horizon shortens. Strawberry: $21.6 flat through 20 days remaining, down to $16.9
+  at 15, $1.8 at 12, impossible at 10.
+- **Animals without fertilizer/`CARE` go net-*negative* well before the hard maturity cutoff, not
+  just to zero at the cutoff** - this is exactly the user's own worked example (a cow started too
+  late produces very little milk, or none at all once fewer days remain than its growth time): a
+  bare-cost cow crosses zero around 20-22 days remaining and is decisively negative (-$9.8/day) by 15,
+  a real ~10-day-wide "not worth starting" zone before `first_yield_day=8` makes it literally
+  impossible. **With fertilizer + `CARE`, that boundary shifts from ~20 days remaining out to the true
+  hard cutoff at 8** - net stays above $170/day through 10 days remaining. This is the concrete,
+  quantified reason the two rejected T8.3q mechanisms matter beyond the day-0 number: they don't just
+  raise the ceiling, they change *when* it stops making sense to start.
+
+| days remaining | 30 | 25 | 22 | 20 | 18 | 15 | 12 | 10 | 8 |
+|---|---|---|---|---|---|---|---|---|---|
+| Wheat | 17.4 | 17.4 | 17.4 | 17.4 | 17.4 | 17.4 | 17.4 | 17.4 | 17.4 |
+| Melon | 109.2 | 109.2 | 109.2 | 109.2 | 109.2 | 109.2 | — | — | — |
+| Tomato | 14.9 | 14.9 | 14.9 | 14.9 | 14.9 | 14.9 | 14.9 | 6.7 | — |
+| Strawberry | 21.6 | 21.6 | 21.6 | 21.6 | 21.6 | 16.9 | 1.8 | — | — |
+| Cow, min care | 33.6 | 26.6 | 24.9 | 21.4 | 16.9 | 3.5 | -6.3 | -20.7 | — |
+| Cow, max care | 215.0 | 212.1 | 217.7 | 216.2 | 213.3 | 192.3 | 189.1 | 170.6 | — |
+
+(Full sweep across all 8 products and 12 `days_remaining` points: `tools/economic_profitability_table.py`'s own output.)
+
 ### Open, related ideas recorded from user discussion (T8.3g-T8.3j), not yet implemented
 
 - **Wheat is a special case already touching two of this project's own findings at once.** Feeding
