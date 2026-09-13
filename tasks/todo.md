@@ -549,6 +549,36 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
          moment T8.4-T8.7 hiring lifts that cap.
       No tests, no measurement, no default changed - see `SPEC.md`'s new section and the "Not
       planned yet" list below for the concrete ideas to pick up later.
+- [x] T8.3k — The user's own observation, arising directly from a question about whether
+      buying/planting decisions already weigh cost, labor, and time: they don't - `decide.py` only
+      ever used a crop's seed cost / an animal's purchase cost as an *affordability* check
+      (`money >= cost`), never subtracted it anywhere in the *ranking* comparing crops/animals
+      against each other. The user's own framing: time is a scarce, hard-capped resource in this
+      game (a fixed 30-day season), so profitability should be **net profit per day spent**, not
+      gross revenue per day spent.
+      **Built:** `crop_revenue_per_tile_day` gained a `net_of_seed_cost` argument - when set,
+      `CROPS[crop]["seed"]` is subtracted from the total revenue once before dividing by
+      `tile_days` (the same per-day-of-scarce-time denominator the user is pointing at, now applied
+      to net instead of gross proceeds). Wired through `rank_portfolio`/`decide.py`, gated by
+      `params["crop_net_of_seed_cost"]`. Scoped to crops only (documented, not silently ignored):
+      netting out an animal's purchase cost needs an amortization horizon this codebase doesn't
+      have yet (same unbounded-lifetime problem T8.3f already hit), and there's also a real
+      *recurring* feed cost (WHEAT) animals have that this doesn't model at all - left as an open,
+      harder problem, cross-referenced to the WHEAT-for-feed lead already recorded in `SPEC.md`.
+      **Measured, with an honest methodological finding this run itself surfaced:** unlike every
+      other T8.3-series flag (which changed nearly every game's outcome), this one only changes the
+      *ranking order* in a narrow crossover window - most games tie exactly (30/50 working block,
+      25/50 held-out), since the gap between top-ranked options usually dwarfs any seed-cost
+      difference between them. Among the games it *does* decide, the edge is real and reproducible:
+      18W/2L on the working block (Wilson interval on the decided subset [0.70, 0.97]) and 21W/4L
+      on the held-out block ([0.65, 0.94]) - 39W/6L combined, nowhere near the 0.5 line. Traced (seed
+      104): the net-aware agent planted MELON 16 times and STRAWBERRY 7, entirely skipping CARROT;
+      the gross-revenue agent planted MELON 18, STRAWBERRY 5, and CARROT 4 - CARROT's $20 seed cost
+      against its own modest yield doesn't clear the bar once netted out. $19903 vs $18584 final.
+      **Accepted** as the default (`crop_net_of_seed_cost=True`). Golden table re-recorded - only 2
+      of 6 seeds changed this time, a smaller footprint than T8.3f/T8.3i, consistent with the
+      narrow-crossover-window finding. 300/300 full suite (new tests across `test_policy_strategy.py`
+      and `test_policy_decide.py`), compileall clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).
@@ -610,3 +640,18 @@ targets — gated behind a Stage-1 baseline that doesn't exist yet).
   of T8.3f's self-impact (bounded by *some* real horizon, e.g. remaining season days, since animal
   production is otherwise unbounded) becomes a real gap to close then, alongside the crop
   re-validation above.
+
+**Open questions recorded for later, not forgotten (the user's own request, 2026-09-13, T8.3k):**
+- **Labor cost (farmer turns) is still completely unranked**, a distinct gap from T8.3k's seed-cost
+  fix - the user's own original framing named three missing dimensions (acquisition cost, labor,
+  time), and only the first is fixed. `crop_revenue_per_tile_day`/`animal_revenue_per_tile_day`
+  divide by *tile-occupancy* days, not by farmer *turns* actually spent tending the option (daily
+  WATER vs FEED+CARE+PICKUP-wheat trips are not the same labor cost per unit of revenue) - nothing
+  in the ranking sees this difference at all. A real, unscoped future problem: needs some notion of
+  "turns consumed per unit of revenue," not just calendar days.
+- **Animal purchase + recurring feed cost, net of season-remaining days** - T8.3k explicitly scoped
+  itself to crops only; animals need both a one-time purchase cost (`ANIMALS[animal]["cost"]`) and a
+  recurring WHEAT feed cost netted out, amortized over some horizon (the natural candidate:
+  remaining season days from `current_day`, which `rank_portfolio` doesn't currently receive at
+  all). Related to, but distinct from, the animal self-impact gap already recorded above - worth
+  tackling together once hiring (T8.4-T8.7) makes more than one animal relevant.

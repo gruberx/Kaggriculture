@@ -94,6 +94,23 @@ def test_crop_revenue_per_tile_day_drops_sharply_once_the_farm_already_commits_m
     assert many_tiles < one_tile * 0.9
 
 
+def test_crop_revenue_per_tile_day_net_of_seed_cost_matches_independent_calculation():
+    # T8.3k, the user's own observation: time is a scarce resource, so
+    # profitability should be net profit per day, not gross revenue per
+    # day. gross_total_revenue - seed_cost, still divided by tile_days.
+    assert crop_revenue_per_tile_day("WHEAT", MARKET_I0, net_of_seed_cost=True) == pytest.approx(
+        (19.4 * 5 - 10) / 5
+    )
+    assert crop_revenue_per_tile_day("MELON", MARKET_I0, net_of_seed_cost=True) == pytest.approx(
+        (115.384615 * 13 - 80) / 13, rel=1e-5
+    )
+
+
+def test_crop_revenue_per_tile_day_net_of_seed_cost_defaults_to_false():
+    gross = crop_revenue_per_tile_day("STRAWBERRY", MARKET_I0)
+    assert crop_revenue_per_tile_day("STRAWBERRY", MARKET_I0, net_of_seed_cost=False) == pytest.approx(gross)
+
+
 def test_crop_revenue_per_tile_day_expected_consumption_raises_the_score():
     # T8.3i, the user's own follow-up: consumption pulls the opposite
     # direction from already_committed_units - it should raise the score
@@ -167,6 +184,23 @@ def test_rank_portfolio_favors_an_animal_product_a_currently_unlocked_shop_is_co
     ranking_without = rank_portfolio(_MARKET_AT_I0)
     ranking_with = rank_portfolio(_MARKET_AT_I0, unlocked_shops=["YARN_STORE"] * 8)
     assert ranking_with.index("SHEEP") <= ranking_without.index("SHEEP")
+
+
+def test_rank_portfolio_net_of_seed_cost_can_reorder_two_close_crops():
+    # T8.3k, the user's own observation: time is scarce, so profitability
+    # should be net profit per day, not gross revenue per day. TOMATO's
+    # seed ($50) costs far more per tile-day than WHEAT's ($10) - at a
+    # slight scarcity that makes TOMATO's *gross* score edge out WHEAT's,
+    # netting out each one's own seed cost flips the order back.
+    market = {"TOMATO": MARKET_I0 - 50}
+    gross_ranking = rank_portfolio(market)
+    net_ranking = rank_portfolio(market, net_of_seed_cost=True)
+    assert gross_ranking.index("TOMATO") < gross_ranking.index("WHEAT")
+    assert net_ranking.index("WHEAT") < net_ranking.index("TOMATO")
+
+
+def test_rank_portfolio_net_of_seed_cost_defaults_to_false():
+    assert rank_portfolio(_MARKET_AT_I0) == rank_portfolio(_MARKET_AT_I0, net_of_seed_cost=False)
 
 
 def test_rank_portfolio_reacts_to_a_crashed_price():

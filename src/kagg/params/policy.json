@@ -14,5 +14,6 @@
   "use_fertilizer": false,
   "crop_self_impact_aware": true,
   "crop_self_impact_opponent_weight": 0.0,
-  "crop_shop_demand_aware": true
+  "crop_shop_demand_aware": true,
+  "crop_net_of_seed_cost": true
 }

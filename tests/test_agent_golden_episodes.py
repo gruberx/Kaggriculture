@@ -196,6 +196,25 @@ TOMATO and CARROT (both drawn down by the unlocked shops) instead of STRAWBERRY 
 agent's plain crop-only leader) - $24078 final vs $21424, a real ~12% gain from knowing which
 goods have elevated demand.
 
+Re-recorded an eleventh time for T8.3k (tasks/plan.md) - the user's own observation: time is a
+scarce, hard-capped resource in this game (a fixed 30-day season), so profitability should be
+*net* profit per day spent, not *gross* revenue per day spent. A crop's own seed cost
+(`CROPS[crop]["seed"]`) was never subtracted anywhere in the ranking before this - only used
+separately as an affordability check (`money >= seed_cost`) unrelated to whether the purchase was
+actually worth it relative to another crop. `crop_revenue_per_tile_day` now optionally nets out the
+seed cost before dividing by `tile_days`, gated by `params["crop_net_of_seed_cost"]`. Measured with
+an honest methodological note this run itself surfaced: unlike every other T8.3-series flag (which
+changed nearly every game's outcome), this one only changes the crop-ranking *order* in a narrow
+crossover window - most games tie exactly (30/50 working block, 25/50 held-out), since the gap
+between top-ranked options usually dwarfs any seed-cost difference between them. Among the games it
+*does* decide, the edge is real and reproducible: 18W/2L on the working block (Wilson interval on
+the decided subset [0.70, 0.97]) and 21W/4L on the held-out block ([0.65, 0.94]) - 39W/6L combined,
+nowhere near the 0.5 line. Traced (seed 104): the net-aware agent planted MELON 16 times and
+STRAWBERRY 7, entirely skipping CARROT; the gross-revenue agent planted MELON 18, STRAWBERRY 5, and
+CARROT 4 - CARROT's $20 seed cost against its own modest yield doesn't clear the bar once netted
+out. $19903 vs $18584 final. Accepted as the default. 2 of 6 golden seeds changed this time (a
+smaller footprint than T8.3f/T8.3i, consistent with the narrow-crossover-window finding above).
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -214,19 +233,19 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.3i policy (crop_shop_demand_aware=True accepted
+# Recorded against the T8.3k policy (crop_net_of_seed_cost=True accepted
 # as the default), reproduced twice before being hardcoded here. Not yet
 # the rigorous >=60% win rate SPEC.md's success criteria call for (that
 # needs Phase 4's paired-seed harness, not three ad-hoc seeds), but a real
-# improvement worth locking in - accepted on a 49/50-and-48/50 self-play
-# result, traced to real crop diversification toward shop-favored goods
-# (see the module docstring's T8.3i paragraph above).
+# improvement worth locking in - accepted on an 18W/2L-and-21W/4L self-play
+# result (most games tie exactly; see the module docstring's T8.3k
+# paragraph above for why that's expected here, not a red flag).
 _GOLDEN = {
-    ("starter", 1): (26316.0, 3421.0),
+    ("starter", 1): (26366.0, 3421.0),
     ("starter", 2): (25376.0, 3569.0),
     ("starter", 3): (25447.0, 3649.0),
     ("pass", 1): (26106.0, 3000.0),
-    ("pass", 2): (26535.0, 3000.0),
+    ("pass", 2): (25461.0, 3000.0),
     ("pass", 3): (27402.0, 3000.0),
 }
 

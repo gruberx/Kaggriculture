@@ -240,6 +240,32 @@ _DEFAULT_CROP_SELF_IMPACT_OPPONENT_WEIGHT = 0.0
 # which goods have elevated demand, not a marginal tuning improvement.
 _DEFAULT_CROP_SHOP_DEMAND_AWARE = True
 
+# T8.3k (the user's own observation): time is a scarce, hard-capped
+# resource in this game (a fixed 30-day season), so crop profitability
+# should be net profit per day spent, not gross revenue per day spent -
+# before this, a crop's own seed cost was never subtracted anywhere in
+# the ranking, only used separately as an affordability check
+# (`money >= seed_cost`, unrelated to whether the purchase is worth it
+# relative to another crop). Gates whether `crop_revenue_per_tile_day`
+# actually nets out `CROPS[crop]["seed"]` before dividing by `tile_days`
+# - see its own docstring for the mechanism.
+#
+# Accepted, with an honest methodological note this measurement itself
+# surfaced: unlike every other T8.3-series flag (which changed the
+# outcome of nearly every game), this one only changes the crop-ranking
+# *order* in a narrow crossover window - most games tie exactly (30/50
+# working, 25/50 held-out), since the gap between top-ranked options is
+# usually far larger than any seed-cost difference between them. Among
+# the games it *does* decide, though, the edge is real and reproducible:
+# 18W/2L on the working block (Wilson interval on the decided subset
+# [0.70, 0.97], nowhere near 0.5) and 21W/4L on the held-out block
+# ([0.65, 0.94]) - 39W/6L combined. Traced (seed 104): the net-aware
+# agent planted MELON 16 times and STRAWBERRY 7, entirely skipping
+# CARROT; the gross-revenue agent planted MELON 18, STRAWBERRY 5, and
+# CARROT 4 - CARROT's $20 seed cost against its own modest per-tile-day
+# yield doesn't clear the bar once netted out. $19903 vs $18584 final.
+_DEFAULT_CROP_NET_OF_SEED_COST = True
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -419,6 +445,7 @@ def _top_investment_choice(
     params: dict,
     crop_tile_counts: dict | None = None,
     unlocked_shops: list | None = None,
+    net_of_seed_cost: bool = False,
 ) -> tuple[str, str] | None:
     """The highest-ranked crop-or-animal that still has time to mature
     this season, as `(name, kind)` with `kind` "crop" or "animal". `None`
@@ -430,11 +457,12 @@ def _top_investment_choice(
     gap this opens until T6.2/T6.3 wire actual animal acquisition into
     tasks.py/market.py.
 
-    `crop_tile_counts` (T8.3f) and `unlocked_shops` (T8.3i) are both
-    passed straight through to `rank_portfolio` - see its own docstring.
+    `crop_tile_counts` (T8.3f), `unlocked_shops` (T8.3i), and
+    `net_of_seed_cost` (T8.3k) are all passed straight through to
+    `rank_portfolio` - see its own docstring.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops):
+    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
                 return name, "crop"
@@ -450,6 +478,7 @@ def _top_crop_choice(
     params: dict,
     crop_tile_counts: dict | None = None,
     unlocked_shops: list | None = None,
+    net_of_seed_cost: bool = False,
 ) -> str | None:
     """Best CROP alone, ignoring animals entirely - a fallback
     (`params["plant_while_pursuing_animal"]`, default **on** since
@@ -493,7 +522,7 @@ def _top_crop_choice(
     pipeline instead of being pre-empted by it.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops):
+    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             return name
     return None
@@ -522,8 +551,9 @@ def decide(obs: dict, params: dict) -> dict:
         if params.get("crop_shop_demand_aware", _DEFAULT_CROP_SHOP_DEMAND_AWARE)
         else None
     )
+    net_of_seed_cost = params.get("crop_net_of_seed_cost", _DEFAULT_CROP_NET_OF_SEED_COST)
     investment = _top_investment_choice(
-        obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops
+        obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost
     )
     desired_name, desired_kind = investment if investment is not None else (None, None)
     desired_crop = desired_name if desired_kind == "crop" else None
@@ -540,7 +570,7 @@ def decide(obs: dict, params: dict) -> dict:
         fallback_crop = desired_crop
     elif params.get("plant_while_pursuing_animal", _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL):
         fallback_crop = _top_crop_choice(
-            obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops
+            obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost
         )
     else:
         fallback_crop = None

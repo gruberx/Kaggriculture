@@ -130,6 +130,18 @@ DEFAULT_PARAMS = {
     # held-out block) - see kagg.policy.decide's
     # _DEFAULT_CROP_SHOP_DEMAND_AWARE comment for the full measured story.
     "crop_shop_demand_aware": True,
+    # T8.3k: the user's own observation - time is a scarce, hard-capped
+    # resource in this game, so profitability should be net profit per
+    # day spent, not gross revenue per day spent. A crop's seed cost was
+    # never subtracted anywhere in the ranking before this, only used
+    # separately as an affordability check unrelated to whether the
+    # purchase is worth it. Accepted: unlike other T8.3-series flags,
+    # this one only changes outcomes in a narrow crossover window (most
+    # games tie exactly), but among the games it does decide the edge is
+    # real and reproducible (18W/2L working, 21W/4L held-out) - see
+    # kagg.policy.decide's _DEFAULT_CROP_NET_OF_SEED_COST comment for the
+    # full measured story.
+    "crop_net_of_seed_cost": True,
 }
 
 

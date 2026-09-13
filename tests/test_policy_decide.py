@@ -287,6 +287,33 @@ def test_decide_can_disable_shop_demand_awareness_explicitly():
     assert buy_seed_orders and buy_seed_orders[0][1] == "STRAWBERRY"
 
 
+def test_decide_defaults_crop_net_of_seed_cost_to_true_when_unset():
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("crop_net_of_seed_cost") is True
+    assert decide_module._DEFAULT_CROP_NET_OF_SEED_COST is True
+
+
+def test_decide_passes_net_of_seed_cost_through_to_rank_portfolio(monkeypatch):
+    # T8.3k, the user's own observation: decide() is the only real caller
+    # of rank_portfolio (via _top_investment_choice/_top_crop_choice), so
+    # this is the glue test for whether params["crop_net_of_seed_cost"]
+    # actually reaches it - test_policy_strategy.py's own tests already
+    # cover what the flag *does*.
+    import kagg.policy.decide as decide_module
+
+    captured = []
+    original = decide_module.rank_portfolio
+
+    def spy(*args, **kwargs):
+        captured.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    decide(_obs(), dict(DEFAULT_PARAMS, crop_net_of_seed_cost=False))
+    assert captured and all(args[3] is False for args in captured)
+
+
 def test_decide_defaults_use_fertilizer_to_false_when_unset():
     # T8.3e: built and tested, but measured to lose in direct self-play
     # at both priority tiers tried (see decide.py's own

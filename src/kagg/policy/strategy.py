@@ -49,7 +49,11 @@ def _crop_yield_and_tile_days(crop: str) -> tuple[int, int]:
 
 
 def crop_revenue_per_tile_day(
-    crop: str, sell_at_inventory: int, already_committed_units: int = 0, expected_consumption: float = 0
+    crop: str,
+    sell_at_inventory: int,
+    already_committed_units: int = 0,
+    expected_consumption: float = 0,
+    net_of_seed_cost: bool = False,
 ) -> float:
     """Expected revenue per tile-day for a crop watered on every day its
     bonus window allows (no fertilizer), evaluated at `sell_at_inventory`
@@ -103,10 +107,28 @@ def crop_revenue_per_tile_day(
     to walk across without picking an arbitrary horizon), but DOES get
     its own `expected_consumption` (T8.3i) since that doesn't need one -
     see its own docstring.
+
+    `net_of_seed_cost` (T8.3k, the user's own observation): time itself
+    is a scarce, hard-capped resource in this game (a fixed 30-day
+    season), so profitability should be **net profit per day spent**, not
+    gross revenue per day spent - before this, the seed's own purchase
+    cost (`CROPS[crop]["seed"]`) was never subtracted anywhere in the
+    ranking, only used separately as an affordability check
+    (`decide()`'s `money >= seed_cost` gate) that has nothing to do with
+    whether the purchase is *worth it* relative to another crop. Costs
+    nothing to add: seed cost is a one-time, exactly-known charge against
+    the same `total_yield`-unit run this function already prices, so it's
+    simply subtracted once before dividing by `tile_days` - the same
+    "per day of this scarce resource" denominator the user is pointing
+    at, now applied to *net*, not gross, proceeds. Defaults to `False`
+    (gross revenue, T8.3f/T8.3i's exact prior behavior) for every caller
+    that doesn't pass it.
     """
     total_yield, tile_days = _crop_yield_and_tile_days(crop)
     start = sell_at_inventory + already_committed_units - expected_consumption
     total_revenue = sum(price(crop, start + k) for k in range(total_yield))
+    if net_of_seed_cost:
+        total_revenue -= CROPS[crop]["seed"]
     return total_revenue / tile_days
 
 
@@ -126,6 +148,16 @@ def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int, expected_co
     product a currently-unlocked shop is actively drawing down (e.g.
     YARN_STORE for WOOL). Defaults to 0, reproducing the exact prior
     behavior for every caller that doesn't pass it.
+
+    No `net_of_seed_cost`-style parameter (T8.3k): unlike a crop's
+    one-time seed cost against a bounded `total_yield` run, netting out
+    an animal's purchase cost needs an amortization horizon this function
+    doesn't have (the same unbounded-lifetime problem that already
+    excludes animals from `already_committed_units`), and there's also a
+    real *recurring* cost (WHEAT to feed it) this function doesn't model
+    at all yet - left as an open, harder problem, not silently ignored;
+    see `SPEC.md`'s "Economic analysis" section for the related
+    WHEAT-for-feed lead already recorded.
     """
     a = ANIMALS[animal]
     product_price = price(a["product"], sell_at_inventory - expected_consumption)
@@ -133,7 +165,10 @@ def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int, expected_co
 
 
 def rank_portfolio(
-    market_inventory: dict, crop_tile_counts: dict | None = None, unlocked_shops: list | None = None
+    market_inventory: dict,
+    crop_tile_counts: dict | None = None,
+    unlocked_shops: list | None = None,
+    net_of_seed_cost: bool = False,
 ) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day at `market_inventory`'s *current* level for each one's own
@@ -163,6 +198,11 @@ def rank_portfolio(
     default) means "no information," reproducing the exact prior
     behavior for every caller that doesn't pass it - matches
     `crop_tile_counts`'s own convention.
+
+    `net_of_seed_cost` (T8.3k) is passed straight through to
+    `crop_revenue_per_tile_day` - see its own docstring. Animals are
+    unaffected (no analogous parameter exists yet on
+    `animal_revenue_per_tile_day` - see its own docstring for why).
     """
     crop_tile_counts = crop_tile_counts or {}
     unlocked_shops = unlocked_shops or []
@@ -172,7 +212,9 @@ def rank_portfolio(
         total_yield, tile_days = _crop_yield_and_tile_days(crop)
         already_committed_units = crop_tile_counts.get(crop, 0) * total_yield
         expected_consumption = expected_daily_consumption(crop, unlocked_shops) * tile_days
-        scores[crop] = crop_revenue_per_tile_day(crop, inv, already_committed_units, expected_consumption)
+        scores[crop] = crop_revenue_per_tile_day(
+            crop, inv, already_committed_units, expected_consumption, net_of_seed_cost
+        )
     for animal, a in ANIMALS.items():
         inv = market_inventory.get(a["product"], MARKET_I0)
         expected_consumption = expected_daily_consumption(a["product"], unlocked_shops) * a["interval"]
