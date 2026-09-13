@@ -622,6 +622,43 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       `test_policy_market.py` and `test_policy_decide.py`), compileall clean, boundary check green. A
       fresh episode trace confirms the ping-pong is gone: seed 100 now shows 7 WHEAT buy/sell pairs
       total (all genuinely feed-related), down from 147.
+- [x] T8.3m — Season-remaining-aware ranking (extends T8.3k's "time is scarce" insight to the piece
+      it didn't reach): `rank_portfolio` had no notion of the current day or remaining season at
+      all - `_crop_has_time_to_mature`/`_animal_has_time_to_mature` only ever gate whether an
+      option can produce *at all*, then score whatever survives at its full, untruncated lifetime
+      revenue. Two independent mechanisms, measured in isolation per T8.3b's own lesson about
+      confounded measurements:
+      **Part A (`rank_season_aware`)** truncates an ongoing crop's (TOMATO/STRAWBERRY) scored
+      schedule to what actually fits in the remaining season, instead of always pricing the full
+      capped schedule. **Measured — a real, decisive rejection**: 1/44 working, 2/47 held-out.
+      Traced (seed 101, direct self-play): correctly stops offering STRAWBERRY/TOMATO as
+      `_top_crop_choice`'s late-season fallback, but the narrower fallback set gives the farmer
+      less to fall back on once it hits the same pre-existing single-farmer congestion both agents
+      show late-game (multiple crop seeds sitting unused, `n_plant_tiles` shrinking as harvests
+      outpace replanting) - the same class of defect as T8.3e's FERTILIZE rejection. **Shipped
+      default: False** (rejected, not unmeasured) - kept available for a re-check once Stage B
+      relieves the congestion.
+      **Part B (`animal_net_of_cost`)** nets `ANIMALS[animal]["cost"]` and the recurring WHEAT feed
+      cost out of an animal's score over the remaining season (reusing
+      `forecast_animal_schedule`, the same call `_animal_has_time_to_mature` already makes -
+      incidentally closes the separately-recorded animal self-impact gap too), instead of scoring
+      an unbounded steady-state rate. **Measured: the strongest result of the whole T8.3-series
+      investigation** - 50/50 working (Wilson [0.929, 1.0]), 49/50 held-out (Wilson [0.895,
+      0.996]) against the checked-in baseline. Traced (seed 101): with cost off, an animal (COW,
+      then SHEEP, then GOOSE as ranks shifted) kept getting commissioned as late as day 25+ of a
+      30-day season, unable to earn back its purchase cost in the days left. **Accepted as the
+      default** - a real, deliberately-verified major side effect, not an oversight: once true
+      cost is priced in, no animal ever tops the ranking at base market prices at any point in the
+      season (checked directly across days 0-28), and animal production never occurs across 15
+      real episodes checked (seeds 100-114) - the whole T6.1-T6.5 acquisition pipeline is now
+      correctly avoided as economically uncompetitive under normal conditions (COW's old fictional
+      steady-state rate: 80/tile-day forever; its real net rate over a full 30-day horizon: ~21/day,
+      below MELON/STRAWBERRY) rather than pursued reflexively. The pipeline itself is untouched and
+      still verified working (`test_at_least_one_animal_reaches_production_in_a_representative_
+      episode`, now exercised with `animal_net_of_cost=False` explicitly to keep testing pipeline
+      mechanics independent of today's accepted economics). Golden table re-recorded - all 6 seeds
+      improved (none decreased), e.g. starter/seed1: 26386 -> 27524. 324/324 full suite (18 new
+      tests), compileall clean, boundary check green.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).

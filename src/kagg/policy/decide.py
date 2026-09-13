@@ -326,6 +326,82 @@ _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED = True
 # tasks/todo.md's T8.3l entry).
 _DEFAULT_LIQUIDATE_WHEAT_RESERVE = True
 
+# T8.3m (the user's own observation, extending T8.3k's "time is scarce"
+# insight to the piece it didn't reach): rank_portfolio had no notion of
+# the current day or the remaining season at all - _crop_has_time_to_
+# mature/_animal_has_time_to_mature only ever gate whether an option can
+# produce *at all* before the season ends, then score whatever survives
+# at its full, untruncated lifetime revenue. On day 24 of 30, an ongoing
+# crop (TOMATO/STRAWBERRY) that will complete maybe 1 of its capped
+# 4-production schedule was still ranked as if all 4 would happen. Gates
+# whether `days_remaining` (season_length_days - current_day) actually
+# reaches `rank_portfolio`'s crop-side truncation - see
+# kagg.policy.strategy._crop_yield_and_tile_days's own docstring for the
+# mechanism.
+#
+# **Measured - a real, decisive rejection, not an acceptance**: 1/44
+# (working block) and 2/47 (held-out block) - a near-total loss, unlike
+# T8.3k's own "narrow crossover window, most games tie" result. Traced,
+# not just trusted (seed 101, direct self-play against the checked-in
+# baseline): the season-aware agent correctly stops offering STRAWBERRY/
+# TOMATO as `_top_crop_choice`'s fallback late in the season (confirmed
+# directly - `_top_crop_choice` returns CARROT instead of STRAWBERRY from
+# day 18 onward on this seed), but the freed-up choice doesn't get used
+# any better - both agents hit the same pre-existing single-farmer
+# capacity limit late-game (seeds for 4-5 different crops sitting unused,
+# `n_plant_tiles` shrinking as one-time crops are harvested faster than
+# the single farmer - already busy servicing the animal-acquisition
+# pipeline - can replant them), but the season-aware agent's narrower
+# fallback set gives it *less* diversification to fall back on when that
+# congestion hits, with nothing compensating for the loss. A real
+# instance of the same class of defect as T8.3e's FERTILIZE rejection - a
+# mechanism that is locally "more correct" losing to a genuine,
+# already-documented single-farmer capacity constraint. Confirmed the
+# result is not confounded with animal_net_of_cost below: A+B track each
+# other's win/loss pattern almost exactly (identical Wilson intervals),
+# but per-seed money is NOT bit-identical between them (spot-checked
+# seeds 101-104) - animal_net_of_cost's own effect dominates the
+# trajectory heavily enough that this mechanism's small remaining
+# influence never flips an outcome in the sample measured, not evidence
+# of a wiring bug.
+#
+# **Shipped default: False** (rejected, not merely unmeasured) - the
+# mechanism stays in the codebase, tested and available, for a future
+# re-check once T8.4-T8.7 (Stage B, hired hands) relieve the single-
+# farmer congestion this rejection was traced to.
+_DEFAULT_RANK_SEASON_AWARE = False
+
+# T8.3m, the animal-side twin: `ANIMALS[animal]["cost"]` was never
+# subtracted anywhere in the ranking before this (only used as a
+# `money >= cost` affordability check in decide()), and the recurring
+# WHEAT feed cost wasn't modeled at all - both previously recorded as
+# open gaps in tasks/todo.md (T8.3k's "animal purchase + recurring feed
+# cost, net of season-remaining days"). Gates whether
+# kagg.policy.strategy.animal_revenue_per_tile_day nets both out over the
+# remaining season instead of scoring an unbounded steady-state rate -
+# see its own docstring for the mechanism, including how this
+# incidentally closes the separately-recorded animal self-impact gap.
+# Independently gated from `rank_season_aware` (a materially different
+# mechanism - crop schedule truncation vs. animal cost netting) so the
+# two can be measured in isolation before any bundled test, per T8.3b's
+# own lesson about confounded measurements.
+#
+# **Measured: the strongest result of the whole T8.3-series investigation
+# so far** - 50/50 on the working block (Wilson [0.929, 1.0]) and 49/50
+# on the held-out block (Wilson [0.895, 0.996]) against the checked-in
+# baseline. Traced (seed 101): with cost netting off, `_top_investment_
+# choice` kept picking whichever animal ranked highest on raw steady-
+# state rate (COW, then SHEEP, then GOOSE as prices moved) all the way to
+# day 25+ of a 30-day season, each pick spending real BUILD_*/PICKUP/
+# PLACE turns and cash on an animal that could never earn back its
+# purchase cost in the days left - directly measurable once the horizon
+# is real: `animal_revenue_per_tile_day("COW", ..., days_remaining=9,
+# net_of_cost=True)` scores strictly negative. With cost netting on,
+# every animal drops below every crop once too little season remains to
+# amortize its purchase + feed cost, freeing the farmer's investment
+# turns for crops that can actually still pay off.
+_DEFAULT_ANIMAL_NET_OF_COST = True
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -519,10 +595,21 @@ def _top_investment_choice(
 
     `crop_tile_counts` (T8.3f), `unlocked_shops` (T8.3i), and
     `net_of_seed_cost` (T8.3k) are all passed straight through to
-    `rank_portfolio` - see its own docstring.
+    `rank_portfolio` - see its own docstring. `rank_season_aware`/
+    `animal_net_of_cost` (T8.3m) are read from `params` here (not taken
+    as their own arguments, unlike the others) since they also govern
+    `days_remaining` itself, computed once from the same
+    `season_length_days` this function already needs for the maturity
+    checks below.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost):
+    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
+    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
+    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
+    for name in rank_portfolio(
+        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        days_remaining, rank_season_aware, animal_net_of_cost,
+    ):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
                 return name, "crop"
@@ -580,9 +667,21 @@ def _top_crop_choice(
     reintroduced for a different role: not decide()'s only investment
     signal, but a second, independent one that runs alongside the animal
     pipeline instead of being pre-empted by it.
+
+    `rank_season_aware`/`animal_net_of_cost` (T8.3m) are read from
+    `params` and passed through exactly like `_top_investment_choice`
+    does, for the same reason (this ranks the full portfolio too, even
+    though only the crop entries are ever returned) - see that
+    function's own comment.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    for name in rank_portfolio(market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost):
+    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
+    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
+    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
+    for name in rank_portfolio(
+        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        days_remaining, rank_season_aware, animal_net_of_cost,
+    ):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             return name
     return None

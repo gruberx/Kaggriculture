@@ -17,6 +17,7 @@ from __future__ import annotations
 from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0
 from kagg.gamelib.farm import land_price
 from kagg.gamelib.growth import (
+    forecast_animal_schedule,
     forecast_ongoing_schedule,
     forecast_one_time_yield,
     watering_bonus_window,
@@ -24,7 +25,7 @@ from kagg.gamelib.growth import (
 from kagg.gamelib.market import expected_daily_consumption, price
 
 
-def _crop_yield_and_tile_days(crop: str) -> tuple[int, int]:
+def _crop_yield_and_tile_days(crop: str, days_remaining: int | None = None) -> tuple[int, int]:
     """(total_yield, tile_days) for one tile of `crop` grown start to
     finish - the two quantities `crop_revenue_per_tile_day` and
     `rank_portfolio` (T8.3f) both need, factored out once so they can't
@@ -35,16 +36,49 @@ def _crop_yield_and_tile_days(crop: str) -> tuple[int, int]:
     1`). Ongoing crops: total yield across the capped schedule (SPEC-
     gamelib.md: finite, capped at `max_yield` scheduled productions);
     tile-days occupied through the last scheduled production.
+
+    `days_remaining` (T8.3m, the user's own observation extended from
+    T8.3k: time is scarce and hard-capped, and *this* was the piece T8.3k
+    didn't reach - `rank_portfolio` had no notion of the current day or
+    the remaining season at all, so an option was scored at its full,
+    untruncated lifetime revenue right up to the season's last turn).
+    `None` (the default) means "unknown/unbounded," reproducing the exact
+    prior behavior for every caller that doesn't pass it.
+
+    Deliberately an ongoing-crop correction, not a one-time-crop one:
+    a one-time crop's `total_yield` already comes from a fixed watering
+    window that either fits before the season ends or doesn't - the
+    binary `_crop_has_time_to_mature` filter in `kagg.policy.decide`
+    already excludes the ones that can't, so by the time a one-time crop
+    reaches this function with a `days_remaining` it can't fit, nothing
+    here needs to notice (the caller won't act on it regardless). An
+    *ongoing* crop (TOMATO/STRAWBERRY) is different: `_crop_has_time_to_
+    mature` only checks the *first* scheduled production, so a crop that
+    technically "has time to mature" on day 24 of a 30-day season can
+    still be scored at its full 4-production lifetime when only 1 of
+    those 4 will actually happen - this truncates the schedule itself,
+    not just the tile-days denominator.
     """
     cd = CROPS[crop]
     if cd["ongoing"]:
         schedule = forecast_ongoing_schedule(crop, planted_day=0)
+        if days_remaining is not None:
+            schedule = [day for day in schedule if day < days_remaining]
         total_yield = min(cd["max_yield"], len(schedule))  # 1 unit/tick, capped
-        tile_days = schedule[-1] + 1
+        tile_days = schedule[-1] + 1 if schedule else 1
     else:
         watered_days = set(watering_bonus_window(crop))
         total_yield = forecast_one_time_yield(crop, watered_days)
         tile_days = cd["max_yield_day"] + 1
+    if days_remaining is not None:
+        # A tile is only ever *occupied* for the days that actually
+        # exist - for a one-time crop that already passed the maturity
+        # filter this is a no-op (tile_days already <= days_remaining by
+        # construction of that filter), so this line only ever bites for
+        # the ongoing-crop case above, or for a crop a caller ranks
+        # without having applied the maturity filter first (harmless:
+        # such a crop is skipped by the caller regardless of its score).
+        tile_days = max(1, min(tile_days, days_remaining))
     return total_yield, tile_days
 
 
@@ -54,6 +88,7 @@ def crop_revenue_per_tile_day(
     already_committed_units: int = 0,
     expected_consumption: float = 0,
     net_of_seed_cost: bool = False,
+    days_remaining: int | None = None,
 ) -> float:
     """Expected revenue per tile-day for a crop watered on every day its
     bonus window allows (no fertilizer), evaluated at `sell_at_inventory`
@@ -123,8 +158,13 @@ def crop_revenue_per_tile_day(
     at, now applied to *net*, not gross, proceeds. Defaults to `False`
     (gross revenue, T8.3f/T8.3i's exact prior behavior) for every caller
     that doesn't pass it.
+
+    `days_remaining` (T8.3m) is passed straight through to
+    `_crop_yield_and_tile_days` - see its own docstring. Defaults to
+    `None` (no truncation, exact prior behavior for every caller that
+    doesn't pass it).
     """
-    total_yield, tile_days = _crop_yield_and_tile_days(crop)
+    total_yield, tile_days = _crop_yield_and_tile_days(crop, days_remaining)
     start = sell_at_inventory + already_committed_units - expected_consumption
     total_revenue = sum(price(crop, start + k) for k in range(total_yield))
     if net_of_seed_cost:
@@ -132,13 +172,22 @@ def crop_revenue_per_tile_day(
     return total_revenue / tile_days
 
 
-def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int, expected_consumption: float = 0) -> float:
-    """Steady-state revenue per tile-day for a continuously fed animal.
+def animal_revenue_per_tile_day(
+    animal: str,
+    sell_at_inventory: int,
+    expected_consumption: float = 0,
+    days_remaining: int | None = None,
+    net_of_cost: bool = False,
+    feed_price: float = 0,
+) -> float:
+    """Steady-state revenue per tile-day for a continuously fed animal -
+    or, when `net_of_cost` is set with a real `days_remaining`, net
+    profit per day over the *bounded* remaining season instead (T8.3m).
 
-    No tile-days denominator the way crops have one: animals produce
-    indefinitely once placed (SPEC.md's economic analysis: "no fixed
-    occupancy to divide by") - this is just the per-tick rate
-    (1 / interval) at the given product price.
+    No tile-days denominator the way crops have one in the steady-state
+    branch: animals produce indefinitely once placed (SPEC.md's economic
+    analysis: "no fixed occupancy to divide by") - this is just the
+    per-tick rate (1 / interval) at the given product price.
 
     `expected_consumption` (T8.3i): unlike `crop_revenue_per_tile_day`'s
     `already_committed_units` (which needs a bounded lifetime total this
@@ -149,17 +198,44 @@ def animal_revenue_per_tile_day(animal: str, sell_at_inventory: int, expected_co
     YARN_STORE for WOOL). Defaults to 0, reproducing the exact prior
     behavior for every caller that doesn't pass it.
 
-    No `net_of_seed_cost`-style parameter (T8.3k): unlike a crop's
-    one-time seed cost against a bounded `total_yield` run, netting out
-    an animal's purchase cost needs an amortization horizon this function
-    doesn't have (the same unbounded-lifetime problem that already
-    excludes animals from `already_committed_units`), and there's also a
-    real *recurring* cost (WHEAT to feed it) this function doesn't model
-    at all yet - left as an open, harder problem, not silently ignored;
-    see `SPEC.md`'s "Economic analysis" section for the related
-    WHEAT-for-feed lead already recorded.
+    `days_remaining`/`net_of_cost`/`feed_price` (T8.3m, the user's own
+    observation, previously recorded as an open gap in tasks/todo.md
+    under both T8.3k - "animal purchase + recurring feed cost, net of
+    season-remaining days" - and T8.3i's animal-product self-impact
+    question): `ANIMALS[animal]["cost"]` was never subtracted anywhere in
+    the *ranking* before this (only used as a `money >= cost`
+    affordability check in `decide()`, unrelated to whether the purchase
+    is worth it relative to another option), and the recurring WHEAT feed
+    cost wasn't modeled at all. Both need a horizon to net against - the
+    same "unbounded lifetime, no natural total to walk" problem that also
+    excluded animals from `crop_revenue_per_tile_day`'s
+    `already_committed_units` self-impact walk. The remaining season is
+    exactly that horizon, and **using it incidentally closes the self-
+    impact gap too**: `forecast_animal_schedule(animal, placed_day=0,
+    horizon_days=days_remaining)` (the same call
+    `kagg.policy.decide._animal_has_time_to_mature` already makes, just
+    anchored at day 0 instead of `current_day` - mathematically
+    equivalent for counting *how many* productions fit, which is all this
+    needs) gives a real, bounded production count to walk the same
+    per-unit lockstep pricing `crop_revenue_per_tile_day` already does,
+    instead of pricing every future unit at one flat snapshot.
+    `feed_price` is charged at 1 WHEAT/day for every day of the horizon
+    (FEED consumes exactly 1 WHEAT/day regardless of whether a production
+    happens that day) - a real cost, not previously deducted anywhere.
+    Both default to off/0 (`net_of_cost=False`, `days_remaining=None`),
+    reproducing the exact prior steady-state behavior for every caller
+    that doesn't pass them; `net_of_cost=True` with no `days_remaining`
+    given also falls back to the steady-state branch (no horizon to net
+    against), a graceful default rather than an error.
     """
     a = ANIMALS[animal]
+    if net_of_cost and days_remaining is not None:
+        schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining)
+        start = sell_at_inventory - expected_consumption
+        total_revenue = sum(price(a["product"], start + k) for k in range(len(schedule)))
+        total_revenue -= a["cost"]
+        total_revenue -= feed_price * days_remaining
+        return total_revenue / max(1, days_remaining)
     product_price = price(a["product"], sell_at_inventory - expected_consumption)
     return product_price / a["interval"]
 
@@ -169,6 +245,9 @@ def rank_portfolio(
     crop_tile_counts: dict | None = None,
     unlocked_shops: list | None = None,
     net_of_seed_cost: bool = False,
+    days_remaining: int | None = None,
+    rank_season_aware: bool = False,
+    animal_net_of_cost: bool = False,
 ) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day at `market_inventory`'s *current* level for each one's own
@@ -200,25 +279,45 @@ def rank_portfolio(
     `crop_tile_counts`'s own convention.
 
     `net_of_seed_cost` (T8.3k) is passed straight through to
-    `crop_revenue_per_tile_day` - see its own docstring. Animals are
-    unaffected (no analogous parameter exists yet on
-    `animal_revenue_per_tile_day` - see its own docstring for why).
+    `crop_revenue_per_tile_day` - see its own docstring.
+
+    `days_remaining`/`rank_season_aware`/`animal_net_of_cost` (T8.3m):
+    `days_remaining` is the one shared fact (days left in the season, if
+    planted/placed today) both sides can use; `rank_season_aware` and
+    `animal_net_of_cost` independently gate whether the crop side and the
+    animal side actually *use* it, so the two mechanisms measure cleanly
+    in isolation (T8.3b's own lesson: a bundled test of two mechanisms is
+    confounded). Both default to `False`, reproducing the exact prior
+    behavior for every caller that doesn't pass them - matches
+    `crop_tile_counts`/`unlocked_shops`'s own "`None`/off means no
+    information" convention. `feed_price` for the animal side is derived
+    here (this module already imports `price`, so there's no need for a
+    caller to compute or pass a separate market-prices dict - see
+    `agent_main.py`'s own comment on why `obs["market"]["prices"]` is
+    unused throughout this package, `price()` recomputes it from
+    inventory instead) only when `animal_net_of_cost` is set, since it's
+    otherwise unused.
     """
     crop_tile_counts = crop_tile_counts or {}
     unlocked_shops = unlocked_shops or []
+    crop_days_remaining = days_remaining if rank_season_aware else None
     scores = {}
     for crop in CROPS:
         inv = market_inventory.get(crop, MARKET_I0)
-        total_yield, tile_days = _crop_yield_and_tile_days(crop)
+        total_yield, tile_days = _crop_yield_and_tile_days(crop, crop_days_remaining)
         already_committed_units = crop_tile_counts.get(crop, 0) * total_yield
         expected_consumption = expected_daily_consumption(crop, unlocked_shops) * tile_days
         scores[crop] = crop_revenue_per_tile_day(
-            crop, inv, already_committed_units, expected_consumption, net_of_seed_cost
+            crop, inv, already_committed_units, expected_consumption, net_of_seed_cost, crop_days_remaining
         )
+    animal_days_remaining = days_remaining if animal_net_of_cost else None
+    feed_price = price("WHEAT", market_inventory.get("WHEAT", MARKET_I0)) if animal_net_of_cost else 0
     for animal, a in ANIMALS.items():
         inv = market_inventory.get(a["product"], MARKET_I0)
         expected_consumption = expected_daily_consumption(a["product"], unlocked_shops) * a["interval"]
-        scores[animal] = animal_revenue_per_tile_day(animal, inv, expected_consumption)
+        scores[animal] = animal_revenue_per_tile_day(
+            animal, inv, expected_consumption, animal_days_remaining, animal_net_of_cost, feed_price
+        )
     return sorted(scores, key=scores.__getitem__, reverse=True)
 
 

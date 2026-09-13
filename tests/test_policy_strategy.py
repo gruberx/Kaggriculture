@@ -133,6 +133,103 @@ def test_animal_revenue_per_tile_day_expected_consumption_raises_the_score():
     assert with_consumption > baseline
 
 
+def test_crop_revenue_per_tile_day_days_remaining_truncates_an_ongoing_crops_schedule():
+    # T8.3m: STRAWBERRY's full schedule (planted_day=0) is [10, 12, 14,
+    # 16] (4 productions). With only 13 days left, just the productions
+    # on day 10 and 12 actually fit (14 and 16 don't) - 2 productions,
+    # tile_days = 13 (last fitting production's day + 1).
+    from kagg.gamelib.market import price as _price
+
+    expected = sum(_price("STRAWBERRY", MARKET_I0 + k) for k in range(2)) / 13
+    assert crop_revenue_per_tile_day("STRAWBERRY", MARKET_I0, days_remaining=13) == pytest.approx(expected)
+
+
+def test_crop_revenue_per_tile_day_days_remaining_defaults_to_the_full_schedule():
+    full = crop_revenue_per_tile_day("STRAWBERRY", MARKET_I0)
+    assert crop_revenue_per_tile_day("STRAWBERRY", MARKET_I0, days_remaining=None) == pytest.approx(full)
+
+
+def test_crop_revenue_per_tile_day_days_remaining_is_a_noop_for_a_still_maturable_one_time_crop():
+    # MELON's tile_days is 13 (max_yield_day=12, +1); once it still has
+    # time to mature (days_remaining >= 13), truncation must not touch a
+    # one-time crop's already-fixed yield/tile_days at all.
+    full = crop_revenue_per_tile_day("MELON", MARKET_I0)
+    assert crop_revenue_per_tile_day("MELON", MARKET_I0, days_remaining=13) == pytest.approx(full)
+    assert crop_revenue_per_tile_day("MELON", MARKET_I0, days_remaining=100) == pytest.approx(full)
+
+
+def test_animal_revenue_per_tile_day_net_of_cost_matches_independent_calculation():
+    # T8.3m: GOOSE (cost=300, first_yield_day=4, interval=1) with 6 days
+    # left - forecast_animal_schedule(placed_day=0, horizon_days=6) gives
+    # [4, 5, 6], 3 productions.
+    from kagg.gamelib.market import price as _price
+
+    expected = (sum(_price("EGG", MARKET_I0 + k) for k in range(3)) - 300 - 2 * 6) / 6
+    got = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=6, net_of_cost=True, feed_price=2
+    )
+    assert got == pytest.approx(expected)
+
+
+def test_animal_revenue_per_tile_day_net_of_cost_can_go_negative_for_a_too_late_animal():
+    # An animal commissioned with almost no season left should score a
+    # real loss (purchase cost alone dwarfs 1-2 productions), not just a
+    # smaller positive number - this is the whole point of netting real
+    # costs against a bounded horizon instead of an unbounded steady-state
+    # rate.
+    got = animal_revenue_per_tile_day(
+        "COW", MARKET_I0, days_remaining=9, net_of_cost=True, feed_price=5
+    )
+    assert got < 0
+
+
+def test_animal_revenue_per_tile_day_net_of_cost_defaults_to_the_steady_state_rate():
+    steady_state = animal_revenue_per_tile_day("COW", MARKET_I0)
+    assert animal_revenue_per_tile_day("COW", MARKET_I0, net_of_cost=False) == pytest.approx(steady_state)
+    # net_of_cost=True with no days_remaining given has no horizon to net
+    # against - graceful fallback to the same steady-state rate, not an
+    # error.
+    assert animal_revenue_per_tile_day("COW", MARKET_I0, net_of_cost=True) == pytest.approx(steady_state)
+
+
+def test_rank_portfolio_season_aware_demotes_a_long_ongoing_crop_near_season_end():
+    # STRAWBERRY leads at base price with no season information at all
+    # (see test_rank_portfolio_orders_by_marginal_revenue_at_base_price -
+    # it's 5th, well below MELON/COW/SHEEP/GOOSE, so use a market where it
+    # already leads among crops to make the demotion visible).
+    market = {}
+    without = rank_portfolio(market)
+    with_season = rank_portfolio(market, days_remaining=11, rank_season_aware=True)
+    # Only 1 of STRAWBERRY's 4 scheduled productions (day 10) fits inside
+    # 11 remaining days - its relative rank against the other crops must
+    # not improve, and its raw score must drop.
+    assert with_season.index("STRAWBERRY") >= without.index("STRAWBERRY")
+
+
+def test_rank_portfolio_season_aware_defaults_to_false():
+    market = {}
+    assert rank_portfolio(market, days_remaining=11) == rank_portfolio(market)
+
+
+def test_rank_portfolio_animal_net_of_cost_can_make_a_late_animal_unattractive():
+    market = {}
+    without = rank_portfolio(market)
+    with_cost = rank_portfolio(market, days_remaining=9, animal_net_of_cost=True)
+    # COW/SHEEP/GOOSE rank 2nd-4th at base price with no cost information
+    # at all (see the base-price ranking test above - only MELON beats
+    # them); once real purchase + feed cost is netted against just 9
+    # remaining days, every animal must fall behind every crop instead.
+    assert without.index("COW") < without.index("STRAWBERRY")
+    assert with_cost.index("STRAWBERRY") < with_cost.index("COW")
+    assert with_cost.index("STRAWBERRY") < with_cost.index("SHEEP")
+    assert with_cost.index("STRAWBERRY") < with_cost.index("GOOSE")
+
+
+def test_rank_portfolio_animal_net_of_cost_defaults_to_false():
+    market = {}
+    assert rank_portfolio(market, days_remaining=9) == rank_portfolio(market)
+
+
 def test_rank_portfolio_orders_by_marginal_revenue_at_base_price():
     # MELON's huge per-tile-day revenue at base price is exactly the
     # "premium goods look great until you check market depth" trap

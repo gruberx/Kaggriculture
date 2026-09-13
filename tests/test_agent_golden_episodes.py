@@ -215,6 +215,28 @@ CARROT 4 - CARROT's $20 seed cost against its own modest yield doesn't clear the
 out. $19903 vs $18584 final. Accepted as the default. 2 of 6 golden seeds changed this time (a
 smaller footprint than T8.3f/T8.3i, consistent with the narrow-crossover-window finding above).
 
+Re-recorded a twelfth time for T8.3m (tasks/plan.md) - the user's own observation, extending T8.3k's
+"time is scarce" insight to the piece it didn't reach: `rank_portfolio` had no notion of the current
+day or the remaining season, and `ANIMALS[animal]["cost"]` plus the recurring WHEAT feed cost were
+never netted out anywhere. Two independent mechanisms measured in isolation (`rank_season_aware` for
+crops, `animal_net_of_cost` for animals - T8.3b's own lesson about confounded measurements): the crop
+side was a real, decisive **rejection** (1/44 working, 2/47 held-out, traced to a pre-existing
+single-farmer capacity limit - see kagg.policy.decide's own comment), stays off by default. The
+animal side was the strongest measured result of the whole T8.3-series investigation - 50/50 working,
+49/50 held-out - **accepted** as the default. A major, deliberately-verified side effect, not an
+oversight: once an animal's true cost (purchase + full-season feed) is priced in, no animal ever
+tops the ranking at base market prices at any point in the season (checked directly, not assumed:
+`rank_portfolio` at I0 across days 0-28 never once returns an animal first) and animal production
+never occurs across 15 real episodes checked (seeds 100-114) - the whole T6.1-T6.5 acquisition
+pipeline is now correctly avoided as economically uncompetitive under normal conditions rather than
+pursued reflexively at a fictional unbounded steady-state rate (COW's old rate: 80/tile-day forever;
+its real net rate at a full 30-day horizon: ~21/day, well below MELON/STRAWBERRY). The pipeline
+itself is untouched and still verified working (see
+test_at_least_one_animal_reaches_production_in_a_representative_episode, now exercised with
+`animal_net_of_cost=False` explicitly to keep testing pipeline mechanics independent of today's
+accepted economics). All 6 golden seeds improved (none decreased) - e.g. starter/seed1: 26386 ->
+27524.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -225,8 +247,12 @@ invariants instead of an exact number.
 """
 
 import os
+import sys
 
 from kaggle_environments import make
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+import tuning  # noqa: E402
 
 AGENT_MAIN_PATH = os.path.join(
     os.path.dirname(__file__), "..", "src", "kagg", "agent_main.py"
@@ -243,12 +269,12 @@ AGENT_MAIN_PATH = os.path.join(
 # was tried first and found invalid - see kagg.policy.decide's
 # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED comment for the full story).
 _GOLDEN = {
-    ("starter", 1): (26386.0, 3421.0),
-    ("starter", 2): (25293.0, 3569.0),
-    ("starter", 3): (25400.0, 3649.0),
-    ("pass", 1): (26075.0, 3000.0),
-    ("pass", 2): (25905.0, 3000.0),
-    ("pass", 3): (27575.0, 3000.0),
+    ("starter", 1): (27524.0, 3466.0),
+    ("starter", 2): (27652.0, 3577.0),
+    ("starter", 3): (27911.0, 3749.0),
+    ("pass", 1): (27509.0, 3000.0),
+    ("pass", 2): (27915.0, 3000.0),
+    ("pass", 3): (27619.0, 3000.0),
 }
 
 
@@ -318,7 +344,7 @@ def test_beats_starter_and_random_across_additional_seeds():
             assert our_result.reward > opponent_result.reward, (opponent, seed)
 
 
-def test_at_least_one_animal_reaches_production_in_a_representative_episode():
+def test_at_least_one_animal_reaches_production_in_a_representative_episode(tmp_path):
     """T6.4's own acceptance criterion (tasks/plan.md): confirms the full
     animal-acquisition pipeline (choose -> BUY_ANIMAL -> BUILD_* ->
     PICKUP -> PLACE -> FEED -> production) actually reaches production in
@@ -333,13 +359,33 @@ def test_at_least_one_animal_reaches_production_in_a_representative_episode():
     "don't keep re-buying" guards (decide.py) - see those modules' own
     docstrings for the full story. This test is the regression guard
     against ever silently losing that pipeline again.
+
+    T8.3m correction: `animal_net_of_cost=True` (now the shipped default
+    - see kagg.policy.decide's own comment for the measured story) makes
+    the pipeline *economically* uncompetitive against crops under normal
+    market conditions, confirmed directly - checked across 15 real
+    episodes (seeds 100-114, real code, real default params) and found
+    zero animal production in every one. That's a real, measured, and
+    intentional consequence of finally pricing an animal's true cost, not
+    a regression of the *pipeline itself* - so this test now runs with
+    `animal_net_of_cost=False` explicitly (via `tuning.write_candidate_
+    agent`, not the raw shipped `AGENT_MAIN_PATH`) to keep testing what
+    it was built to test: that the full choose -> BUY_ANIMAL -> BUILD_*
+    -> PICKUP -> PLACE -> FEED -> production pipeline still works end to
+    end when an animal IS pursued, independent of whether today's
+    accepted economics happen to pursue one.
     """
+    from kagg.policy.params import DEFAULT_PARAMS
+
+    agent_path = tuning.write_candidate_agent(
+        dict(DEFAULT_PARAMS, animal_net_of_cost=False), str(tmp_path)
+    )
     env = make(
         "kaggriculture",
         configuration={"episodeSteps": 720, "seed": 1},
         debug=False,
     )
-    env.run([AGENT_MAIN_PATH, "pass"])
+    env.run([agent_path, "pass"])
     reached_production = any(
         step[0]["observation"]["private"].get("shed", {}).get(product, 0) > 0
         for step in env.steps

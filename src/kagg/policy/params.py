@@ -164,6 +164,35 @@ DEFAULT_PARAMS = {
     # unsold at episode end scores exactly zero. See kagg.policy.decide's
     # _DEFAULT_LIQUIDATE_WHEAT_RESERVE comment for the full story.
     "liquidate_wheat_reserve": True,
+    # T8.3m: rank_portfolio had no notion of the current day or the
+    # remaining season - an ongoing crop (TOMATO/STRAWBERRY) could be
+    # scored at its full multi-production lifetime revenue even on the
+    # last few days of the season, when only one production (or none)
+    # will actually happen. Gates whether the crop side truncates its
+    # scored schedule to what remains - see
+    # kagg.policy.decide._DEFAULT_RANK_SEASON_AWARE and
+    # kagg.policy.strategy._crop_yield_and_tile_days's own docstrings for
+    # the mechanism. **Measured and rejected**: 1/44 working, 2/47
+    # held-out against the checked-in baseline - a real, decisive loss
+    # traced to a pre-existing single-farmer capacity limit (the same
+    # class of defect as T8.3e's FERTILIZE rejection), not a wiring bug -
+    # see kagg.policy.decide's own comment for the full traced story.
+    # Kept available for a future re-check once Stage B (hired hands)
+    # relieves that congestion.
+    "rank_season_aware": False,
+    # T8.3m, the animal-side twin: nets ANIMALS[animal]["cost"] and the
+    # recurring WHEAT feed cost out of an animal's score over the
+    # remaining season, instead of scoring an unbounded steady-state
+    # rate - see kagg.policy.decide._DEFAULT_ANIMAL_NET_OF_COST and
+    # kagg.policy.strategy.animal_revenue_per_tile_day's own docstrings.
+    # Independently gated from rank_season_aware for a clean, isolated
+    # measurement of each mechanism before any bundled test - a real
+    # methodological precaution, not a formality: rank_season_aware
+    # measured a decisive loss alone (see above) while this measured the
+    # strongest win of the whole T8.3-series investigation so far (50/50
+    # working, 49/50 held-out) - bundling them would have hidden that
+    # split result entirely. Accepted as the default.
+    "animal_net_of_cost": True,
 }
 
 

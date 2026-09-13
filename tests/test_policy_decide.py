@@ -478,8 +478,13 @@ def test_top_investment_choice_picks_an_animal_when_it_outranks_every_crop():
     # test_rank_portfolio_reacts_to_a_crashed_price does - with MELON out
     # of the running, COW ranks first overall (verified directly:
     # rank_portfolio returns ['COW', 'SHEEP', 'GOOSE', ...] here).
+    # animal_net_of_cost explicitly off: this test is about
+    # _top_investment_choice's own wiring (does it act on an animal top
+    # choice at all), not about T8.3m's ranking economics - the T8.3m
+    # ranking tests belong in test_policy_strategy.py.
     crashed_melon_inventory = {"MELON": MARKET_I0 + 100_000}
-    choice = _top_investment_choice(crashed_melon_inventory, current_day=0, params=DEFAULT_PARAMS)
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    choice = _top_investment_choice(crashed_melon_inventory, current_day=0, params=params)
     assert choice == ("COW", "animal")
 
 
@@ -487,8 +492,10 @@ def test_top_investment_choice_skips_an_animal_that_cannot_mature_in_time():
     # Same crashed-MELON ranking, but late enough that COW (first
     # overall) can't mature - SHEEP (next in rank) still can (verified:
     # forecast_animal_schedule("SHEEP", placed_day=22) starts at day 28).
+    # animal_net_of_cost explicitly off - see the test above.
     crashed_melon_inventory = {"MELON": MARKET_I0 + 100_000}
-    choice = _top_investment_choice(crashed_melon_inventory, current_day=22, params=DEFAULT_PARAMS)
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    choice = _top_investment_choice(crashed_melon_inventory, current_day=22, params=params)
     assert choice == ("SHEEP", "animal")
 
 
@@ -507,9 +514,12 @@ def test_decide_buys_a_seed_for_the_top_crop_alongside_the_top_animal_by_default
     # kagg.policy.decide._top_crop_choice's docstring for the full,
     # corrected story (the earlier "measured to lose" result was itself
     # measured on stale, pre-T8.2/T8.3 code).
+    # animal_net_of_cost explicitly off: this test is about the crop-
+    # fallback wiring (T8.9/T8.3b), not T8.3m's ranking economics.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # crashes MELON - COW ranks first overall
-    action = decide(obs, DEFAULT_PARAMS)
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    action = decide(obs, params)
     buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
     assert len(buy_seed_orders) == 1
     assert buy_seed_orders[0][1] in CROPS
@@ -521,10 +531,11 @@ def test_decide_can_still_disable_the_crop_fallback_explicitly():
     # The pre-T8.3b behavior stays reachable via an explicit override -
     # both purchases are independent market orders with no structural
     # reason to be exclusive, so disabling the fallback alone is enough
-    # to reproduce the old "animal only" behavior.
+    # to reproduce the old "animal only" behavior. animal_net_of_cost
+    # explicitly off, same reason as the test above.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
-    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=False)
+    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=False, animal_net_of_cost=False)
     action = decide(obs, params)
     assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
     buy_animal_orders = [o for o in action["market"] if o[0] == "BUY_ANIMAL"]
@@ -570,12 +581,13 @@ def test_decide_keeps_working_by_default_when_the_top_ranked_animal_is_already_p
 def test_decide_idles_when_the_crop_fallback_is_disabled_explicitly():
     # The pre-T8.3b behavior (the real bug) stays reachable and correct
     # via an explicit override, mirroring investment_anchor's own pattern.
+    # animal_net_of_cost explicitly off, same reason as the tests above.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
     obs["farms"][0]["tiles"][4][4] = _placed_cow_tile()
     obs["farms"][0]["farmer"] = [0, 0]
     obs["private"]["seeds"]["STRAWBERRY"] = 1
-    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=False)
+    params = dict(DEFAULT_PARAMS, plant_while_pursuing_animal=False, animal_net_of_cost=False)
     action = decide(obs, params)
     assert action["farmer"] == ["PASS"]
     assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
@@ -601,9 +613,11 @@ def test_decide_emits_a_build_task_when_animal_is_the_top_choice():
     # The base fixture's farmer already stands at (4, 4) - the nearest
     # (in fact, occupied) empty tile - so no movement step is needed to
     # exercise the BUILD op itself in a single decide() call.
+    # animal_net_of_cost explicitly off - see the tests above.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
-    action = decide(obs, DEFAULT_PARAMS)
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    action = decide(obs, params)
     assert action["farmer"] == ["BUILD_PASTURE"]  # COW's structure
 
 
@@ -704,10 +718,12 @@ def test_decide_does_not_buy_an_animal_when_no_land_or_matching_structure_exists
 def test_decide_still_buys_an_animal_when_a_matching_empty_structure_exists():
     # No empty *tile* to build on, but an existing empty PASTURE is
     # enough - the animal doesn't need free land, just somewhere to go.
+    # animal_net_of_cost explicitly off - see the tests above.
     obs = _fill_all_tiles(_obs())
     obs["farms"][0]["tiles"][0][0] = {"kind": "PASTURE"}
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW is the top choice
-    action = decide(obs, DEFAULT_PARAMS)
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    action = decide(obs, params)
     assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == [["BUY_ANIMAL", "COW", 1]]
 
 
@@ -738,11 +754,12 @@ def test_decide_buys_wheat_once_an_animal_is_being_pursued():
     # Once an animal is the top investment choice (crops crashed via the
     # market), feed is needed even before the animal is actually placed -
     # restocking should already be active so feed is on hand by the time
-    # PLACE fires.
+    # PLACE fires. animal_net_of_cost explicitly off - see the tests above.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW ranks first overall
     obs["private"]["shed"]["WHEAT"] = 0
-    action = decide(obs, DEFAULT_PARAMS)
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    action = decide(obs, params)
     assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == [
         ["BUY_PRODUCT", "WHEAT", 10]
     ]
@@ -789,3 +806,81 @@ def test_decide_defaults_liquidate_wheat_reserve_to_true_when_unset():
     action = decide(obs, params)
     sell_wheat_orders = [o for o in action["market"] if o[0] == "SELL" and o[1] == "WHEAT"]
     assert sell_wheat_orders == [["SELL", "WHEAT", 10]]
+
+
+def test_decide_defaults_rank_season_aware_to_false_when_unset():
+    # T8.3m: built and tested, but measured to lose decisively in direct
+    # self-play (1/44 working, 2/47 held-out) - see decide.py's own
+    # _DEFAULT_RANK_SEASON_AWARE comment for the full traced story.
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("rank_season_aware") is False
+    assert decide_module._DEFAULT_RANK_SEASON_AWARE is False
+
+
+def test_decide_defaults_animal_net_of_cost_to_true_when_unset():
+    # T8.3m: accepted - the strongest measured result of the whole
+    # T8.3-series investigation so far (50/50 working, 49/50 held-out) -
+    # see decide.py's own _DEFAULT_ANIMAL_NET_OF_COST comment.
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("animal_net_of_cost") is True
+    assert decide_module._DEFAULT_ANIMAL_NET_OF_COST is True
+
+
+def test_decide_passes_days_remaining_through_to_rank_portfolio_only_when_a_flag_is_on(monkeypatch):
+    # T8.3m: decide() is the only real caller of rank_portfolio (via
+    # _top_investment_choice/_top_crop_choice), so this is the glue test
+    # for whether params["rank_season_aware"]/params["animal_net_of_cost"]
+    # actually reach it, and that days_remaining stays None when neither
+    # is set - test_policy_strategy.py's own tests already cover what
+    # each flag *does*. animal_net_of_cost defaults to True (accepted),
+    # so both-off is tested with it explicitly disabled.
+    import kagg.policy.decide as decide_module
+
+    captured = []
+    original = decide_module.rank_portfolio
+
+    def spy(*args, **kwargs):
+        captured.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    decide(_obs(), dict(DEFAULT_PARAMS, animal_net_of_cost=False))  # both flags off
+    assert captured and all(args[4] is None and args[5] is False and args[6] is False for args in captured)
+
+    captured.clear()
+    obs = _obs()
+    obs["day"] = 20
+    decide(obs, dict(DEFAULT_PARAMS, rank_season_aware=True, animal_net_of_cost=False))
+    assert captured and all(args[4] == 10 and args[5] is True and args[6] is False for args in captured)
+
+    captured.clear()
+    decide(obs, dict(DEFAULT_PARAMS, animal_net_of_cost=True))  # the accepted default
+    assert captured and all(args[4] == 10 and args[5] is False and args[6] is True for args in captured)
+
+
+def test_decide_stops_planting_a_late_season_ongoing_crop_when_season_aware():
+    # A direct behavioral check, not just a glue check: with only 11 days
+    # left, STRAWBERRY (which needs 17 tile-days for its full schedule)
+    # must not be the crop decide() buys a seed for once rank_season_aware
+    # is on, in a market rigged so STRAWBERRY would otherwise be the top
+    # crop pick.
+    from kagg.gamelib.constants import MARKET_I0, PRODUCTS
+
+    obs = _obs()
+    obs["day"] = 19  # 11 days left of the default 30-day season
+    # Crash MELON (the base-price crop leader - see
+    # test_rank_portfolio_orders_by_marginal_revenue_at_base_price in
+    # test_policy_strategy.py) and make STRAWBERRY scarce, so STRAWBERRY
+    # is the clear crop leader without season awareness.
+    obs["market"]["inventory"] = {p: MARKET_I0 for p in PRODUCTS}
+    obs["market"]["inventory"]["MELON"] = MARKET_I0 + 100_000
+    obs["market"]["inventory"]["STRAWBERRY"] = MARKET_I0 - 90  # scarce -> high price
+    action_unaware = decide(obs, DEFAULT_PARAMS)
+    seed_unaware = next(o[1] for o in action_unaware["market"] if o[0] == "BUY_SEED")
+    assert seed_unaware == "STRAWBERRY"
+
+    action_aware = decide(obs, dict(DEFAULT_PARAMS, rank_season_aware=True))
+    seeds_aware = [o[1] for o in action_aware["market"] if o[0] == "BUY_SEED"]
+    assert "STRAWBERRY" not in seeds_aware
