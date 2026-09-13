@@ -809,14 +809,24 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       THRESHOLD_MONEY`/`_DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION` (`kagg.policy.strategy`)/
       `DEFAULT_PARAMS`/`params/policy.json` kept in sync. 362/362 full suite (2 pre-existing tests
       updated for the new defaults), compileall clean, boundary check green.
-      Fresh Kaggle submission: ref `56213981` (commit `bf6cef3`, T8.4-T8.7 - submitted before T8.8's
-      own land re-sweep landed; T8.8 itself not yet submitted, ask the user first per this project's
-      standing discipline).
+      Fresh Kaggle submission: ref `56214285` (commit `777e46a`, this task's own land re-sweep,
+      user-approved) - supersedes ref `56213981` (T8.4-T8.7 alone, commit `bf6cef3`).
 - [x] T8.9 — Pulled forward into T8.1 above (found to be tightly coupled to it, not a separable
       stretch goal after all). Decouples plant-crop choice from animal-acquisition choice via
       `params["plant_while_pursuing_animal"]`; shipped as opt-in, not the default - see T8.1's entry
       for the full measured story.
-- [ ] **Checkpoint 8B** — suite green, bundle built + submitted, real episode scores recorded.
+- [x] **Checkpoint 8B** — suite green (362/362), bundle built and submitted (ref `56214285`, commit
+      `777e46a`), real episode scores recorded. **Honest, not just the self-play headline**: real
+      public episodes today for T8.3l+T8.3m (ref `56213409`) were 6W/8L across 14 games;
+      T8.4-T8.7 (ref `56213981`) was 1W/4L across 5 games (small sample). Our own money did rise as
+      self-play predicted (roughly 13k-38k vs the prior ~15-28k range), but the field's own top tier
+      scored 75k-117k in the same window - the real competitive gap from `competitive_gap_first_
+      submission` memory is confirmed current, not stale (an earlier read this session
+      misidentified it as resolved by matching the wrong team - corrected). `public_score` itself
+      moved 391.8 -> 375.3 -> 354.3 across the three submissions today; per this project's own
+      established finding, a fresh submission's score is volatile for its first ~20 minutes and
+      keeps moving as more episodes complete, so this snapshot is not a final verdict - re-check
+      before drawing conclusions from it.
 
 ## Not planned yet (see plan.md)
 
