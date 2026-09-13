@@ -515,6 +515,40 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       **Accepted** as the default (`crop_shop_demand_aware=True`). Golden table re-recorded - 5 of 6
       seeds changed. 294/294 full suite (new tests across `test_gamelib_market.py`,
       `test_policy_strategy.py`, `test_policy_decide.py`), compileall clean, boundary check green.
+- [x] T8.3j — Documentation-only, no code/behavior change: the user asked two grounding
+      questions after T8.3i (does self-impact cover animal products; where did the SHOPS table come
+      from) that surfaced a real gap - `SPEC.md` had been referencing "the economic analysis" by
+      name since Phase 7-8 (e.g. "premium goods look great until you check market depth") but no
+      such section actually existed anywhere in the repo. Fetched the competition's own Overview
+      page directly (`mcp__kaggle-mcp__list_competition_pages`, not `WebFetch` - the page is a
+      client-rendered SPA and returns only a bare title over plain HTTP) and cross-checked it
+      against `kaggriculture.py`: every number in `MARKET_PARAMS` matches exactly, but the Overview
+      page adds real design intent the source code's bare tables don't state - what `T` actually
+      *is* (a full 5x5 field's 24-day production capacity, not an arbitrary curve-fit knob), the
+      "premium goods" classification (`above_target > 1`) and why it matters strategically, and
+      worked example prices (`P(I0-T)`/`P(I0+T)`/`P(I0+2T)`) per resource.
+      **Added a new "Economic analysis" section to `SPEC.md`** (between "Capability map" and
+      "Environment") with the full per-resource table and two concrete, unexploited leads recorded
+      for later implementation, not built here:
+      1. **`hinge`-shaped scarcity (CARROT/TOMATO/EGG)**: price stays near base under ordinary
+         demand and only climbs *sharply* once a real deficit passes `T` - a fundamentally
+         different opportunity shape than every other product's smooth scarcity curve, and nothing
+         in `kagg.policy` currently distinguishes it (`price()` is called shape-agnostically
+         everywhere, T8.3f/T8.3i's models included). A real future feature: detect an approaching
+         `T`-deficit for one of these three specifically and preferentially plant it before the
+         price has fully caught up.
+      2. **WHEAT-for-feed cross-pressure**, the user's own follow-up on the "hiring speeds up wool
+         production" question: `BUY_PRODUCT` (restocking WHEAT to feed animals) reduces the *shared*
+         `market["inventory"]["WHEAT"]` exactly like a `SELL` raises it (verified directly in
+         `_commit_unit`) - so (a) growing our own feed wheat instead of buying it avoids a real,
+         currently-unvalued self-inflicted price cost, and (b) the opponent feeding *their* animals
+         is a second, distinct kind of opponent-driven WHEAT pressure (tightening supply) from
+         T8.3g/T8.3h's crop-tile one (adding supply). Also recorded precisely why WOOL/MILK/EGG
+         overproduction from stacking animals is a structural non-issue *today* (a hard
+         one-animal-per-type cap in `decide.py`, not price awareness) but stops being dormant the
+         moment T8.4-T8.7 hiring lifts that cap.
+      No tests, no measurement, no default changed - see `SPEC.md`'s new section and the "Not
+      planned yet" list below for the concrete ideas to pick up later.
 - [ ] T8.4 — `Task.unit_index` + inventory pinning (wheat/animal PICKUP, FEED, PLACE pinned to
       unit 0; pinned-first rule in `assign_units`; diagnostic episodes with `hires_per_day=4`
       forced, checking the pipeline actually reaches production).
@@ -551,3 +585,28 @@ targets — gated behind a Stage-1 baseline that doesn't exist yet).
   against. The mechanism itself should already generalize correctly (`_crop_tile_counts` counts
   real current tiles regardless of how many workers planted them, not planting *rate*), but this is
   an assumption, not yet confirmed by a real measurement under nonzero `hires_per_day`.
+
+**Open questions recorded for later, not forgotten (the user's own request, 2026-09-13, T8.3j):**
+- **Exploit `hinge`-shaped scarcity for CARROT/TOMATO/EGG specifically** - see `SPEC.md`'s new
+  "Economic analysis" section for the full mechanism (price stays near base under ordinary demand,
+  then climbs *sharply* once a real deficit passes `T`). Concrete shape for a future attempt:
+  detect an approaching `T`-deficit for one of these three (from `market_inventory` trending toward
+  `I0 - T`, cross-checked against visible supply - ours and the opponent's) and preferentially
+  plant it before the price has fully caught up. Nothing in `kagg.policy` currently treats `hinge`
+  products differently from any other scarcity curve.
+- **WHEAT-for-feed cross-pressure** - the user's own follow-up to the "hiring speeds up wool
+  production" discussion. `BUY_PRODUCT` (restocking WHEAT to feed animals) reduces the shared
+  market inventory exactly like a `SELL` raises it (verified in `_commit_unit`), so (a) growing our
+  own feed wheat instead of buying it avoids a real, currently-unvalued self-inflicted price cost
+  when scoring WHEAT as a crop, and (b) the opponent feeding their own animals is a second, distinct
+  kind of opponent-driven WHEAT pressure (tightening supply) from T8.3g/T8.3h's crop-tile one
+  (adding supply) - both currently unmodeled.
+- **Animal-product self-impact + escape risk, once hiring lifts the one-animal-per-type cap** - the
+  user's own observation: WOOL/MILK/EGG overproduction from stacking animals is a structural
+  non-issue *today* only because of a hard cap in `decide.py` ("never pursue a second instance of an
+  animal type we already have placed and alive"), not price awareness, and animal escape from missed
+  feeding is a real but currently low-probability risk at n=1 animal (FEED is the highest task
+  priority). Both stop being dormant the moment T8.4-T8.7 lifts that cap - an animal-product analog
+  of T8.3f's self-impact (bounded by *some* real horizon, e.g. remaining season days, since animal
+  production is otherwise unbounded) becomes a real gap to close then, alongside the crop
+  re-validation above.

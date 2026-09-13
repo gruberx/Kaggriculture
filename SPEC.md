@@ -73,6 +73,105 @@ call, never a file outside the bundle (see "Rule compliance" below). `harness`, 
 `diskguard` are dev-only tooling and are free to depend on `kaggle_environments`, `kaggle`,
 `pytest`, etc.
 
+## Economic analysis
+
+**Referenced by name throughout `kagg.policy`'s comments (e.g. "premium goods look great until
+you check market depth") since Phase 7-8, but never actually written down until Phase 8's T8.3j -
+recorded now from the competition's own Overview page (kaggle.com/competitions/kaggriculture, "The
+Price Function" section), not reverse-engineered from `kaggriculture.py` alone. The two sources
+agree exactly on every number that matters (`MARKET_PARAMS`), but the Overview page adds real
+design intent (`T`'s calibration, the "premium" classification, per-shape strategic implications)
+that the source code's bare data tables don't state.**
+
+### The price curve, restated precisely
+
+```
+price(inv) = base + sign * amp * f(|inv - I0|)
+  sign = +1  if inv < I0   (scarcity -> price up)
+  sign = -1  if inv > I0   (glut     -> price down)
+  amp  = target * base / f(T)        (derived, not stored)
+  f    in { linear, sq, sqrt, log, log10, hinge }
+```
+
+Floored at $1, rounded to nearest dollar. Every resource starts at `I0 = 10,000` (deliberately far
+above any realistic single-game production volume, so it stays positive all game). `T` is **not an
+arbitrary tuning knob** - it's the production capacity of a single 5x5 field over a 24-day window at
+optimal watering with no fertilizer (animal totals pre-discounted 30% for wheat-feed overhead and
+one day of build time). The 24-day window is a calibration horizon, not the 30-day season - the
+opening days are setup-heavy and yield little. Practically: **`T` is a real, meaningful "how much of
+this good is a lot" reference**, not just a curve-fitting parameter - a heuristic bound worth reusing
+directly in planning (e.g. "how many tiles of X can I commit to before I'm producing more than one
+field's worth" is already a T-relative question, not something to rediscover by trial and error).
+
+`hinge` (only shape whose closed form depends on `T`, not just `x`): `u = x/T`, evaluates to
+`u + 8*max(0, u-1)^2`. Below `T` it's linear in `u` (price barely moves - "stays near base under
+ordinary demand"); above `T` the quadratic term takes over and price climbs *steeply*. `f(T) = 1` by
+construction, so `target` keeps the same meaning it has for every other shape.
+
+### Per-resource table (from the Overview page directly - `P(I0-T)`/`P(I0+T)`/`P(I0+2T)` are worked
+examples, not something this codebase currently computes anywhere)
+
+| Resource | Base | T | Below func | Below target | Above func | Above target | P(I0-T) | P(I0+T) | P(I0+2T) |
+|---|---|---|---|---|---|---|---|---|---|
+| Wheat | 25 | 400 | sqrt | 0.80 | log | 0.20 | $45 | $20 | $19 |
+| Carrot | 35 | 450 | hinge | 1.00 | sqrt | 0.70 | $70 | $10 | $1 |
+| Tomato | 60 | 200 | hinge | 0.40 | sqrt | 0.60 | $84 | $24 | $9 |
+| Strawberry | 120 | 100 | sqrt | 0.70 | linear | 1.60 | $204 | $1 | $1 |
+| Melon | 250 | 300 | log | 0.20 | sq | 3.60 | $300 | $1 | $1 |
+| Egg | 50 | 332 | hinge | 0.40 | log | 0.20 | $70 | $40 | $39 |
+| Milk | 160 | 122 | sqrt | 0.60 | linear | 1.60 | $256 | $1 | $1 |
+| Wool | 200 | 105 | log | 0.20 | sq | 3.20 | $240 | $1 | $1 |
+| Fertilizer | 100 | 200 | linear | 0.40 | linear | 0.40 | $140 | $60 | $20 |
+
+Two groups this table makes concrete, both already partially reflected in code but never stated
+together in one place:
+
+- **Premium goods** (base > $100: strawberry, melon, milk, wool) use `above_target > 1` - even a
+  *modest* glut drives them straight to the $1 floor (`P(I0+T)` and `P(I0+2T)` are both $1 for all
+  four). This is exactly `kagg.policy.market.PREMIUM_GOODS`'s own justification (drip-selling), and
+  T8.3f/T8.3g/T8.3h's whole self-impact/opponent-awareness investigation. Bundling and timing sales
+  matters far more for these than for staples - a fully-worked implication of this table, not yet
+  itself exploited (the drip cap is reactive damage control, not a plan built around the curve
+  shape).
+- **`hinge`-shaped scarcity** (carrot, tomato, egg): price stays *near base* under ordinary demand
+  and only climbs *sharply* once demand runs past `T` - a fundamentally different opportunity shape
+  than the smooth `sqrt`/`log` scarcity curves everything else uses. This is the one genuinely
+  **unexploited** lever this analysis surfaces: nothing in `kagg.policy` currently distinguishes "a
+  hinge product is approaching its `T` deficit knee" from any other scarcity signal - `price()` is
+  called generically everywhere (T8.3f/T8.3i's models included), with no shape-aware logic at all.
+  A real, concrete future feature: detect (from `market_inventory` trending toward `I0 - T` for
+  CARROT/TOMATO/EGG specifically - e.g. via town/shop consumption already exceeding what any
+  visible producer, us or the opponent, appears to be supplying) that one of these three is heading
+  into its steep-climb zone *before* the price has fully caught up, and preferentially plant it
+  while the payoff is disproportionate to the still-modest current price. Recorded here as a
+  concrete idea, not built - see "Not planned yet" in `tasks/todo.md`.
+
+### Open, related ideas recorded from user discussion (T8.3g-T8.3j), not yet implemented
+
+- **Wheat is a special case already touching two of this project's own findings at once.** Feeding
+  an animal consumes 1 WHEAT/day from the farmer's own inventory (a private-state operation, no
+  market effect) - but *restocking* that WHEAT via `BUY_PRODUCT` **does** reduce the shared
+  `market["inventory"]["WHEAT"]` by 1 per unit bought (verified directly in `kaggriculture.py`'s
+  `_commit_unit`), which raises WHEAT's own price exactly like a `SELL` order lowers it. Two real,
+  currently un-modeled implications: (1) **growing our own feed wheat instead of buying it avoids
+  this self-inflicted price pressure entirely** - a genuine cost-avoidance lever `rank_portfolio`
+  doesn't currently value at all when scoring WHEAT-as-a-crop; (2) **the opponent feeds their own
+  animals too**, via the same `BUY_PRODUCT` (or their own wheat harvest) against the *same* shared
+  market - a second, distinct kind of opponent-driven price effect from the T8.3g/T8.3h one (which
+  was about opponent *crop* tiles pushing supply up; this one is about opponent *animal feeding*
+  pushing WHEAT demand up, tightening supply instead).
+- **Animal count is currently capped at one-per-type by a hard rule** (`decide.py`: "never pursue a
+  second instance of an animal type we already have placed and alive"), not by price awareness -
+  so unconstrained WOOL/MILK/EGG overproduction from stacking animals is a structural
+  non-issue *today*, independent of T8.3f's crops-only self-impact scope. That cap is explicitly
+  provisional ("revisit once multiple hands make tending more than one worthwhile") and animal
+  escape from missed feeding (`consecutive_unfed >= 2`) is a real but currently low-probability risk
+  at n=1 animal (FEED is the highest task priority). Both stop being dormant the moment T8.4-T8.7
+  hiring lifts the one-animal cap - at that point, an animal-product analog of T8.3f's self-impact
+  (bounded by *some* real horizon - e.g. remaining season days, not an unbounded lifetime total)
+  becomes a real, not merely theoretical, gap. Flagged in `tasks/todo.md`'s "Not planned yet" for
+  re-evaluation alongside the other hiring-dependent re-checks already recorded there.
+
 ## Environment
 
 - Container: 12 CPUs / 32 GB (raised from an initial 4 CPUs / 16 GB via `docker-compose.yml`,
