@@ -764,9 +764,31 @@ verified line numbers, and the design rationale: `/root/.claude/plans/partitione
       revisit once T8.7 accepts a nonzero value (watch the per-episode price series, not just final
       money - `crop_self_impact_aware`'s existing self-impact walk already partially self-corrects).
       362/362 full suite (10 new tests), compileall clean, boundary check green.
-- [ ] T8.7 — Re-run the hiring sweep (direct self-play only, no panel blending). Prediction stated
-      up front: if `hires_per_day=0` still wins after T8.4/T8.6, the bottleneck isn't labor —
-      that's the most informative possible negative result here.
+- [x] T8.7 — Re-ran the hiring sweep (`tools/run_hiring_sweep.py`), direct self-play only against
+      the checked-in T8.6 baseline, no panel blending (T7.4's own documented pitfall). **Prediction
+      stated up front, and it came true decisively**: with T8.4 (inventory pinning) + T8.6 (parallel
+      planting) landed, hiring flipped completely - every nonzero `hires_per_day` tried won 96-100%
+      working-block win rate (`hires_per_day=1`: 50/50, Wilson [0.929, 1.0]; 2/3/4/8 also hit the
+      same 100% ceiling; 6 alone dipped to 96%, likely noise around an already-saturated result) -
+      the exact opposite of T7.4's stale 0.03-0.17 finding. A joint sweep of the suspected-correlated
+      group `{hires_per_day, max_plants_per_unit, seed_buffer_per_unit}` via `coordinate_ascent`
+      found no further improvement beyond `hires_per_day` alone - the geometry-derived defaults for
+      the other two don't bind at this labor level.
+      **Accepted**: `hires_per_day` 0 → 1, held-out-gated at 50/50 (Wilson [0.929, 1.0]). Deliberately
+      the most conservative value among several tied at the measured ceiling (least labor cost for
+      the same measured benefit) - not necessarily "uniquely optimal" in a strict sense, since
+      `accept_candidate` can never distinguish two candidates both at the 100% ceiling; a genuine,
+      well-justified choice all the same. Non-regression check vs starter/random (10 holdout seeds,
+      reporting only): 100% win rate, no regression.
+      Shed-overflow risk (flagged in the plan as a real possibility at this harvest throughput):
+      checked directly across the 3 golden `starter` seeds - shed total peaked at 65/100, never
+      reached the cap. Not a live issue at `hires_per_day=1`; revisit if a future sweep raises it
+      further.
+      Golden table re-recorded - all 6 seeds improved substantially (none decreased), e.g.
+      starter/seed1: 27524 → 37258 (+35%). `_DEFAULT_HIRES_PER_DAY`
+      (`kagg.policy.strategy`)/`DEFAULT_PARAMS`/`params/policy.json` kept in sync. 362/362 full suite
+      (4 pre-existing tests updated for the new default, no new tests - this task changes a value,
+      not a mechanism), compileall clean, boundary check green.
 - [ ] T8.8 — Re-sweep land (`land_purchase_threshold_money` and T8.3's gates) now that labor works
       — the Phase 7 value was fit to a 1-unit farm and is likely stale.
 - [x] T8.9 — Pulled forward into T8.1 above (found to be tightly coupled to it, not a separable

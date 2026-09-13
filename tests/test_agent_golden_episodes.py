@@ -237,6 +237,17 @@ test_at_least_one_animal_reaches_production_in_a_representative_episode, now exe
 accepted economics). All 6 golden seeds improved (none decreased) - e.g. starter/seed1: 26386 ->
 27524.
 
+Re-recorded a thirteenth time for T8.7 (Stage B's payoff) - hires_per_day raised 0 -> 1.
+T7.4's original hires_per_day=0 finding (every nonzero value lost 0.03-0.17) was invalid, not
+merely stale: it ran against real bugs T8.4 (inventory pinning) and T8.6 (parallel planting) fixed -
+a hired hand could silently strand wheat/an animal in an inventory decide() never looked at again,
+and build_task_list proposed at most one new-investment task per turn regardless of hand count. The
+re-run sweep (`tools/run_hiring_sweep.py`) flipped completely: every nonzero hires_per_day tried won
+96-100% direct self-play against the checked-in baseline, held-out-gated at 50/50 (Wilson
+[0.929, 1.0]) for the accepted value 1 - the most conservative value among several tied at the
+measured ceiling. All 6 golden seeds improved substantially (none decreased) - e.g. starter/seed1:
+27524 -> 37258, roughly +35%.
+
 "random" is deliberately excluded from the exact-match table: verified
 empirically that kaggle_environments' own random_agent seeds its RNG with
 `random.Random()` (no seed) fresh on every call, so even the *same*
@@ -269,12 +280,12 @@ AGENT_MAIN_PATH = os.path.join(
 # was tried first and found invalid - see kagg.policy.decide's
 # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED comment for the full story).
 _GOLDEN = {
-    ("starter", 1): (27524.0, 3466.0),
-    ("starter", 2): (27652.0, 3577.0),
-    ("starter", 3): (27911.0, 3749.0),
-    ("pass", 1): (27509.0, 3000.0),
-    ("pass", 2): (27915.0, 3000.0),
-    ("pass", 3): (27619.0, 3000.0),
+    ("starter", 1): (37258.0, 5227.0),
+    ("starter", 2): (36673.0, 3623.0),
+    ("starter", 3): (35642.0, 3612.0),
+    ("pass", 1): (37411.0, 3000.0),
+    ("pass", 2): (37655.0, 3000.0),
+    ("pass", 3): (36655.0, 3000.0),
 }
 
 

@@ -1,29 +1,36 @@
-"""T7.4's Stage 1 sweep runner: the hiring-count question (SPEC-tuning.md's
-"First sweep priority"), plus land_purchase_threshold_money, swept jointly
-per SPEC-policy.md's hiring-interaction note.
+"""T8.7's re-run of the hiring-count sweep (tasks/plan.md, /root/.claude/
+plans/partitioned-puzzling-blossom.md) - the payoff of Stage B (T8.4-T8.6).
+
+T7.4's original sweep (Phase 7) found every hires_per_day > 0 lost
+consistently (0.03-0.17 win rate), and that result was accepted as the
+shipped default. Phase 8's own planning found that result invalid, not
+just stale: it ran against code where (a) decide() modeled only
+inventories[0], so a hired hand could silently pick up the wheat/animal
+into an inventory decide() never looked at again, starving any animal on
+the farm; and (b) build_task_list proposed at most one new-investment
+task per turn regardless of hand count, so extra hands had nothing to
+plant. T8.4 (inventory pinning) and T8.6 (parallel planting) fix both
+causes - this script is the real test of whether hiring pays off once
+they're gone.
+
+**State the prediction up front, per this project's own established
+discipline (T8.3q's own script), so a miss is genuinely informative**:
+with both causes fixed, hiring is predicted to win clearly. If
+hires_per_day=0 still wins, the bottleneck is not labor - the next
+investigation is market depth (are we crashing the price of our own
+higher-throughput output?), not more units.
+
+Direct self-play ONLY (harness.run_block against the checked-in
+baseline) - never evaluate_against_panel. T7.4's own real, documented
+methodological pitfall: blending win rate across starter/random (both
+near a 100% ceiling against any reasonable policy) with self-play
+dilutes the signal so heavily that a candidate which actually *loses* to
+the baseline head-to-head can still look like an improvement on the
+blended aggregate.
 
 Not part of the committed test suite - a real tuning run, re-executed
-(with an updated grid centered on whatever the current checked-in
-params/policy.json is) whenever a future tuning round wants to revisit
-this parameter pair, not on every test run.
-
-Real methodological finding from this script's first real run, load-
-bearing for how `evaluate` is written below - not an abstract caveat:
-`tuning.evaluate_against_panel()` blends win rate across every opponent
-in the panel into one aggregate number. That's fine when every panel
-member is comparably matched, but starter/random are both near a 100%
-win-rate ceiling against basically any reasonable policy - blending
-them with self-play against the previous-best snapshot dilutes the
-self-play signal so heavily that a first real run of this script
-accepted a candidate (more hires_per_day) whose blended score looked
-better (0.78 vs baseline's 0.667) while it *actually lost* to the
-baseline in direct self-play (0.34 win rate, verified by re-running
-that one comparison in isolation). The real, load-bearing signal is
-self-play against the previous-best snapshot alone - `evaluate` below
-uses exactly that (plain harness.run_block, not evaluate_against_panel)
-for the search and the accept/reject decision. evaluate_against_panel
-is still used once at the end, purely as a non-regression sanity report
-against starter/random - never as part of the decision.
+whenever a future round wants to revisit hires_per_day/max_plants_per_
+unit/seed_buffer_per_unit, not on every test pass.
 """
 
 import os
@@ -34,16 +41,14 @@ import harness  # noqa: E402
 import tuning  # noqa: E402
 from kagg.policy.params import DEFAULT_PARAMS  # noqa: E402
 
-WORKDIR = sys.argv[1] if len(sys.argv) > 1 else "/tmp/kagg_tuning_workdir"
+WORKDIR = sys.argv[1] if len(sys.argv) > 1 else "/tmp/kagg_hiring_sweep_workdir"
 os.makedirs(WORKDIR, exist_ok=True)
 
-TUNING_SEEDS = list(range(100, 150))  # the full 50-seed working block
-HOLDOUT_SEEDS = list(range(900, 950))  # the full 50-seed held-out block
+blocks = harness.load_seed_blocks()
+WORKING_SEEDS = list(blocks.tuning_seeds)
+HOLDOUT_SEEDS = list(blocks.holdout_seeds)
 
-PARAM_GRID = {
-    ("hires_per_day",): [(0,), (1,), (2,), (3,), (4,)],
-    ("land_purchase_threshold_money",): [(1000,), (2000,), (3000,), (5000,), (7000,), (10000,)],
-}
+HIRES_CANDIDATES = [0, 1, 2, 3, 4, 6, 8]
 
 _baseline_agent_cache: dict[str, str] = {}
 
@@ -55,46 +60,77 @@ def _baseline_agent() -> str:
 
 
 def evaluate(params: dict) -> harness.BlockResult:
-    """Pure self-play against the checked-in baseline - see this
+    """Pure self-play against the checked-in T8.6 baseline - see this
     module's own docstring for why this, not evaluate_against_panel, is
-    the search/decision signal.
-
-    A real second bug was found and fixed here, not anticipated in
-    advance: an earlier revision special-cased "comparing the baseline
-    against itself" with a hand-typed `wilson_interval_a=(0.0, 0.0)`
-    instead of the real `harness.wilson_interval(0, n)` (which is *not*
-    degenerate - e.g. (0, 0.071) at n=50, per the Wilson score formula's
-    own continuity correction). That artificially zero-width interval
-    made literally any other candidate's interval look "clearly better"
-    (never overlapping a single-point interval at exactly 0), which
-    silently let coordinate_ascent walk hires_per_day up to a spuriously
-    "best" value of 3 on a real run of this script - correctly caught
-    and rejected at the held-out gate below (hires_per_day > 0
-    consistently loses in direct self-play, confirmed separately), so no
-    bad change reached params/policy.json, but the sweep itself wasted
-    real compute chasing a false signal. No special case is needed at
-    all: letting the baseline play itself for real (it always ties
-    exactly, so win_rate_a is 0.0 either way) computes the correct,
-    non-degenerate interval automatically.
-    """
+    the search/decision signal."""
     agent_path = tuning.write_candidate_agent(params, WORKDIR)
-    result = harness.run_block(agent_path, _baseline_agent(), TUNING_SEEDS, jobs=None)
+    result = harness.run_block(agent_path, _baseline_agent(), WORKING_SEEDS, jobs=None)
     print(
-        f"  eval hires={params['hires_per_day']} land={params['land_purchase_threshold_money']}: "
+        f"  eval hires_per_day={params['hires_per_day']} max_plants_per_unit={params['max_plants_per_unit']} "
+        f"seed_buffer_per_unit={params['seed_buffer_per_unit']}: "
         f"win_rate={result.win_rate_a:.3f} interval={result.wilson_interval_a}"
     )
     return result
 
 
-print("=== Stage 1 sweep: hires_per_day, then land_purchase_threshold_money (self-play vs baseline) ===")
-best_params = tuning.coordinate_ascent(PARAM_GRID, evaluate, dict(DEFAULT_PARAMS))
-print("best params found:", {k: best_params[k] for k in ("hires_per_day", "land_purchase_threshold_money")})
+print("=== Stage 1: hires_per_day alone (direct self-play vs the T8.6 baseline) ===")
+print(
+    "Prediction: with T8.4 (inventory pinning) + T8.6 (parallel planting) landed, hiring should "
+    "win clearly. If hires_per_day=0 still wins, the bottleneck is not labor - see this script's "
+    "own docstring."
+)
+best_hires_result = None
+best_hires_value = 0
+baseline_result = evaluate(DEFAULT_PARAMS)
+best_hires_result = baseline_result
+for hires in HIRES_CANDIDATES:
+    if hires == 0:
+        continue  # already have the baseline-vs-itself point above
+    trial_params = dict(DEFAULT_PARAMS, hires_per_day=hires)
+    trial_result = evaluate(trial_params)
+    if tuning.accept_candidate(trial_result, best_hires_result):
+        best_hires_result = trial_result
+        best_hires_value = hires
 
-if best_params == dict(DEFAULT_PARAMS):
-    print("No change from baseline - coordinate_ascent found nothing better beyond noise.")
+print(f"\nStage 1 winner: hires_per_day={best_hires_value} (win_rate={best_hires_result.win_rate_a:.3f})")
+
+if best_hires_value == 0:
+    print(
+        "\nhires_per_day=0 still wins - the single most informative negative result this plan "
+        "names. Not proceeding to Stage 2 (nothing to jointly tune around a hires_per_day that "
+        "doesn't pay off)."
+    )
     sys.exit(0)
 
-print("\n=== Held-out gate (self-play vs baseline) ===")
+print("\n=== Stage 2: joint sweep {hires_per_day, max_plants_per_unit, seed_buffer_per_unit} ===")
+print("(SPEC-tuning.md: suspected-correlated parameters swept jointly, not independently)")
+
+# A curated, small set of joint candidates around Stage 1's winner - not
+# a full factorial grid (too expensive), but enough to check whether the
+# other two knobs want to move together with hires_per_day.
+PARAM_GRID = {
+    ("hires_per_day", "max_plants_per_unit", "seed_buffer_per_unit"): [
+        (best_hires_value, 100, 1),  # Stage 1's winner, unmodified geometry defaults
+        (best_hires_value, 100, 2),
+        (best_hires_value, 100, 3),
+        (best_hires_value, 8, 1),  # a tight watering-capacity cap, forcing plant_budget to bind
+        (best_hires_value, 16, 1),
+        (max(0, best_hires_value - 1), 100, 1),  # neighbors of Stage 1's winner, in case Stage 1's
+        (min(8, best_hires_value + 1), 100, 1),  # single-param result doesn't hold jointly
+    ],
+}
+
+initial = dict(DEFAULT_PARAMS, hires_per_day=best_hires_value)
+best_params = tuning.coordinate_ascent(PARAM_GRID, evaluate, initial)
+print(
+    "\nStage 2 winner:",
+    {k: best_params[k] for k in ("hires_per_day", "max_plants_per_unit", "seed_buffer_per_unit")},
+)
+
+if best_params == dict(initial):
+    print("No joint change beat Stage 1's own winner beyond noise.")
+
+print("\n=== Held-out gate (self-play vs the T8.6 baseline) ===")
 candidate_agent = tuning.write_candidate_agent(best_params, WORKDIR)
 holdout_block = harness.run_block(candidate_agent, _baseline_agent(), HOLDOUT_SEEDS, jobs=None)
 n = holdout_block.n
@@ -107,7 +143,7 @@ print(f"held-out self-play: win_rate={holdout_block.win_rate_a:.3f} interval={ho
 print(f"accept_candidate (vs even-odds at n={n}): {accepted}")
 
 if accepted:
-    print("\n=== Non-regression sanity check vs starter/random (reporting only) ===")
+    print("\n=== Non-regression sanity check vs starter/random (reporting only, not the decision) ===")
     panel_result = tuning.evaluate_against_panel(
         candidate_agent, ["starter", "random"], HOLDOUT_SEEDS[:10], WORKDIR, jobs=None
     )

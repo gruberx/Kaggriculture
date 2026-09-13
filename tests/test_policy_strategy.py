@@ -412,12 +412,15 @@ def test_should_buy_land_still_respects_money_threshold_with_occupancy_given():
     ) is False
 
 
-def test_hires_per_day_reads_the_named_parameter_with_a_conservative_default():
-    # Deliberately conservative default (SPEC-policy.md: the "hire many
-    # hands" intuition was contradicted by a forum measurement) - never
-    # raise this default based on intuition, only on an arena result.
-    assert hires_per_day({}) == 0
+def test_hires_per_day_reads_the_named_parameter_with_a_measured_default():
+    # T8.7: raised 0 -> 1 on a real, held-out-gated self-play result
+    # (50/50 at the accepted value, every nonzero value tried won
+    # 96-100%) once T8.4/T8.6 fixed the real bugs that invalidated T7.4's
+    # original hires_per_day=0 finding - never raised on intuition alone,
+    # only on an arena result, in either direction.
+    assert hires_per_day({}) == 1
     assert hires_per_day({"hires_per_day": 5}) == 5
+    assert hires_per_day({"hires_per_day": 0}) == 0
 
 
 def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():

@@ -442,9 +442,39 @@ def rank_portfolio(
 # each. Same sweep also directly confirmed the forum's own contradicted-
 # intuition finding for hires_per_day (SPEC-policy.md's hiring note):
 # every hires_per_day > 0 value tried lost consistently (0.03-0.17 win
-# rate) to hires_per_day=0 in direct self-play, so it stays at 0.
+# rate) to hires_per_day=0 in direct self-play - that result was
+# overturned by T8.7 below, not merely superseded by a later sweep.
 _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 10000
-_DEFAULT_HIRES_PER_DAY = 0
+
+# T8.7 (tasks/plan.md, Stage B's payoff): T7.4's own hires_per_day=0
+# result was invalid, not just stale - Phase 8's planning found it ran
+# against code where a hired hand could silently pick up the wheat/
+# animal into an inventory decide() never looked at again (starving any
+# animal on the farm), and build_task_list proposed at most one new-
+# investment task per turn regardless of hand count (extra hands had
+# nothing to plant). T8.4 (inventory pinning) and T8.6 (parallel
+# planting) fixed both causes; this task re-ran the sweep to find out
+# whether hiring pays off once they're gone.
+#
+# **The prediction stated up front (so a miss would have been
+# informative) came true, decisively**: direct self-play against the
+# checked-in T8.6 baseline flipped completely - every nonzero
+# hires_per_day tried won 96-100% (hires_per_day=1: 50/50, Wilson
+# [0.929, 1.0]; 2/3/4/8 also hit the same 100% ceiling; 6 alone dipped to
+# 96%, likely noise around an already-saturated result). A joint sweep of
+# the suspected-correlated group {hires_per_day, max_plants_per_unit,
+# seed_buffer_per_unit} (SPEC-tuning.md: correlated parameters should be
+# swept jointly, not independently) found no further improvement beyond
+# hires_per_day alone - the geometry-derived defaults for the other two
+# (100, 1) already don't bind at this hiring level. **Accepted**:
+# hires_per_day 0 -> 1 - a real, held-out-gated win (50/50, Wilson
+# [0.929, 1.0]), not merely a working-block artifact. Deliberately the
+# most conservative value among several that tied at the measured
+# ceiling (1/2/3/4/8 all won 100%) - the least labor cost for the same
+# measured benefit, consistent with this project's own preference for
+# minimal accepted changes. See `tools/run_hiring_sweep.py` for the full
+# sweep and `tasks/todo.md`'s T8.7 entry for the complete story.
+_DEFAULT_HIRES_PER_DAY = 1
 
 # T8.3 (tasks/plan.md): the user's own observed defect - a quadrant
 # sometimes bought while plenty of free tiles remained, because the old
@@ -538,10 +568,14 @@ def hires_per_day(params: dict | None = None) -> int:
 
     Explicitly a tunable parameter, not a fixed policy (SPEC-policy.md):
     the "labor is nearly free, hire many hands" intuition derived from
-    `hire_cost`'s Fibonacci curve was directly contradicted by a forum
-    measurement ("adding workers has zero marginal value" - SPEC.md's
-    economic analysis). The default is deliberately 0 until the arena
-    actually measures the real answer.
+    `hire_cost`'s Fibonacci curve was directly contradicted by an early
+    forum measurement ("adding workers has zero marginal value" - SPEC.md's
+    economic analysis) and by this project's own first sweep (T7.4). T8.7
+    found that result invalid, not just stale - it ran against real bugs
+    that starved a hired hand's own throughput - and re-ran the sweep once
+    those were fixed (T8.4/T8.6): every nonzero value tried won decisively
+    in direct self-play. See `_DEFAULT_HIRES_PER_DAY`'s own comment for
+    the full measured story.
     """
     params = params or {}
     return params.get("hires_per_day", _DEFAULT_HIRES_PER_DAY)

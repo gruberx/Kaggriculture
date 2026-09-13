@@ -1,6 +1,6 @@
 {
   "land_purchase_threshold_money": 10000,
-  "hires_per_day": 0,
+  "hires_per_day": 1,
   "sell_margin": 0,
   "drip_sell_max_per_turn": 5,
   "wheat_restock_threshold": 5,

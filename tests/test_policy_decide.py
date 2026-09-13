@@ -70,12 +70,15 @@ def test_decide_buys_a_seed_for_the_top_ranked_crop_when_none_on_hand():
 
 
 def test_decide_does_not_rebuy_a_seed_already_on_hand():
+    # T8.6/T8.7: the seed target scales with labor_units (1 +
+    # hires_per_day(params)) * seed_buffer_per_unit - with the default
+    # hires_per_day=1, that's 2, not 1, so this test stocks the full
+    # target rather than assuming the pre-T8.6 flat "1 is always enough."
     obs = _obs()
-    # Give it a seed for whatever the top-ranked crop is, at I0 pricing.
     from kagg.policy.strategy import rank_portfolio
 
     top_crop = next(name for name in rank_portfolio(obs["market"]["inventory"]) if name in CROPS)
-    obs["private"]["seeds"][top_crop] = 1
+    obs["private"]["seeds"][top_crop] = 2
     action = decide(obs, DEFAULT_PARAMS)
     assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
 

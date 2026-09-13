@@ -43,7 +43,7 @@ def test_load_params_never_mutates_default_params(tmp_path):
     partial_file = tmp_path / "policy.json"
     partial_file.write_text(json.dumps({"hires_per_day": 99}))
     load_params(str(partial_file))
-    assert DEFAULT_PARAMS["hires_per_day"] == 0  # module-level default untouched
+    assert DEFAULT_PARAMS["hires_per_day"] == 1  # module-level default untouched (T8.7)
 
 
 def test_the_real_shipped_file_loads_without_error():

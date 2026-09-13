@@ -32,7 +32,13 @@ _DEFAULT_PARAMS_PATH = os.path.join(
 # differently than a fully-populated one.
 DEFAULT_PARAMS = {
     "land_purchase_threshold_money": 10000,  # raised from 5000 by T7.4's first accepted sweep result
-    "hires_per_day": 0,
+    # T8.7: raised 0 -> 1 - T7.4's own hires_per_day=0 result was invalid
+    # (ran against real bugs, fixed by T8.4/T8.6), and the re-run sweep
+    # flipped completely: every nonzero value tried won 96-100% direct
+    # self-play against the checked-in baseline, held-out-gated at 50/50
+    # for the accepted value 1 - see kagg.policy.strategy.
+    # _DEFAULT_HIRES_PER_DAY's own comment for the full measured story.
+    "hires_per_day": 1,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,
