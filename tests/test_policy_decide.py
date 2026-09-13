@@ -860,6 +860,34 @@ def test_decide_passes_days_remaining_through_to_rank_portfolio_only_when_a_flag
     assert captured and all(args[4] == 10 and args[5] is False and args[6] is True for args in captured)
 
 
+def test_decide_defaults_animal_fertilizer_income_aware_to_false_when_unset():
+    # T8.3q: built and not yet measured - see decide.py's own
+    # _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE comment.
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS.get("animal_fertilizer_income_aware") is False
+    assert decide_module._DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE is False
+
+
+def test_decide_passes_animal_fertilizer_income_aware_through_to_rank_portfolio(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    captured = []
+    original = decide_module.rank_portfolio
+
+    def spy(*args, **kwargs):
+        captured.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "rank_portfolio", spy)
+    decide(_obs(), dict(DEFAULT_PARAMS, animal_fertilizer_income_aware=True))
+    assert captured and all(args[7] is True for args in captured)
+
+    captured.clear()
+    decide(_obs(), dict(DEFAULT_PARAMS, animal_fertilizer_income_aware=False))
+    assert captured and all(args[7] is False for args in captured)
+
+
 def test_decide_stops_planting_a_late_season_ongoing_crop_when_season_aware():
     # A direct behavioral check, not just a glue check: with only 11 days
     # left, STRAWBERRY (which needs 17 tile-days for its full schedule)

@@ -402,6 +402,43 @@ _DEFAULT_RANK_SEASON_AWARE = False
 # turns for crops that can actually still pay off.
 _DEFAULT_ANIMAL_NET_OF_COST = True
 
+# T8.3q (the user's own follow-up, prompted by asking for the full animal
+# production cycle explained day by day): kaggriculture.py's
+# _daily_refresh_animals sets fertilizer_available=True for every placed
+# animal that survives the day, regardless of feeding or care - a real,
+# always-on revenue stream T8.3m's net-of-cost model never counted.
+# Recomputed directly (not estimated): fertilizer income alone
+# (~$2,819 over a 30-day COW) dwarfs the animal's own product revenue
+# (~$1,645 MILK) - see kagg.policy.strategy.animal_revenue_per_tile_day's
+# own docstring for the mechanism. Gates whether the ranking adds this
+# term - independently of `animal_net_of_cost` itself (T8.3b's own lesson
+# about confounded measurements), even though it only has an effect when
+# `animal_net_of_cost` is also on.
+#
+# **Measured - a real, total, decisive rejection, not a marginal one**:
+# 0/50 on the working block and 0/50 on the held-out block against the
+# checked-in baseline (Wilson [0.0, 0.071] both times) - every single
+# game a loss. Traced (seed 100, action-count diagnostic, not guessed):
+# the fertilizer-aware agent pursued and placed a COW (BUILD_PASTURE,
+# PICKUP, FEED x27, PLACE) that the unaware baseline never touched at
+# all, but the resulting episode shows **zero `COLLECT_FERTILIZER`
+# actions the entire game** - the promised ~$2,819 fertilizer revenue the
+# ranking priced in never actually gets collected, because
+# `COLLECT_FERTILIZER` sits at `tasks.PRIORITY_MAINTENANCE`, the lowest
+# tier, and the same single farmer already spends its turns on the animal
+# pipeline (BUILD/PICKUP/FEED/PLACE) on top of its existing crop work
+# (WATER dropped from 273 to 212 in the same episode, HARVEST/PLANT
+# roughly unchanged) - there is nothing left over for MAINTENANCE-tier
+# work. The exact same class of defect as T8.3e's FERTILIZE rejection: a
+# locally "more correct" economic model choosing a labor-expensive option
+# whose promised payoff the single farmer's real turn budget can't
+# actually capture. **Shipped default: False** (rejected, not unmeasured)
+# - the mechanism stays in the codebase, tested and available, for a
+# future re-check once T8.4-T8.7 (Stage B, hired hands) give real spare
+# MAINTENANCE-tier capacity - exactly the T8.3p/Stage B argument this
+# task's own plan predicted a loss here would make.
+_DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE = False
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -596,19 +633,22 @@ def _top_investment_choice(
     `crop_tile_counts` (T8.3f), `unlocked_shops` (T8.3i), and
     `net_of_seed_cost` (T8.3k) are all passed straight through to
     `rank_portfolio` - see its own docstring. `rank_season_aware`/
-    `animal_net_of_cost` (T8.3m) are read from `params` here (not taken
-    as their own arguments, unlike the others) since they also govern
-    `days_remaining` itself, computed once from the same
-    `season_length_days` this function already needs for the maturity
-    checks below.
+    `animal_net_of_cost`/`animal_fertilizer_income_aware` (T8.3m/T8.3q) are
+    read from `params` here (not taken as their own arguments, unlike the
+    others) since the first two also govern `days_remaining` itself,
+    computed once from the same `season_length_days` this function
+    already needs for the maturity checks below.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
     animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
+    animal_fertilizer_income_aware = params.get(
+        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
+    )
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
     for name in rank_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
-        days_remaining, rank_season_aware, animal_net_of_cost,
+        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
     ):
         if name in CROPS:
             if _crop_has_time_to_mature(name, current_day, season_length_days):
@@ -677,10 +717,13 @@ def _top_crop_choice(
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
     animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
+    animal_fertilizer_income_aware = params.get(
+        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
+    )
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
     for name in rank_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
-        days_remaining, rank_season_aware, animal_net_of_cost,
+        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
     ):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             return name

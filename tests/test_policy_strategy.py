@@ -418,3 +418,78 @@ def test_hires_per_day_reads_the_named_parameter_with_a_conservative_default():
     # raise this default based on intuition, only on an arena result.
     assert hires_per_day({}) == 0
     assert hires_per_day({"hires_per_day": 5}) == 5
+
+
+def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():
+    # T8.3q: kaggriculture.py's _daily_refresh_animals sets
+    # fertilizer_available=True every surviving day regardless of
+    # feeding/care - one FERTILIZER unit per day of days_remaining,
+    # walked the same self-impact way as the animal's own product.
+    from kagg.gamelib.market import price as _price
+
+    days_remaining = 6
+    schedule_units = 3  # GOOSE: first_yield_day=4, interval=1 -> days 4,5,6 within horizon=6
+    expected = (
+        sum(_price("EGG", MARKET_I0 + k) for k in range(schedule_units))
+        + sum(_price("FERTILIZER", MARKET_I0 + k) for k in range(days_remaining))
+        - 300
+        - 2 * days_remaining
+    ) / days_remaining
+    got = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=days_remaining, net_of_cost=True, feed_price=2,
+        fertilizer_income_aware=True, fertilizer_sell_at_inventory=MARKET_I0,
+    )
+    assert got == pytest.approx(expected)
+
+
+def test_animal_revenue_per_tile_day_fertilizer_income_raises_the_score():
+    without = animal_revenue_per_tile_day("COW", MARKET_I0, days_remaining=30, net_of_cost=True, feed_price=25)
+    with_fert = animal_revenue_per_tile_day(
+        "COW", MARKET_I0, days_remaining=30, net_of_cost=True, feed_price=25,
+        fertilizer_income_aware=True, fertilizer_sell_at_inventory=MARKET_I0,
+    )
+    assert with_fert > without
+    # Recomputed directly (T8.3q's investigation): fertilizer income alone
+    # should roughly triple+ COW's net rate at a full 30-day horizon.
+    assert with_fert > without * 2
+
+
+def test_animal_revenue_per_tile_day_fertilizer_income_defaults_to_false():
+    steady_state = animal_revenue_per_tile_day("COW", MARKET_I0)
+    assert animal_revenue_per_tile_day("COW", MARKET_I0, fertilizer_income_aware=True) == pytest.approx(
+        steady_state
+    )  # no-op without net_of_cost/days_remaining - nothing to bound the walk
+
+
+def test_animal_revenue_per_tile_day_fertilizer_income_is_a_noop_without_net_of_cost():
+    # fertilizer_income_aware alone (net_of_cost=False) has no horizon to
+    # walk against - graceful fallback to the steady-state branch, not an
+    # error, matching net_of_cost's own "no days_remaining" fallback.
+    without = animal_revenue_per_tile_day("COW", MARKET_I0, days_remaining=30)
+    with_fert_only = animal_revenue_per_tile_day(
+        "COW", MARKET_I0, days_remaining=30, fertilizer_income_aware=True
+    )
+    assert with_fert_only == pytest.approx(without)
+
+
+def test_rank_portfolio_animal_fertilizer_income_aware_lifts_animals_back_above_most_crops():
+    # T8.3q: with net-of-cost alone (T8.3m's shipped default), COW ranks
+    # below STRAWBERRY/CARROT/WHEAT/TOMATO at base price - fertilizer
+    # income should lift it back above all of them (MELON still edges it
+    # out narrowly - see this module's own worked numbers - so this
+    # checks the real, decisive shift rather than an unrealistic "always
+    # #1" claim).
+    market = {}
+    net_of_cost_only = rank_portfolio(market, days_remaining=30, animal_net_of_cost=True)
+    with_fertilizer = rank_portfolio(
+        market, days_remaining=30, animal_net_of_cost=True, animal_fertilizer_income_aware=True
+    )
+    assert net_of_cost_only.index("COW") > net_of_cost_only.index("STRAWBERRY")
+    assert with_fertilizer.index("COW") < with_fertilizer.index("STRAWBERRY")
+
+
+def test_rank_portfolio_animal_fertilizer_income_aware_defaults_to_false():
+    market = {}
+    assert rank_portfolio(market, days_remaining=30, animal_net_of_cost=True) == rank_portfolio(
+        market, days_remaining=30, animal_net_of_cost=True, animal_fertilizer_income_aware=False
+    )

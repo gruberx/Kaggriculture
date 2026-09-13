@@ -193,6 +193,20 @@ DEFAULT_PARAMS = {
     # working, 49/50 held-out) - bundling them would have hidden that
     # split result entirely. Accepted as the default.
     "animal_net_of_cost": True,
+    # T8.3q: every placed animal sets fertilizer_available=True at the
+    # end of every day it survives, regardless of feeding/care - a real,
+    # always-on revenue stream (~$2,819 over 30 days for a COW,
+    # recomputed directly) T8.3m's net-of-cost model never counted.
+    # **Measured and rejected**: 0/50 on both self-play blocks against
+    # the checked-in baseline - traced to the exact promised revenue
+    # never being collected (COLLECT_FERTILIZER sits at the lowest task
+    # priority and the single farmer has no spare turns for it once
+    # pursuing an animal on top of its crop work) - the same class of
+    # defect as use_fertilizer's own rejection. See
+    # kagg.policy.decide._DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE for the
+    # full traced story. Kept available for a re-check once Stage B
+    # (hired hands) gives real spare labor.
+    "animal_fertilizer_income_aware": False,
 }
 
 

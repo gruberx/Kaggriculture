@@ -19,5 +19,6 @@
   "wheat_buy_only_when_feed_needed": true,
   "liquidate_wheat_reserve": true,
   "rank_season_aware": false,
-  "animal_net_of_cost": true
+  "animal_net_of_cost": true,
+  "animal_fertilizer_income_aware": false
 }

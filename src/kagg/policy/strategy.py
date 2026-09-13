@@ -179,6 +179,8 @@ def animal_revenue_per_tile_day(
     days_remaining: int | None = None,
     net_of_cost: bool = False,
     feed_price: float = 0,
+    fertilizer_income_aware: bool = False,
+    fertilizer_sell_at_inventory: int = MARKET_I0,
 ) -> float:
     """Steady-state revenue per tile-day for a continuously fed animal -
     or, when `net_of_cost` is set with a real `days_remaining`, net
@@ -227,12 +229,37 @@ def animal_revenue_per_tile_day(
     that doesn't pass them; `net_of_cost=True` with no `days_remaining`
     given also falls back to the steady-state branch (no horizon to net
     against), a graceful default rather than an error.
+
+    `fertilizer_income_aware`/`fertilizer_sell_at_inventory` (T8.3q, the
+    user's own observation, confirmed directly in `kaggriculture.py`'s
+    `_daily_refresh_animals`): every animal that hasn't escaped sets
+    `fertilizer_available = True` at the end of *every single day* it
+    survives, **regardless of whether it was fed or cared for that day** -
+    a real, always-on revenue stream this function never modeled before
+    T8.3q. One FERTILIZER unit per day of `days_remaining` (the same
+    horizon the cost/feed terms already use - the animal is assumed
+    placed today and alive through season end, same as the rest of this
+    function's net-of-cost branch), walked the same per-unit lockstep way
+    `crop_revenue_per_tile_day` already does, added to `total_revenue`
+    before the cost subtraction. Only applies inside the `net_of_cost`
+    branch (an unbounded steady-state rate has no horizon to bound the
+    fertilizer walk either) - gated independently of `net_of_cost` itself
+    so the two mechanisms can be measured in isolation (T8.3b's own
+    lesson): `fertilizer_income_aware=True` with `net_of_cost=False` or
+    `days_remaining=None` is a no-op, falling through to the unbounded
+    steady-state branch exactly as before. Defaults to `False`
+    (`fertilizer_sell_at_inventory` unused when off), reproducing T8.3m's
+    exact prior behavior for every caller that doesn't pass it.
     """
     a = ANIMALS[animal]
     if net_of_cost and days_remaining is not None:
         schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining)
         start = sell_at_inventory - expected_consumption
         total_revenue = sum(price(a["product"], start + k) for k in range(len(schedule)))
+        if fertilizer_income_aware:
+            total_revenue += sum(
+                price("FERTILIZER", fertilizer_sell_at_inventory + k) for k in range(days_remaining)
+            )
         total_revenue -= a["cost"]
         total_revenue -= feed_price * days_remaining
         return total_revenue / max(1, days_remaining)
@@ -248,6 +275,7 @@ def rank_portfolio(
     days_remaining: int | None = None,
     rank_season_aware: bool = False,
     animal_net_of_cost: bool = False,
+    animal_fertilizer_income_aware: bool = False,
 ) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day at `market_inventory`'s *current* level for each one's own
@@ -297,6 +325,19 @@ def rank_portfolio(
     unused throughout this package, `price()` recomputes it from
     inventory instead) only when `animal_net_of_cost` is set, since it's
     otherwise unused.
+
+    `animal_fertilizer_income_aware` (T8.3q) is passed straight through to
+    `animal_revenue_per_tile_day`, along with the market's current
+    FERTILIZER inventory (derived here for the same reason `feed_price`
+    is - no separate caller plumbing needed) - see its own docstring for
+    the mechanism. Independently gated from `animal_net_of_cost` per
+    T8.3b's own lesson, even though it only has an effect when
+    `animal_net_of_cost` is also on (no horizon to bound the walk
+    otherwise) - this keeps the flag's own meaning ("does the ranking
+    know about fertilizer income") separable from whether cost-netting
+    happens to be on, for a clean three-way self-play comparison
+    (fertilizer alone is a no-op without net-of-cost; net-of-cost alone;
+    both together).
     """
     crop_tile_counts = crop_tile_counts or {}
     unlocked_shops = unlocked_shops or []
@@ -312,11 +353,13 @@ def rank_portfolio(
         )
     animal_days_remaining = days_remaining if animal_net_of_cost else None
     feed_price = price("WHEAT", market_inventory.get("WHEAT", MARKET_I0)) if animal_net_of_cost else 0
+    fertilizer_sell_at_inventory = market_inventory.get("FERTILIZER", MARKET_I0)
     for animal, a in ANIMALS.items():
         inv = market_inventory.get(a["product"], MARKET_I0)
         expected_consumption = expected_daily_consumption(a["product"], unlocked_shops) * a["interval"]
         scores[animal] = animal_revenue_per_tile_day(
-            animal, inv, expected_consumption, animal_days_remaining, animal_net_of_cost, feed_price
+            animal, inv, expected_consumption, animal_days_remaining, animal_net_of_cost, feed_price,
+            animal_fertilizer_income_aware, fertilizer_sell_at_inventory,
         )
     return sorted(scores, key=scores.__getitem__, reverse=True)
 
