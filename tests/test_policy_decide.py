@@ -19,6 +19,7 @@ from kagg.policy.decide import (
     _combined_crop_tile_counts,
     _crop_has_time_to_mature,
     _crop_tile_counts,
+    _top_crop_basket,
     _top_investment_choice,
     decide,
 )
@@ -67,6 +68,61 @@ def test_decide_buys_a_seed_for_the_top_ranked_crop_when_none_on_hand():
     assert len(buy_seed_orders) == 1
     crop = buy_seed_orders[0][1]
     assert crop in CROPS
+
+
+def test_portfolio_basket_size_defaults_to_one():
+    assert DEFAULT_PARAMS.get("portfolio_basket_size", 1) == 1
+
+
+def test_decide_buys_seed_for_every_basket_crop_when_portfolio_basket_size_is_above_one():
+    # T8.19: a crashed MELON price (same fixture other tests in this file
+    # use) leaves a clear, deterministic crop-only ranking to round-robin
+    # across instead of always the single top pick.
+    obs = _obs()
+    market_inventory = {"MELON": MARKET_I0 + 100_000}
+    obs["market"]["inventory"] = market_inventory
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False, portfolio_basket_size=2)
+    basket = _top_crop_basket(market_inventory, current_day=0, params=params, basket_size=2)
+    assert len(basket) == 2
+    action = decide(obs, params)
+    buy_seed_crops = {o[1] for o in action["market"] if o[0] == "BUY_SEED"}
+    assert buy_seed_crops == set(basket)
+
+
+def test_decide_plants_a_basket_of_crops_round_robin_when_portfolio_basket_size_is_above_one(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original = decide_module.build_task_list
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "build_task_list", spy)
+
+    obs = _obs()
+    market_inventory = {"MELON": MARKET_I0 + 100_000}
+    obs["market"]["inventory"] = market_inventory
+    # dynamic_hiring off (pin the static hires_per_day=2) so labor_units
+    # is exactly 3, deterministic regardless of T8.16(d)'s backlog-scaled
+    # default - this test is about the basket round-robin, not hiring.
+    params = dict(
+        DEFAULT_PARAMS, animal_net_of_cost=False, dynamic_hiring=False,
+        hires_per_day=2, portfolio_basket_size=2,
+    )
+    basket = _top_crop_basket(market_inventory, current_day=0, params=params, basket_size=2)
+    assert len(basket) == 2
+    obs["private"]["seeds"] = {c: 5 for c in basket}
+    decide(obs, params)
+    plant_crop = captured.get("plant_crop")
+    assert isinstance(plant_crop, list)
+    # labor_units=3 (1 farmer + hires_per_day=2), free_tiles=100,
+    # max_plants_per_unit=100 (plant_budget large), max_plant_tasks_per_
+    # turn=8 default -> total_cap=3, round-robined basket[0], basket[1],
+    # basket[0].
+    assert plant_crop == [basket[0], basket[1], basket[0]]
+    assert captured.get("plant_qty") == 3
 
 
 def test_decide_does_not_rebuy_a_seed_already_on_hand():
@@ -516,6 +572,37 @@ def test_crop_has_time_to_mature_only_needs_one_ongoing_production_to_fit():
     # though later scheduled productions (30, 31...) would not.
     assert _crop_has_time_to_mature("TOMATO", current_day=21, season_length_days=30) is True
     assert _crop_has_time_to_mature("TOMATO", current_day=22, season_length_days=30) is False
+
+
+# --- T8.19: portfolio_basket_size / _top_crop_basket ----------------------
+
+
+def test_top_crop_basket_size_one_matches_the_full_ranking_s_top_maturing_crop():
+    from kagg.policy.strategy import rank_portfolio
+
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    basket = _top_crop_basket(market_inventory, current_day=0, params=DEFAULT_PARAMS, basket_size=1)
+    ranked_crops = [n for n in rank_portfolio(market_inventory) if n in CROPS]
+    assert basket == ranked_crops[:1]
+
+
+def test_top_crop_basket_returns_up_to_basket_size_distinct_maturing_crops_in_rank_order():
+    from kagg.policy.strategy import rank_portfolio
+
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    basket = _top_crop_basket(market_inventory, current_day=0, params=DEFAULT_PARAMS, basket_size=3)
+    ranked_crops = [n for n in rank_portfolio(market_inventory) if n in CROPS]
+    assert basket == ranked_crops[:3]
+    assert len(basket) == len(set(basket)) == 3
+
+
+def test_top_crop_basket_skips_crops_that_cannot_mature_in_time():
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    # Day 25: MELON (T3.1's own top pick at base price) can no longer
+    # mature this season - mirrors test_top_investment_choice_skips_
+    # crops_that_cannot_mature_in_time below.
+    basket = _top_crop_basket(market_inventory, current_day=25, params=DEFAULT_PARAMS, basket_size=2)
+    assert "MELON" not in basket
 
 
 def test_top_investment_choice_skips_crops_that_cannot_mature_in_time():

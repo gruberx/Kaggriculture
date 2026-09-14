@@ -1018,10 +1018,18 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       GREEN in `test_policy_tasks.py`; full suite green. **Not yet self-play measured** -
       `tools/measure_t818.py` written (hires_per_day=2 base, since the effect only shows once a real
       second hand exists), not yet run this session.
-- [~] T8.19 — a small crop basket (`portfolio_basket_size`) instead of always the single top-ranked
-      product. `tasks.py`'s plant branch now accepts a per-tile crop-name list (round-robin), not
-      just a single string (RED+GREEN, tested). `decide.py`'s wiring (`_top_crop_basket`, seed-buying
-      loop across the basket) is in progress, not yet complete this session.
+- [x] T8.19 — a small crop basket (`portfolio_basket_size`) instead of always the single top-ranked
+      product. Fully wired (`_top_crop_basket`, round-robin `plant_crop`/`plant_qty`, a cumulative-
+      spendable multi-crop seed-buying loop in `decide.py`; `tasks.py`'s plant branch accepts a
+      per-tile crop-name list). RED+GREEN throughout, full suite green. **Measured and rejected**
+      (`tools/measure_t819.py`, against the new T8.16(d) baseline): `portfolio_basket_size=2` ->
+      10%/8% (working/holdout), `=3` -> 6%/6% - both decisive, consistent losses. The predicted
+      tradeoff resolved against the hedge: spreading tiles into a worse-ranked crop (STRAWBERRY's
+      $21.6/tile-day vs MELON's $109) pays a real per-tile cost every episode, while the double-
+      price-crash scenario it hedges against apparently doesn't materialize often enough in these
+      seeds/this opponent to pay for it - and `crop_self_impact_aware` (already on by default)
+      already provides some real reactive protection, so a proactive basket may just be redundant
+      with that. Stays off by default (`portfolio_basket_size=1`), kept available (tested).
 - [ ] T8.20 — lift the single-animal-type cap once labor genuinely supports a second. Investigated
       and confirmed against `kaggriculture.py` (no engine-level cap - see the plan file), not yet
       built. Sequenced after T8.17 per the plan's own dependency reasoning.

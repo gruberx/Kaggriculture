@@ -715,6 +715,12 @@ _DEFAULT_INVESTMENT_ANCHOR = "UNIT_TOWARD_SHED"
 # three) - UNIT + True beat SHED + True 0.90/0.98 head-to-head.
 _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL = True
 
+# T8.19: 1 (the single top-ranked crop) reproduces the exact prior
+# behavior for every caller that doesn't set it - see _top_crop_basket's
+# own docstring for the mechanism and decide()'s own portfolio_basket_
+# size comment for how a value >1 changes new PLANT commitments.
+_DEFAULT_PORTFOLIO_BASKET_SIZE = 1
+
 
 def _crop_has_time_to_mature(crop: str, current_day: int, season_length_days: int) -> bool:
     """True if planting `crop` *today* still leaves enough season left to
@@ -893,6 +899,52 @@ def _top_investment_choice(
     return None
 
 
+def _top_crop_basket(
+    market_inventory: dict,
+    current_day: int,
+    params: dict,
+    crop_tile_counts: dict | None = None,
+    unlocked_shops: list | None = None,
+    net_of_seed_cost: bool = False,
+    basket_size: int = 1,
+) -> list[str]:
+    """Generalizes `_top_crop_choice` (T8.19, the user's own observation:
+    committing every new tile to a single top-ranked product invites a
+    double price-crash risk - our own volume plus a plausible independent
+    opponent bet on the same good) to return up to `basket_size` distinct
+    maturing crop names, in rank order, instead of just the first.
+
+    At `basket_size=1` (the default) this returns exactly what
+    `_top_crop_choice` would, as `[name]` or `[]` - see that function's
+    own docstring (now a thin wrapper around this one) for the ranking/
+    margin details both share. `decide()` uses the result to round-robin
+    new PLANT commitments across the basket instead of concentrating them
+    in the single top pick - see its own `portfolio_basket_size` comment.
+    """
+    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
+    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
+    animal_fertilizer_income_aware = params.get(
+        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
+    )
+    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
+    animal_consumption_horizon_aware = params.get(
+        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
+    )
+    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
+    basket: list[str] = []
+    for name in rank_portfolio(
+        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
+        animal_care_aware, animal_consumption_horizon_aware,
+    ):
+        if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
+            basket.append(name)
+            if len(basket) >= basket_size:
+                break
+    return basket
+
+
 def _top_crop_choice(
     market_inventory: dict,
     current_day: int,
@@ -947,26 +999,16 @@ def _top_crop_choice(
     does, for the same reason (this ranks the full portfolio too, even
     though only the crop entries are ever returned) - see that
     function's own comment.
+
+    T8.19: now a thin wrapper around `_top_crop_basket(..., basket_size=
+    1)` - a pure refactor, bit-identical output, see that function's own
+    docstring for the shared mechanism.
     """
-    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
-    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
-    animal_fertilizer_income_aware = params.get(
-        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
+    basket = _top_crop_basket(
+        market_inventory, current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        basket_size=1,
     )
-    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
-    animal_consumption_horizon_aware = params.get(
-        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
-    )
-    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
-    for name in rank_portfolio(
-        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
-        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
-        animal_care_aware, animal_consumption_horizon_aware,
-    ):
-        if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
-            return name
-    return None
+    return basket[0] if basket else None
 
 
 def decide(obs: dict, params: dict) -> dict:
@@ -1003,19 +1045,31 @@ def decide(obs: dict, params: dict) -> dict:
 
     # T8.9, opt-in (see _top_crop_choice's own docstring for why this
     # isn't the default despite fixing a real bug): when enabled, the
-    # crop to plant/buy-seed-for is the best crop the market supports
-    # *regardless* of whether an animal separately ranks first overall.
-    # Only re-ranks crops alone when the overall top choice is itself an
-    # animal; when it's already a crop, `desired_crop` IS the best crop,
-    # so there's nothing to recompute either way.
-    if desired_crop is not None:
-        fallback_crop = desired_crop
-    elif params.get("plant_while_pursuing_animal", _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL):
-        fallback_crop = _top_crop_choice(
-            obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost
+    # crop(s) to plant/buy-seed-for are the best crop(s) the market
+    # supports *regardless* of whether an animal separately ranks first
+    # overall. Only re-ranks crops alone when the overall top choice is
+    # itself an animal; when it's already a crop, `desired_crop` IS the
+    # best crop, so `_top_crop_basket`'s own ranking (crops-only, same
+    # score_portfolio call) would find the identical top entry anyway -
+    # this just calls it once rather than recomputing.
+    #
+    # T8.19, the user's own observation: committing every new tile to
+    # the single top pick invites a double price-crash risk (our own
+    # volume plus a plausible independent opponent bet on the same good)
+    # - portfolio_basket_size (default 1, bit-identical) asks for more
+    # than one qualifying crop here, round-robined below instead of all
+    # going to fallback_crops[0].
+    portfolio_basket_size = params.get("portfolio_basket_size", _DEFAULT_PORTFOLIO_BASKET_SIZE)
+    if desired_crop is not None or params.get(
+        "plant_while_pursuing_animal", _DEFAULT_PLANT_WHILE_PURSUING_ANIMAL
+    ):
+        fallback_crops = _top_crop_basket(
+            obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops,
+            net_of_seed_cost, basket_size=portfolio_basket_size,
         )
     else:
-        fallback_crop = None
+        fallback_crops = []
+    fallback_crop = fallback_crops[0] if fallback_crops else None
     have_seed = fallback_crop is not None and seeds.get(fallback_crop, 0) > 0
     plant_crop = fallback_crop if have_seed else None
     # Index 0 is always the farmer's own inventory (_farmer_inventory's
@@ -1127,6 +1181,30 @@ def decide(obs: dict, params: dict) -> dict:
         if plant_crop is not None
         else 0
     )
+    # T8.19: portfolio_basket_size > 1 with more than one crop actually
+    # qualifying (len(fallback_crops)<=1 leaves the single-crop
+    # computation above completely untouched, bit-identical) - round-
+    # robins the same total_cap of tiles across the basket in rank
+    # order, each crop capped by seeds *currently* held (this turn's
+    # BUY_SEED order below arrives next turn, same "only what's on hand
+    # plants today" rule the single-crop path already follows). Still
+    # gated on stuck_animal (plant_crop/plant_qty above already reflect
+    # that - a nulled plant_crop with len(fallback_crops)>1 falls through
+    # to the `if basket_seq` check below and resets to None/0 the same
+    # way).
+    if len(fallback_crops) > 1 and stuck_animal is None:
+        total_cap = min(free_tiles, labor_units, plant_budget, max_plant_tasks_per_turn)
+        remaining = {c: seeds.get(c, 0) for c in fallback_crops}
+        basket_seq: list[str] = []
+        i = 0
+        while len(basket_seq) < total_cap and any(v > 0 for v in remaining.values()):
+            c = fallback_crops[i % len(fallback_crops)]
+            if remaining[c] > 0:
+                basket_seq.append(c)
+                remaining[c] -= 1
+            i += 1
+        plant_crop = basket_seq if basket_seq else None
+        plant_qty = len(basket_seq)
 
     use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
     care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
@@ -1259,19 +1337,32 @@ def decide(obs: dict, params: dict) -> dict:
     # shipped defaults) seed_target=1, so `needed` is nonzero under
     # exactly the same condition the old `not have_seed` gate checked
     # (seeds_held==0) and buys exactly 1 - bit-identical.
-    if stuck_animal is None and fallback_crop is not None and has_empty_tile:
-        seed_cost = CROPS[fallback_crop]["seed"]
-        seeds_held = seeds.get(fallback_crop, 0)
+    if stuck_animal is None and fallback_crops and has_empty_tile:
+        # T8.19: loops over the full basket instead of a single crop -
+        # at portfolio_basket_size=1 (fallback_crops has at most one
+        # entry) this is exactly one iteration, bit-identical to the
+        # pre-T8.19 single-crop computation. `spendable` is tracked
+        # cumulatively across the loop (not recomputed from me["money"]
+        # each time) since the real interpreter settles same-turn orders
+        # in queue order, each against the money earlier orders in the
+        # same turn already spent (T8.5's own comment above) - computing
+        # every basket crop's affordability against the same untouched
+        # `me["money"]` would let a later BUY_SEED order overcommit.
         seed_buffer_per_unit = params.get("seed_buffer_per_unit", _DEFAULT_SEED_BUFFER_PER_UNIT)
         seed_target = labor_units * seed_buffer_per_unit
-        needed = max(0, seed_target - seeds_held)
-        if needed > 0:
-            seed_cash_reserve = params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
-            spendable = max(0, me["money"] - seed_cash_reserve)  # max(0, ...) before // - avoids
-            affordable = int(spendable // seed_cost)  # negative-floor-division surprises
+        seed_cash_reserve = params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
+        spendable = max(0, me["money"] - seed_cash_reserve)  # max(0, ...) before // - avoids
+        for crop in fallback_crops:  # negative-floor-division surprises
+            seed_cost = CROPS[crop]["seed"]
+            seeds_held = seeds.get(crop, 0)
+            needed = max(0, seed_target - seeds_held)
+            if needed <= 0:
+                continue
+            affordable = int(spendable // seed_cost)
             buy_qty = min(needed, affordable)
             if buy_qty > 0:
-                tail.append(["BUY_SEED", fallback_crop, buy_qty])
+                tail.append(["BUY_SEED", crop, buy_qty])
+                spendable -= buy_qty * seed_cost
     if (
         acquisition_animal is not None
         and not have_animal_anywhere

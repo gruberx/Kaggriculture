@@ -322,6 +322,26 @@ DEFAULT_PARAMS = {
     # kagg.policy.decide._DEFAULT_PARALLEL_ANIMAL_ACQUISITION for the
     # mechanism and kagg.policy.tasks._new_investment_tasks for the fix.
     "parallel_animal_acquisition": False,
+    # T8.19, the user's own observation: committing every new tile to a
+    # single top-ranked product invites a double price-crash risk (our
+    # own volume plus a plausible independent opponent bet on the same
+    # good). 1 (the single top pick) reproduces the exact prior behavior
+    # for every caller that doesn't set it - see kagg.policy.decide's
+    # _top_crop_basket for the mechanism.
+    # **Measured and rejected**: 2 -> 10%/8% (working/holdout), 3 ->
+    # 6%/6% - both decisive, consistent losses, not noise
+    # (tools/measure_t819.py). The predicted tradeoff resolved against
+    # the hedge: spreading tiles into a worse-ranked crop (e.g.
+    # STRAWBERRY's $21.6/tile-day vs MELON's $109 - SPEC.md's own
+    # profitability table) pays a real, large per-tile cost every
+    # episode, while the double-price-crash scenario it hedges against
+    # apparently doesn't materialize often enough in these seeds/this
+    # opponent to pay for it. crop_self_impact_aware (already on by
+    # default) already provides *some* real protection reactively - see
+    # T8.19's own plan section - so a proactive basket may simply be
+    # redundant with that, not a distinct win. Kept available (tested,
+    # off by default) in case a future opponent/seed mix changes this.
+    "portfolio_basket_size": 1,
     # T8.6 (tasks/plan.md): parallel planting + batched seed purchase -
     # lets plant_qty scale with the real labor force (1 + hires_per_day)
     # instead of the fixed "one PLANT task per turn" baked in since
