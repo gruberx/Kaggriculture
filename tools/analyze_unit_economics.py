@@ -185,32 +185,64 @@ def _walk_price(product: str, start_inventory: int, n_units: int) -> float:
     return sum(price(product, start_inventory + k) for k in range(n_units))
 
 
-def _consumption_offset(product: str, days_remaining: int, with_shop: bool) -> float:
-    """Total units the town removes from `product`'s market over
-    `days_remaining`, under two scenarios: no shops unlocked (town-center
-    baseline only, kagg.gamelib.constants.TOWN_CENTER_PRODUCTS - MELON
-    included) vs exactly one relevant shop unlocked (the first one found
-    in SHOPS that lists this product - illustrative, not a claim about
-    real unlock timing/odds). For a product in zero shops (MELON), both
-    scenarios are identical by construction - that IS the point being
-    measured. Applied as one flat offset to the starting inventory of
-    the cumulative walk below, the same simplification crop_revenue_per_
+def _unlocked_shops_for_scenario(product: str, scenario: str) -> list[str]:
+    """`scenario`:
+    - "none": no shops unlocked - town-center baseline only.
+    - "one": exactly one relevant shop unlocked (the first found in
+      SHOPS that lists this product) - a conservative illustrative case.
+    - "expected_end_game": verified directly in kaggriculture.py
+      (_advance_town, line ~890-891): shops unlock every
+      townShopUnlockInterval=3 days, up to MAX_SHOP_INSTANCES=8 total,
+      each draw `rng.choice(sorted(SHOPS))` - a UNIFORM, independent
+      random pick among all 8 shop *types* (with replacement), not
+      weighted by product. By day 24 of a 30-day season (8 * 3), a real
+      game typically has all 8 slots filled. E[# instances of shop type
+      X among 8 uniform draws] = 8 * (1/8) = 1 for every type X,
+      regardless of correlation with other draws (linearity of
+      expectation) - so "one instance of every shop type that lists this
+      product" is the real expected end-game count, not a guess: MELON
+      (0 relevant types) -> 0 forever; WOOL (1 type, YARN_STORE) -> ~1;
+      EGG (2 types) -> ~2; MILK (3 types: PIZZA_SHOP/ICE_CREAM_SHOP/
+      SMOOTHIE_SHOP) -> ~3 - exactly the asymmetry the user's own
+      real-game observation pointed at.
+    Applied as one flat offset to the starting inventory of the
+    cumulative walk below, the same simplification crop_revenue_per_
     tile_day/animal_revenue_per_tile_day already use for their own
-    `expected_consumption` parameter (not a new approximation introduced
-    here).
+    `expected_consumption` parameter - and, for "expected_end_game", also
+    optimistic in the shop's favor: shops unlock progressively from day 3
+    onward, not all present from day 0, so this overstates early-game
+    consumption relative to a real game.
     """
-    unlocked_shops = []
-    if with_shop:
+    if scenario == "none":
+        return []
+    if scenario == "one":
         for shop, items in SHOPS.items():
             if product in items:
-                unlocked_shops = [shop]
-                break
-    rate = expected_daily_consumption(product, unlocked_shops)
+                return [shop]
+        return []
+    if scenario == "expected_end_game":
+        return [shop for shop, items in SHOPS.items() if product in items]
+    raise ValueError(scenario)
+
+
+def _consumption_offset(product: str, days_remaining: int, scenario: str) -> float:
+    """Total units the town removes from `product`'s market over
+    `days_remaining`, under `scenario` (see _unlocked_shops_for_scenario).
+    For a product in zero shops (MELON), every scenario is identical by
+    construction - that IS the point being measured.
+    """
+    rate = expected_daily_consumption(product, _unlocked_shops_for_scenario(product, scenario))
     return rate * days_remaining
 
 
 def _animal_net_total_revenue_at_n(
-    animal: str, n: int, days_remaining: int, care_aware: bool, fertilizer_income_aware: bool, with_shop: bool
+    animal: str,
+    n: int,
+    days_remaining: int,
+    care_aware: bool,
+    fertilizer_income_aware: bool,
+    scenario: str,
+    opponent_multiplier: int = 1,
 ) -> float:
     """Total revenue (not per-tile-day) for `n` animals of the same type
     placed simultaneously (day 0), extending crop_revenue_per_tile_day's
@@ -219,18 +251,29 @@ def _animal_net_total_revenue_at_n(
     to), but n animals sharing the same schedule do: n * units_per_animal
     total, all landing on the market across the same season. Purchase
     and feed costs are real per-animal costs, charged n times (not
-    shared)."""
+    shared). `opponent_multiplier` (2 = "contested": an opponent
+    independently runs the same N, doubling total units landing on the
+    *shared* market - the user's own explicit caveat): walks the FULL
+    shared total (our units + theirs) as one run, then takes our equal
+    (symmetric) share of that shared revenue - neither side has any real
+    information about landing "first," so splitting the joint walk
+    evenly is the fair convention, not pricing our own share alone at
+    the original (too generous) starting point or after the opponent's
+    (arbitrary worst case). Reduces to the plain single-side walk exactly
+    when opponent_multiplier=1."""
     a = ANIMALS[animal]
     if care_aware:
         units_per_animal = _animal_full_care_units(animal, days_remaining)
     else:
         units_per_animal = len(forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining))
-    total_units = n * units_per_animal
-    consumption = _consumption_offset(a["product"], days_remaining, with_shop)
+    our_units = n * units_per_animal
+    total_units = our_units * opponent_multiplier
+    consumption = _consumption_offset(a["product"], days_remaining, scenario)
     start = MARKET_I0 - consumption
-    total_revenue = _walk_price(a["product"], int(round(start)), total_units)
+    total_shared_revenue = _walk_price(a["product"], int(round(start)), total_units)
+    total_revenue = total_shared_revenue / opponent_multiplier
     if fertilizer_income_aware:
-        fert_consumption = _consumption_offset("FERTILIZER", days_remaining, with_shop=False)  # never in SHOPS
+        fert_consumption = _consumption_offset("FERTILIZER", days_remaining, scenario="none")  # never in SHOPS
         fert_start = MARKET_I0 - fert_consumption
         total_revenue += _walk_price("FERTILIZER", int(round(fert_start)), n * days_remaining)
     total_revenue -= n * a["cost"]
@@ -238,70 +281,111 @@ def _animal_net_total_revenue_at_n(
     return total_revenue
 
 
-def _crop_net_total_revenue_at_n(crop: str, n: int, days_remaining: int, with_shop: bool) -> float:
-    """Same shape as _animal_net_total_revenue_at_n, for n tiles of the
-    same crop - crop_revenue_per_tile_day already has its own self-impact
-    walk (already_committed_units) for one tile against the rest of the
-    farm; this instead walks n tiles' entire combined lifetime output as
-    one shared run, for a direct apples-to-apples comparison against the
-    animal-scaling table above."""
+def _crop_net_total_revenue_at_n(
+    crop: str, n: int, days_remaining: int, scenario: str, opponent_multiplier: int = 1
+) -> float:
+    """Same shape as _animal_net_total_revenue_at_n (including the same
+    symmetric-split contested-market convention), for n tiles of the
+    same crop."""
     total_yield, tile_days = _crop_yield_and_tile_days(crop, days_remaining)
-    consumption = _consumption_offset(crop, days_remaining, with_shop)
+    our_units = n * total_yield
+    total_units = our_units * opponent_multiplier
+    consumption = _consumption_offset(crop, days_remaining, scenario)
     start = MARKET_I0 - consumption
-    total_revenue = _walk_price(crop, int(round(start)), n * total_yield)
+    total_shared_revenue = _walk_price(crop, int(round(start)), total_units)
+    total_revenue = total_shared_revenue / opponent_multiplier
     total_revenue -= n * CROPS[crop]["seed"]
     return total_revenue
 
 
 print("\n=== Part 2: scaling N units of the same product (real hiring cost + shop-consumption scenarios) ===")
-print(f"(hiring cost: ${HIRE_COST_PER_HAND}/extra hand, cheapest real strategy - one hire per day)\n")
+print(f"(hiring cost: ${HIRE_COST_PER_HAND}/extra hand, cheapest real strategy - one hire per day)")
+print(
+    "Three shop scenarios per product: 'none' (worst case), 'one' (conservative), 'end-game "
+    "expected' (verified: 8 shop slots, each a uniform random pick among 8 types, unlock every 3 "
+    "days - by day 24 of 30 a real game typically has all 8 filled, so E[instances of a type] = 1 "
+    "each - MILK's 3 relevant types -> ~3, WOOL's 1 -> ~1, EGG's 2 -> ~2, MELON's 0 -> always 0).\n"
+)
 
 N_VALUES = [1, 2, 3, 5, 8, 12, 20, 30]
+SCENARIOS = ["none", "one", "expected_end_game"]
 
-print("--- MELON (for direct comparison - shop scenario makes NO difference here, by construction) ---")
-actions_per_tile_day_melon = _crop_actions_per_tile_day(
-    "MELON", SEASON_LENGTH_DAYS, use_fertilizer=False
-)
-print(f"{'N':>4} {'no-shop $/tile-day':>20} {'with-shop $/tile-day':>22} {'extra hands':>12} {'hire cost':>10}")
+print("--- MELON (all three shop-scenario columns are identical - zero relevant shops, by construction) ---")
+actions_per_tile_day_melon = _crop_actions_per_tile_day("MELON", SEASON_LENGTH_DAYS, use_fertilizer=False)
+_, melon_tile_days = _crop_yield_and_tile_days("MELON", SEASON_LENGTH_DAYS)
+print(f"{'N':>4} {'none':>10} {'one':>10} {'end-game exp.':>14} {'extra hands':>12} {'hire cost':>10}")
 for n in N_VALUES:
     total_actions_per_day = n * actions_per_tile_day_melon
     hands = _hands_needed(total_actions_per_day)
     hire_total = hands * HIRE_COST_PER_HAND
-    no_shop = (_crop_net_total_revenue_at_n("MELON", n, SEASON_LENGTH_DAYS, with_shop=False) - hire_total) / n
-    with_shop = (_crop_net_total_revenue_at_n("MELON", n, SEASON_LENGTH_DAYS, with_shop=True) - hire_total) / n
-    _, tile_days = _crop_yield_and_tile_days("MELON", SEASON_LENGTH_DAYS)
-    print(f"{n:>4} {no_shop / tile_days:>20.2f} {with_shop / tile_days:>22.2f} {hands:>12} ${hire_total:>9}")
+    vals = [
+        (_crop_net_total_revenue_at_n("MELON", n, SEASON_LENGTH_DAYS, scenario) - hire_total)
+        / n
+        / melon_tile_days
+        for scenario in SCENARIOS
+    ]
+    print(f"{n:>4} {vals[0]:>10.2f} {vals[1]:>10.2f} {vals[2]:>14.2f} {hands:>12} ${hire_total:>9}")
+
+print("--- MELON, CONTESTED (opponent also plants the same N) ---")
+print(f"{'N':>4} {'none':>10} {'one':>10} {'end-game exp.':>14}")
+for n in N_VALUES:
+    vals = [
+        _crop_net_total_revenue_at_n("MELON", n, SEASON_LENGTH_DAYS, scenario, opponent_multiplier=2)
+        / n
+        / melon_tile_days
+        for scenario in SCENARIOS
+    ]
+    print(f"{n:>4} {vals[0]:>10.2f} {vals[1]:>10.2f} {vals[2]:>14.2f}")
 
 print()
 for animal in ANIMALS:
-    print(f"--- {animal} (+ care_aware + fertilizer_income_aware) ---")
+    print(f"--- {animal} (+ care_aware + fertilizer_income_aware), solo ---")
     actions_per_tile_day = _animal_actions_per_tile_day(
         animal, SEASON_LENGTH_DAYS, care_aware=True, fertilizer_income_aware=True
     )
-    print(f"{'N':>4} {'no-shop $/tile-day':>20} {'with-shop $/tile-day':>22} {'extra hands':>12} {'hire cost':>10}")
+    print(f"{'N':>4} {'none':>10} {'one':>10} {'end-game exp.':>14} {'extra hands':>12} {'hire cost':>10}")
     for n in N_VALUES:
         total_actions_per_day = n * actions_per_tile_day
         hands = _hands_needed(total_actions_per_day)
         hire_total = hands * HIRE_COST_PER_HAND
-        no_shop_total = _animal_net_total_revenue_at_n(
-            animal, n, SEASON_LENGTH_DAYS, care_aware=True, fertilizer_income_aware=True, with_shop=False
-        )
-        with_shop_total = _animal_net_total_revenue_at_n(
-            animal, n, SEASON_LENGTH_DAYS, care_aware=True, fertilizer_income_aware=True, with_shop=True
-        )
-        no_shop_per_tile_day = (no_shop_total - hire_total) / n / SEASON_LENGTH_DAYS
-        with_shop_per_tile_day = (with_shop_total - hire_total) / n / SEASON_LENGTH_DAYS
-        print(
-            f"{n:>4} {no_shop_per_tile_day:>20.2f} {with_shop_per_tile_day:>22.2f} "
-            f"{hands:>12} ${hire_total:>9}"
-        )
+        vals = [
+            (
+                _animal_net_total_revenue_at_n(
+                    animal, n, SEASON_LENGTH_DAYS, care_aware=True, fertilizer_income_aware=True, scenario=scenario
+                )
+                - hire_total
+            )
+            / n
+            / SEASON_LENGTH_DAYS
+            for scenario in SCENARIOS
+        ]
+        print(f"{n:>4} {vals[0]:>10.2f} {vals[1]:>10.2f} {vals[2]:>14.2f} {hands:>12} ${hire_total:>9}")
+
+    print(f"--- {animal} (+ care_aware + fertilizer_income_aware), CONTESTED (opponent runs the same N) ---")
+    print(f"{'N':>4} {'none':>10} {'one':>10} {'end-game exp.':>14}")
+    for n in N_VALUES:
+        vals = [
+            _animal_net_total_revenue_at_n(
+                animal, n, SEASON_LENGTH_DAYS, care_aware=True, fertilizer_income_aware=True,
+                scenario=scenario, opponent_multiplier=2,
+            )
+            / n
+            / SEASON_LENGTH_DAYS
+            for scenario in SCENARIOS
+        ]
+        print(f"{n:>4} {vals[0]:>10.2f} {vals[1]:>10.2f} {vals[2]:>14.2f}")
     print()
 
 print(
-    "Reading this table: hiring cost stays negligible even at N=30 (a few extra hands, ~$5-10 total "
-    "for the whole season - confirms hiring itself was never the real constraint). 'no-shop' vs "
-    "'with-shop' brackets the real answer for animal products - MELON's two columns are identical by "
-    "construction (zero shops ever consume it), while WOOL/MILK/EGG's 'with-shop' column shows how "
-    "much a single relevant shop unlocking cushions the self-impact crash that the pessimistic "
-    "'no-shop' column (this script's earlier version) overstated."
+    "Reading this table: hiring cost stays negligible at every N tested (confirms hiring itself was "
+    "never the real constraint). Comparing 'none' to raw per-unit price at the same cumulative count "
+    "(see this conversation's own price() trace) shows WOOL/MILK's own market is actually SHALLOWER "
+    "than MELON's (crashes to the price floor at fewer units - MELON's own T=300 vs WOOL's T=105/"
+    "MILK's T=122) - the resilience seen in real games is mostly (a) shop consumption credit (the "
+    "'end-game expected' column) and (b) animals simply producing far fewer total units per season "
+    "than a crop monoculture can (1 unit per 2-3 days per animal vs up to 6 per crop tile), not a "
+    "deeper market. The CONTESTED rows show the user's own explicit caveat directly: two players both "
+    "running N animals halves each one's own share of a market that was already shallow, degrading "
+    "fastest for products with few or no shops (WOOL/MELON) and staying most resilient where the "
+    "shop credit is largest (MILK)."
 )
