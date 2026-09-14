@@ -573,16 +573,28 @@ _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 15000
 # sweep and `tasks/todo.md`'s T8.7 entry for the complete story.
 _DEFAULT_HIRES_PER_DAY = 1
 
-# T8.12: dynamic_hiring is off by default - hires_per_day() reproduces
-# the plain static value for every caller until a real held-out result
-# accepts turning it on, same protocol as every other T8.3/T8.10/T8.11-
-# series flag.
-_DEFAULT_DYNAMIC_HIRING = False
-# Same value as _DEFAULT_HIRES_PER_DAY - the floor exists specifically to
-# protect the season's limited starting capital (the user's own concern),
-# so it defaults to what the plain constant already provided before this
-# task, not a separately-tuned number.
-_DEFAULT_MIN_HIRES_PER_DAY = 1
+# T8.16(d) (superseding T8.12's own rejection - see the comment block
+# below): dynamic_hiring is ON by default - a real, decisive held-out
+# result (49W/1L/0T, 98%, Wilson interval [0.895, 0.996] entirely clear
+# of the 50% baseline) accepted it, once T8.16(a)'s counting fix landed
+# AND min_hires_per_day was actually swept instead of left at the old
+# flat constant's own value. See the acceptance comment below for the
+# full traced story.
+_DEFAULT_DYNAMIC_HIRING = True
+# T8.16(d): swept jointly with dynamic_hiring's other three knobs
+# (max_hires_per_day, turns_per_task_estimate, hire_buffer_fraction) via
+# tuning.coordinate_ascent - 2 (and 3, tied) decisively beat 1 on the
+# working block (0.94 vs 0.62) while every other knob's best value
+# stayed at its untouched starting point. This alone - not the buffer,
+# not a tighter turns-per-task estimate - is what turned T8.16(a)'s
+# "recovered but not decisive" (62%/48%) into a real win: the user's own
+# original question ("нужно определиться с необходимым количеством
+# рабочих в первый день") named exactly this knob. See
+# tools/measure_t816d.py for the full sweep and tools/trace_t816d.py for
+# the seed-900 confirmation (8 hands by end of episode vs the old
+# default's 1, hand PASS only 101/1438 turns - genuinely working, not
+# idling; final money 41365 vs 36172, +14.4% on this one seed).
+_DEFAULT_MIN_HIRES_PER_DAY = 2
 # The edge this stays comfortably clear of: fib-priced hire #8 costs $21
 # (the 8th hire that day), $54 cumulative for the day - negligible next
 # to a season's ~$30k of money (see hire_cost's own fib curve), so 8 is a
@@ -605,31 +617,39 @@ _DEFAULT_HIRE_CASH_RESERVE = 0
 # every caller that doesn't set it - see hires_per_day's own docstring.
 _DEFAULT_HIRE_BUFFER_FRACTION = 0.0
 
-# **dynamic_hiring measured and rejected**: 2/50 working, 4/50 holdout, 0
-# ties either block - matches this task's own stated prediction up front
-# (a win only if T8.11 had already freed labor; close to zero or a loss
-# otherwise, since T8.11 was itself rejected). Traced (seed 900): the
-# candidate hired up to 5 hands at once (1412 total hand-turns vs the
-# checked-in baseline's 690 with 1 hired hand) and PLANT count did rise
-# (45+25=70 vs 20+22=42, +67%), but `PASS` appeared 68 times (hands with
-# genuinely nothing to do that turn) and WATER rose even more sharply
-# than PLANT (609 vs 437 total) - final money fell (28439 vs 32958). Root
-# cause: `len(tasks)` counts every queued action including ones that
-# recur regardless of labor level (routine watering chief among them -
-# T8.11's own unresolved target), so the formula reads a large *standing*
-# backlog as a large *marginal* one and overshoots the labor level T8.6's
-# own geometry-derived caps (`max_plants_per_unit`, `seed_buffer_per_
-# unit`) were tuned against - reproducing the "adding workers past what
-# real bottlenecks justify has zero marginal value" finding T7.4 first
-# observed, now for a different, more specific reason than T7.4's
-# original (invalid, bug-driven) measurement. Not evidence dynamic hiring
-# is a bad idea in principle - only that it needs a real fix to the
-# *task-count* signal (e.g. counting only PLANT/HARVEST/acquisition
-# tasks, or a genuine idle-hand penalty) before it can safely scale
-# labor, and very plausibly needs T8.11's own still-open watering-
-# crowding problem solved first, exactly as predicted. **Shipped
-# default: `dynamic_hiring=False`** (rejected, not unmeasured) - kept
-# available (tested) for that future fix.
+# **dynamic_hiring: originally measured and rejected (T8.12), now
+# measured and ACCEPTED (T8.16)**. T8.12's own rejection: 2/50 working,
+# 4/50 holdout, 0 ties either block - traced (seed 900) to `len(tasks)`
+# counting every queued action including ones that recur regardless of
+# labor level (routine watering chief among them), so the formula read a
+# large *standing* backlog as a large *marginal* one and over-hired (up
+# to 5 hands, 68 idle PASS turns) without a matching gain (final money
+# fell, 28439 vs 32958).
+#
+# T8.16(a) fixed the traced root cause directly: `pending_task_count`
+# (decide.py) now excludes `_ROUTINE_RECURRING_OPS` (WATER/FEED) instead
+# of counting every queued task. Measured alone (dynamic_hiring=True,
+# every other knob at its untouched starting value): 62%/48%, a huge
+# recovery from T8.12's 4%/8% but not yet decisive on its own.
+#
+# T8.16(d) found the actual missing piece via a joint sweep (SPEC-
+# tuning.md: correlated parameters together, not independently) over
+# {min_hires_per_day, max_hires_per_day, turns_per_task_estimate,
+# hire_buffer_fraction}: raising `min_hires_per_day` from 1 to 2 (the
+# user's own original ask - a real day-1 floor sized for the season's
+# most promising goods, not just a reactive backlog formula) took the
+# working-block win rate from 0.62 to 0.94, while every other knob's
+# best value stayed at its untouched default (a spare-capacity buffer
+# actively hurt at every value tried - 0.02; a tighter turns-per-task
+# estimate helped some, 0.72, but far less than the floor change; a
+# looser one or a higher max_hires_per_day both hurt). The held-out gate
+# then cleared decisively: 49W/1L/0T (98%, Wilson [0.895, 0.996]) against
+# the old checked-in baseline. Traced (seed 900, tools/trace_t816d.py):
+# candidate ends the episode with 8 hands (vs the old default's 1), hand
+# PASS only 101 of 1438 hand action-turns (~7%, genuinely working, not
+# idling), final money 41365 vs 36172 (+14.4%). **Shipped default now:
+# `dynamic_hiring=True`, `min_hires_per_day=2`** - see
+# tools/measure_t816d.py for the full sweep and acceptance run.
 
 # T8.3 (tasks/plan.md): the user's own observed defect - a quadrant
 # sometimes bought while plenty of free tiles remained, because the old

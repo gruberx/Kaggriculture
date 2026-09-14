@@ -47,26 +47,32 @@ DEFAULT_PARAMS = {
     # how much work actually needs doing - hires_per_day() gains a
     # dynamic mode that scales the hiring target from the real task
     # backlog (turns_per_task_estimate-weighted) instead.
-    # **Measured and rejected (pre-T8.16(a) fix)**: 2/50 working, 4/50
-    # holdout - traced to `len(tasks)` counting recurring watering the
-    # same as genuine bottleneck work, over-hiring up to 5 hands at once
-    # with many left idle (PASS x68 in one traced episode) while cost
-    # outran the gain. T8.16(a) fixes the exact root cause (routine
-    # WATER/FEED now excluded from the count) - not yet re-measured with
-    # the fix in place. See kagg.policy.strategy's own dynamic_hiring
-    # rejection comment (near _DEFAULT_HIRE_CASH_RESERVE) for the full
-    # traced story. Kept off by default until a real held-out result
-    # accepts turning it on.
-    "dynamic_hiring": False,
-    "min_hires_per_day": 1,  # matches hires_per_day's own floor
+    # T8.12 originally measured and rejected this (2/50 working, 4/50
+    # holdout - `len(tasks)` counted recurring watering the same as
+    # genuine bottleneck work, over-hiring with many hands left idle).
+    # T8.16(a) fixed that exact root cause (routine WATER/FEED excluded
+    # from the count) - measured alone: 62%/48%, a real recovery but not
+    # yet decisive. **T8.16(d) found the missing piece and ACCEPTED this
+    # default**: a joint sweep (min_hires_per_day, max_hires_per_day,
+    # turns_per_task_estimate, hire_buffer_fraction) found min_hires_per_
+    # day=2 (not the flat constant's old value of 1) took the working
+    # block from 0.62 to 0.94, and the held-out gate cleared decisively
+    # (49W/1L/0T, 98%). See kagg.policy.strategy's own dynamic_hiring
+    # comment (near _DEFAULT_HIRE_CASH_RESERVE) for the full traced story
+    # and tools/measure_t816d.py/tools/trace_t816d.py for the sweep and
+    # seed-900 confirmation.
+    "dynamic_hiring": True,
+    "min_hires_per_day": 2,  # T8.16(d): swept and accepted - see above
     "max_hires_per_day": 8,  # fib hire #8 costs $21 - still negligible
-    "turns_per_task_estimate": 2.0,  # measured ~2.3 turns/task; conservative
+    "turns_per_task_estimate": 2.0,  # T8.16(d): swept, stayed at this value
     "hire_cash_reserve": 0,  # the user's own "protect starting capital" ask
     # T8.16, the user's own explicit ask ("небольшой запас рабочей силы
     # для компенсации всплеска потребности работы, на вскидку 5-10%") -
     # scales dynamic_hiring's raw target up before clipping to
-    # [min_hires_per_day, max_hires_per_day]. 0.0 (no buffer) reproduces
-    # the pre-T8.16 formula exactly. Not yet swept.
+    # [min_hires_per_day, max_hires_per_day]. T8.16(d)'s joint sweep found
+    # every nonzero value tried (0.1, 0.2) hurt badly (0.02 working win
+    # rate) - the day-1 floor alone was the real fix, not a buffer on top
+    # of it. 0.0 (no buffer) stays the accepted value.
     "hire_buffer_fraction": 0.0,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
@@ -309,6 +315,13 @@ DEFAULT_PARAMS = {
     # MAINTENANCE). Kept available (tested, off by default) for that
     # future revision.
     "water_bonus_window_aware": False,
+    # T8.18: PICKUP has no structural prerequisite (verified directly
+    # against kaggriculture.py) - only PLACE needs both an animal in hand
+    # and a matching built structure. Off by default reproduces the
+    # exact prior serial BUILD -> PICKUP -> PLACE pipeline; see
+    # kagg.policy.decide._DEFAULT_PARALLEL_ANIMAL_ACQUISITION for the
+    # mechanism and kagg.policy.tasks._new_investment_tasks for the fix.
+    "parallel_animal_acquisition": False,
     # T8.6 (tasks/plan.md): parallel planting + batched seed purchase -
     # lets plant_qty scale with the real labor force (1 + hires_per_day)
     # instead of the fixed "one PLANT task per turn" baked in since

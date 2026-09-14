@@ -106,7 +106,10 @@ def test_hire_is_never_crowded_out_by_sell_orders():
     # never truncated.
     obs = _obs()
     obs["private"]["shed"] = {p: 20 for p in PRODUCTS}  # all 9 sellable products
-    params = dict(DEFAULT_PARAMS, hires_per_day=4)
+    # dynamic_hiring explicitly off - this test is about order-list
+    # construction/truncation priority (T8.5), not T8.16(d)'s backlog-
+    # scaled hire count, so it pins the static value it actually asserts.
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=4)
     action = decide(obs, params)
     assert action["market"][:4] == [["HIRE"]] * 4
     assert sum(1 for o in action["market"] if o == ["HIRE"]) == 4

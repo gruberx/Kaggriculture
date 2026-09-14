@@ -429,13 +429,21 @@ def test_hires_per_day_reads_the_named_parameter_with_a_measured_default():
     assert hires_per_day({"hires_per_day": 0}) == 0
 
 
-def test_hires_per_day_dynamic_hiring_defaults_to_false():
-    # T8.12, the user's own observation: a constant can't reflect how
-    # much work actually needs doing. Even with a huge pending task
-    # backlog, dynamic_hiring off (the default) must return the plain
-    # static value - bit-identical to every pre-T8.12 caller.
-    assert hires_per_day({}, pending_task_count=1000) == 1
-    assert hires_per_day({"hires_per_day": 3}, pending_task_count=1000) == 3
+def test_hires_per_day_dynamic_hiring_defaults_to_true():
+    # T8.16(d): dynamic_hiring is now ON by default (superseding T8.12's
+    # own rejection - see _DEFAULT_DYNAMIC_HIRING's own comment for the
+    # full measured story) - a huge pending backlog now scales hiring up
+    # to max_hires_per_day (default 8), not the plain static value.
+    assert hires_per_day({}, pending_task_count=1000) == 8
+
+
+def test_hires_per_day_dynamic_hiring_off_falls_back_to_the_static_value():
+    # Explicit dynamic_hiring=False still reproduces the plain static
+    # value exactly, regardless of backlog - the graceful-fallback path
+    # every caller relied on before T8.16(d) flipped the default.
+    params = {"dynamic_hiring": False}
+    assert hires_per_day(params, pending_task_count=1000) == 1
+    assert hires_per_day({"dynamic_hiring": False, "hires_per_day": 3}, pending_task_count=1000) == 3
 
 
 def test_hires_per_day_dynamic_hiring_falls_back_to_static_without_task_info():
@@ -472,11 +480,22 @@ def test_hires_per_day_dynamic_hiring_never_drops_below_min_hires_per_day():
     # Zero pending tasks - the formula alone computes a negative target
     # (ceil(0/24) - 1 = -1). The user's own point: a floor protects
     # limited starting capital from being spent on labor with nothing yet
-    # to do - defaults to the same value hires_per_day itself already
-    # ships at (1), matching the user's "the constant is still needed at
-    # the start" observation.
-    params = {"dynamic_hiring": True}
+    # to do. min_hires_per_day passed explicitly (not relying on the
+    # ambient default, which T8.16(d) changed to 2) so this test keeps
+    # verifying the floor *mechanism*, independent of its currently
+    # accepted value - see the dedicated default-value test below.
+    params = {"dynamic_hiring": True, "min_hires_per_day": 1}
     assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 1
+
+
+def test_hires_per_day_dynamic_hiring_min_hires_per_day_defaults_to_two():
+    # T8.16(d): swept jointly with the other three dynamic_hiring knobs -
+    # 2 (and 3, tied) decisively beat the old flat constant's value of 1
+    # on the working block (0.94 vs 0.62); held-out gate cleared 49W/1L/0T
+    # (98%) against the pre-T8.16(d) checked-in baseline. See
+    # tools/measure_t816d.py for the full sweep.
+    params = {"dynamic_hiring": True}
+    assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 2
 
 
 def test_hires_per_day_dynamic_hiring_respects_a_custom_min_and_max():
@@ -486,7 +505,10 @@ def test_hires_per_day_dynamic_hiring_respects_a_custom_min_and_max():
 
 
 def test_hires_per_day_dynamic_hiring_respects_turns_per_task_estimate():
-    params = {"dynamic_hiring": True, "turns_per_task_estimate": 1.0}
+    # min_hires_per_day=1 passed explicitly so the formula's own result
+    # (1) isn't masked by T8.16(d)'s now-higher default floor (2) - this
+    # test is about turns_per_task_estimate's arithmetic, not the floor.
+    params = {"dynamic_hiring": True, "turns_per_task_estimate": 1.0, "min_hires_per_day": 1}
     # 48 tasks * 1.0 turn/task = 48 needed, 24 turns left -> ceil(48/24)-1 = 1
     assert hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24) == 1
 
@@ -497,10 +519,12 @@ def test_hires_per_day_dynamic_hiring_respects_a_cash_reserve():
     # hire_cash_reserve makes that concern an explicit, swept parameter
     # instead of leaving it implicit inside min_hires_per_day alone.
     # Below the reserve, hiring stays at the floor regardless of backlog
-    # size.
-    params = {"dynamic_hiring": True, "hire_cash_reserve": 1000}
+    # size. min_hires_per_day passed explicitly (not the ambient default,
+    # which T8.16(d) changed to 2) - this test is about the reserve gate,
+    # not the floor's currently accepted value.
+    params = {"dynamic_hiring": True, "hire_cash_reserve": 1000, "min_hires_per_day": 1}
     got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24, money=500)
-    assert got == 1  # min_hires_per_day's own default
+    assert got == 1  # the floor passed explicitly above
 
 
 def test_hires_per_day_dynamic_hiring_hires_normally_once_reserve_is_cleared():

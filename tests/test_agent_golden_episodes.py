@@ -279,22 +279,21 @@ AGENT_MAIN_PATH = os.path.join(
 )
 
 # (opponent, seed) -> (our exact final money, opponent's exact final money).
-# Recorded against the T8.3l policy (wheat_buy_only_when_feed_needed and
-# liquidate_wheat_reserve both accepted as the default), reproduced twice
-# before being hardcoded here. Not yet the rigorous >=60% win rate
-# SPEC.md's success criteria call for (that needs Phase 4's paired-seed
-# harness, not three ad-hoc seeds), but a real improvement worth locking
-# in - accepted on a 49/50-and-47/50 self-play result against the actual
-# previously-committed code (a params-flag-toggle self-play measurement
-# was tried first and found invalid - see kagg.policy.decide's
-# _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED comment for the full story).
+# Re-recorded for T8.16(d): dynamic_hiring flipped on by default
+# (min_hires_per_day=2) after a joint parameter sweep found it decisively
+# beats the prior static hires_per_day=1 default (49W/1L/0T, 98% on the
+# held-out self-play block - see kagg.policy.strategy's own
+# _DEFAULT_DYNAMIC_HIRING comment for the full traced story). A real,
+# large jump on every one of these six seeds (e.g. starter/seed1: 38093
+# -> 45650, +19.8%), consistent with the self-play result, not a
+# regression to investigate.
 _GOLDEN = {
-    ("starter", 1): (38093.0, 5229.0),
-    ("starter", 2): (38589.0, 3646.0),
-    ("starter", 3): (35089.0, 3588.0),
-    ("pass", 1): (39161.0, 3000.0),
-    ("pass", 2): (39031.0, 3000.0),
-    ("pass", 3): (35256.0, 3000.0),
+    ("starter", 1): (45650.0, 3825.0),
+    ("starter", 2): (44170.0, 3506.0),
+    ("starter", 3): (47072.0, 3613.0),
+    ("pass", 1): (43879.0, 3000.0),
+    ("pass", 2): (41937.0, 3000.0),
+    ("pass", 3): (46818.0, 3000.0),
 }
 
 

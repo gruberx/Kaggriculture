@@ -1,8 +1,8 @@
 {
   "land_purchase_threshold_money": 15000,
   "hires_per_day": 1,
-  "dynamic_hiring": false,
-  "min_hires_per_day": 1,
+  "dynamic_hiring": true,
+  "min_hires_per_day": 2,
   "max_hires_per_day": 8,
   "turns_per_task_estimate": 2.0,
   "hire_cash_reserve": 0,
@@ -31,6 +31,7 @@
   "animal_consumption_horizon_aware": false,
   "investment_commit_margin": 0.0,
   "water_bonus_window_aware": false,
+  "parallel_animal_acquisition": false,
   "max_plants_per_unit": 100,
   "max_plant_tasks_per_turn": 8,
   "seed_buffer_per_unit": 1,

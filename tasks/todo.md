@@ -984,16 +984,47 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       `dynamic_hiring`/`water_bonus_window_aware` both stay at their `False` defaults - T8.16(d)'s
       joint `coordinate_ascent` sweep over the four correlated parameters is the next, not-yet-run
       step this session's evidence points to before either can be fairly judged.
-- [ ] T8.16(d) — joint `coordinate_ascent` sweep over `{min_hires_per_day, max_hires_per_day,
+- [x] T8.16(d) — joint `coordinate_ascent` sweep over `{min_hires_per_day, max_hires_per_day,
       turns_per_task_estimate, hire_buffer_fraction}` (SPEC-tuning.md: correlated parameters swept
-      together), with `dynamic_hiring=True` and (optionally) `water_bonus_window_aware=True` - not
-      yet run this session. See the plan file for the full design.
+      together), `dynamic_hiring=True` throughout (`tools/measure_t816d.py`). **Decisive result -
+      ACCEPTED as the new shipped default**: raising `min_hires_per_day` from its old flat-constant
+      value (1) to 2 took the working-block win rate from T8.16(a)'s own 0.62 to 0.94, while every
+      other knob's best value stayed at its untouched starting point - a spare-capacity buffer
+      actively hurt at every value tried (0.02), a tighter `turns_per_task_estimate` helped some
+      (0.72) but far less than the floor change, a looser one or a higher `max_hires_per_day` both
+      hurt. Held-out gate: 49W/1L/0T (98%, Wilson [0.895, 0.996]) against the pre-T8.16(d) checked-in
+      baseline - the single most decisive result this whole plan produced. Traced (seed 900,
+      `tools/trace_t816d.py`): candidate ends the episode with 8 hands (old default: 1), hand `PASS`
+      only 101/1438 turns (~7%, genuinely working), final money 41365 vs 36172 (+14.4%). **Shipped
+      default changed**: `dynamic_hiring=true`, `min_hires_per_day=2` (params.py, policy.json,
+      strategy.py's `_DEFAULT_DYNAMIC_HIRING`/`_DEFAULT_MIN_HIRES_PER_DAY`). Golden episodes
+      re-recorded (`tests/test_agent_golden_episodes.py`) - a real, large jump on every one of the
+      six checked-in seeds (e.g. starter/seed1: 38093 -> 45650, +19.8%), matching the self-play
+      result exactly, not a regression to chase down. This directly answers the session's opening
+      question: the user's own diagnosis (missed watering/feeding is a labor shortage, not proof
+      animal economics are bad, and a real day-1 hiring floor was the missing piece) was correct -
+      see T8.17 below for the still-open follow-up (does this labor fix alone make COW/SHEEP
+      profitable, or is T8.17's own animal-awareness stack also needed).
 - [ ] T8.17 — re-measure `animal_consumption_horizon_aware`/`animal_fertilizer_income_aware`/
-      `animal_care_aware` individually then combined, against whatever T8.16(d) lands on - the actual
-      "are COW/SHEEP genuinely profitable" answer. Not yet run.
-- [ ] T8.18, T8.19, T8.20 — parallelize the animal-acquisition pipeline, a small crop basket instead
-      of always the single top pick, and lifting the single-animal-type cap once labor supports it.
-      Investigated and confirmed against `kaggriculture.py` (see the plan file), not yet built.
+      `animal_care_aware` individually then combined, against the new T8.16(d) baseline - the actual
+      "are COW/SHEEP genuinely profitable" answer, now that the labor floor is fixed. Not yet run -
+      the immediate next step.
+- [x] T8.18 — parallelize the animal-acquisition pipeline. Verified directly against
+      `kaggriculture.py`: `PICKUP` has no structural prerequisite at all, only `PLACE` needs both an
+      animal in hand and a matching built structure. `tasks._new_investment_tasks`'s animal branch
+      gains `parallel_animal_acquisition` (default `False`, bit-identical): when on, `BUILD_*` and
+      `PICKUP` both fire the same call whenever they're independently actionable, instead of the old
+      first-match-wins chain (up to 3 sequential turns even with 2+ free labor units). RED tests +
+      GREEN in `test_policy_tasks.py`; full suite green. **Not yet self-play measured** -
+      `tools/measure_t818.py` written (hires_per_day=2 base, since the effect only shows once a real
+      second hand exists), not yet run this session.
+- [~] T8.19 — a small crop basket (`portfolio_basket_size`) instead of always the single top-ranked
+      product. `tasks.py`'s plant branch now accepts a per-tile crop-name list (round-robin), not
+      just a single string (RED+GREEN, tested). `decide.py`'s wiring (`_top_crop_basket`, seed-buying
+      loop across the basket) is in progress, not yet complete this session.
+- [ ] T8.20 — lift the single-animal-type cap once labor genuinely supports a second. Investigated
+      and confirmed against `kaggriculture.py` (no engine-level cap - see the plan file), not yet
+      built. Sequenced after T8.17 per the plan's own dependency reasoning.
 
 ## Not planned yet (see plan.md)
 
