@@ -1304,6 +1304,74 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       Stage 1's own separately-earned win stands on its own merits per T8.3b's isolation discipline).
       `max_animals_per_type` stays at its T8.22-rejected default of 1; `wheat_urgency_reserve`,
       `animal_care_aware`, `animal_fertilizer_income_aware`, `parallel_animal_acquisition` all stay off.
+      **T8.28 correction to the causal story above**: "hand count is nearly identical between the
+      two paths" was true but under-investigated at the time - not checked for *why*. A direct
+      read-only computation (T8.28) found the shipped `scaling_only=True` forecast's raw pre-clip
+      target is 0 at every realistic farm size (25 MELON + 1 COW: `total_turns=8.7`; 50 MELON + 3
+      COW: `total_turns=18.4` - both far under the 24-turn denominator), so it is *always* clipped to
+      `min_hires_per_day=2`. The Stage-1 accepted default is, in practice, **flat 2 hands/day** - the
+      tile-count scaling term this entry describes never actually engages at any farm size tried,
+      confirmed directly by T8.28's own seed-900 trace (`tools/trace_t828.py`: `raw_target` never
+      exceeds 1 across all 30 days). Stage 1's real, honestly-measured finding is therefore **"flat 2
+      hands/day beats the reactive backlog-scaled path (which climbed to 8)"**, not "proactive
+      tile-count sizing works" - and this directly explains Stage 2's regression: the reactive path's
+      own ability to climb above 2 was helping in the animal-heavy bundle, and this forecast removed
+      that headroom outright. The win rates/Wilson intervals recorded above are unaffected by this
+      correction - only the causal explanation was wrong. See T8.28's own entry below for the re-sweep
+      this finding prompted.
+
+- [x] T8.28 — re-sweep the hiring knobs under the forecast path T8.27 actually shipped, my own
+      recommended next step after the user's "what's next?" question (2026-09-14), chosen over
+      submitting immediately (user: "Сначала T8.28, потом сабмит"). Prompted by the read-only finding
+      recorded in T8.27's own corrected entry above: the shipped `scaling_only=True` forecast's raw
+      target is 0 at every realistic farm size, always clipped to `min_hires_per_day=2` - so
+      `min_hires_per_day`/`max_hires_per_day`/`turns_per_task_estimate`/`hire_buffer_fraction` (swept
+      by T8.16(d) against the now-replaced *reactive* `pending_task_count` formula) had never been
+      swept in a regime where the floor is the *only* live term, and the total-work variant
+      (`scaling_only=False`, which genuinely scales) had only ever been measured by T8.26 at knobs
+      fitted to that same unrelated reactive path.
+      Added `workload_forecast_scaling_only: bool` (default `True`, bit-identical to T8.27's shipped,
+      previously-hardcoded behavior) as a new named/swept parameter in `strategy.py`/`params.py`/
+      `policy.json`, read inside `hires_per_day`'s forecast branch and passed to both per-tile
+      functions instead of the hardcoded `scaling_only=True`. RED+GREEN (`test_policy_strategy.py`,
+      2 new tests: default-matches-T8.27, and explicit `False` routes through the total-work variant
+      and changes the clipped output), full suite green (439/439 incl. golden episodes bit-identical -
+      no re-record needed, the new flag's default changes nothing), compileall/boundary clean.
+      **Measured** (`tools/measure_t828.py`): joint `coordinate_ascent` sweep over
+      `(min_hires_per_day, max_hires_per_day, turns_per_task_estimate, hire_buffer_fraction,
+      workload_forecast_scaling_only)` - floors 1/3/4 at `scaling_only=True`, tighter
+      `turns_per_task_estimate` (1.0, 0.5) to see if the scaling term could clear the floor at all,
+      the total-work variant at 4 knob combinations of its own, one buffer probe. **Every single one
+      of the 10 candidates tried lost decisively to the shipped baseline** on the working block
+      (win rates 0.00-0.20, all Wilson intervals clear below 0.5) - not close calls. `coordinate_
+      ascent`'s own internal search picked `(4, 8, 2.0, 0.0, True)` as its "best" (working-block
+      win_rate=0.200, the least-bad of the 10) - but this ranking was contaminated by a measurement
+      artifact specific to this task: the search's own starting point (`BASE`) is bit-identical to
+      the checked-in baseline (T8.27's shipped default is now `DEFAULT_PARAMS` itself), so the very
+      first working-block comparison was a guaranteed-tie mirror match (`win_rate=0.000` by
+      construction, not because the baseline is bad) - any real parameter change looks "better" than
+      a guaranteed tie by this metric alone, regardless of whether it's actually stronger. The
+      held-out gate (a real, direct test against the true checked-in baseline, not the degenerate
+      mirror) is what actually decides, and it **decisively rejected** this candidate: 7W/43L/0T
+      (14%), Wilson [0.070, 0.262], `accept_candidate=False`. Traced anyway (`tools/trace_t828.py`,
+      seed 900, `min_hires_per_day=4` vs the shipped `min_hires_per_day=2`) to see why: the raw
+      pre-clip forecast target **never exceeds 1 across all 30 days in either run** - confirming
+      directly (not just inferring from the read-only formula check) that the tile-count scaling term
+      genuinely never clears any floor from 2 to 4 on this farm's real trajectory, so both runs are
+      exactly as flat as the formula predicted, just at different floors (2 vs 4 hands every day).
+      Raising the floor to 4 costs real money with no offsetting work to show for it: final money
+      42040 (floor 2) vs 36550 (floor 4), -13% on this seed alone - directly explaining the 14%
+      held-out loss. **Conclusion, honestly recorded either way as planned**: nothing tried in this
+      sweep beats the shipped default beyond noise - `min_hires_per_day=2`,
+      `workload_forecast_scaling_only=True` (both unchanged) is a genuine local optimum among every
+      alternative tested, including higher/lower floors, a tighter turns-per-task estimate, the
+      total-work variant at its own knobs, and a buffer. This closes the open question T8.27's
+      correction raised: the tile-count forecast has no measured remaining headroom at this farm
+      scale, and flat-`min_hires_per_day` hiring is not a defect to keep chasing - it is the measured
+      answer. No parameter changed as a result; `workload_forecast_scaling_only` ships at its
+      bit-identical default (`True`) purely so future sweeps have the knob named rather than
+      hardcoded. No Kaggle submission in this task (per the user's own chosen order) - the submission
+      question returns now that this is settled.
 
 ## Not planned yet (see plan.md)
 

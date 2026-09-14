@@ -105,7 +105,41 @@ DEFAULT_PARAMS = {
     # under-hiring as the cause; a genuinely open question for whoever
     # next revisits max_animals_per_type, not a defect in this flag's own,
     # separately-earned Stage-1 win (T8.3b's isolation discipline).
+    #
+    # **T8.28 correction to the causal story above**: "hand count is
+    # nearly identical between the two paths" was true but read at the
+    # time as "the two paths behave similarly", not checked for *why*. A
+    # direct read-only computation found the shipped scaling_only=True
+    # forecast's raw pre-clip target is 0 at every realistic farm size
+    # (25 MELON + 1 COW: total_turns=8.7; 50 MELON + 3 COW: total_
+    # turns=18.4 - both far under the 24-turn denominator), so it is
+    # *always* clipped to min_hires_per_day=2. The accepted default is,
+    # in practice, flat 2 hands/day - the tile-count scaling term this
+    # comment describes never actually engages at any farm size tried.
+    # Stage 1's real, honestly-measured finding is "flat 2 hands/day
+    # beats the reactive backlog-scaled path (which climbed to 8)", not
+    # "proactive tile-count sizing works" - and this directly explains
+    # Stage 2's regression: the reactive path's own ability to climb
+    # above 2 was helping in the animal-heavy bundle, and this forecast
+    # removed that headroom outright. See kagg.policy.strategy's own
+    # _DEFAULT_WORKLOAD_FORECAST_SCALING_ONLY comment and workload_
+    # forecast_scaling_only below for the T8.28 re-sweep this finding
+    # prompted. The Stage-1 win rate/Wilson interval above are unaffected
+    # by this correction - only the causal explanation was wrong.
     "workload_forecast_hiring_aware": True,
+    # T8.28: a read-only check found the forecast's raw pre-clip target is
+    # 0 at every realistic farm size when this is True (e.g. 25 MELON + 1
+    # COW: total_turns=8.7, raw_target=0), so T8.27's shipped default is,
+    # in practice, flat min_hires_per_day hiring - the scaling term never
+    # engages. This flag (new - T8.27 hardcoded True with no way to turn
+    # it off) makes that a named, swept knob so the alternative (the
+    # per-tile functions' full total, which does scale) can be measured
+    # at its own turns_per_task_estimate/min/max_hires_per_day instead of
+    # the ones T8.16(d) fitted to the unrelated reactive pending_task_
+    # count path. See kagg.policy.strategy.hires_per_day's own docstring
+    # and tools/measure_t828.py for the sweep. Default True stays
+    # bit-identical to what T8.27 shipped.
+    "workload_forecast_scaling_only": True,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,

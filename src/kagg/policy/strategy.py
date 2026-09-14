@@ -760,6 +760,34 @@ _DEFAULT_HIRE_BUFFER_FRACTION = 0.0
 # separately-gated win (T8.3b's own isolation discipline: each mechanism
 # accepted or rejected on its own measured merits).
 _DEFAULT_WORKLOAD_FORECAST_HIRING_AWARE = True
+
+# T8.28: a read-only check of the formula T8.27 actually shipped
+# (scaling_only=True hardcoded, never a named/swept parameter) found the
+# forecast's raw pre-clip target is 0 at every realistic farm size (e.g.
+# 25 MELON + 1 COW: total_turns=8.7, raw_target=0; 50 MELON + 3 COW:
+# total_turns=18.4, raw_target=0 - both well under the 24-turns-per-day
+# denominator). It is *always* clipped up to min_hires_per_day=2, so
+# T8.27's shipped default is, in practice, flat 2 hands/day - the
+# scaling term the docstring above describes never actually engages.
+# This matches tools/trace_t827.py's own seed-900 trace exactly (hand
+# count pinned at 2 for all 30 days), which was read at the time as
+# "hand counts are similar between paths" without checking why. T8.27's
+# honestly-measured finding is therefore "flat 2 hands/day beats the
+# reactive backlog-scaled path (which climbed to 8)", not "proactive
+# tile-count sizing works" - and this directly explains Stage 2's
+# regression: the reactive path's ability to climb above 2 was helping
+# in the animal-heavy bundle, and T8.27 removed that headroom outright.
+#
+# This named flag (added by T8.28, never present before) makes
+# scaling_only a real, swept knob instead of a hardcoded constant, so
+# the alternative (the total-work variant, which *does* scale - raw
+# target 2 at 25 tiles + 1 cow, 5 at 50 tiles + 3 cows) can be measured
+# at its own turns_per_task_estimate/min/max instead of the ones T8.16(d)
+# fitted to the unrelated reactive path. See tools/measure_t828.py for
+# the sweep and tools/trace_t828.py for the seed-900 trace of whichever
+# variant it accepts. Default True is bit-identical to what T8.27
+# shipped, for every caller that doesn't set this flag.
+_DEFAULT_WORKLOAD_FORECAST_SCALING_ONLY = True
 # Matches tools/analyze_unit_economics.py's own SEASON_LENGTH_DAYS - a
 # "no days_remaining given -> assume a full season" steady-state fallback,
 # the same convention `crop_revenue_per_tile_day`/`animal_revenue_per_
@@ -1065,24 +1093,35 @@ def hires_per_day(
     "tiles"])`, own tiles only), the target is derived directly from them
     instead: `total_turns = (sum(_animal_actions_per_tile_day(a,
     days_remaining, animal_care_aware, animal_fertilizer_income_aware,
-    scaling_only=True) * animal_tile_counts[a] for each type present) +
-    sum(_crop_actions_per_tile_day(c, days_remaining, use_fertilizer,
-    scaling_only=True) * crop_tile_counts[c] for each type present)) *
+    scaling_only=<workload_forecast_scaling_only>) * animal_tile_counts[a]
+    for each type present) + sum(_crop_actions_per_tile_day(c,
+    days_remaining, use_fertilizer, scaling_only=<workload_forecast_
+    scaling_only>) * crop_tile_counts[c] for each type present)) *
     turns_per_task_estimate` - the same task-count-to-turn-count
     conversion the `pending_task_count` path above already uses (folding
     in movement/travel overhead once, not a second additive term),
     buffered by `hire_buffer_fraction` and clipped to `[min_hires_per_day,
     max_hires_per_day]`, same as always.
 
-    `scaling_only=True` (T8.27, fixing T8.26's own measured rejection -
-    see `_DEFAULT_WORKLOAD_FORECAST_HIRING_AWARE`'s own comment) is always
-    passed here, never left at the per-tile functions' own default: this
-    forecast sizes *marginal hiring demand*, and routine coverage ops
-    (WATER/FEED/CARE/COLLECT_FERTILIZER) happen at a fixed one-per-day
-    rate regardless of labor size, exactly the distinction
-    `pending_task_count`'s own `_ROUTINE_RECURRING_OPS` exclusion already
-    draws for the reactive path (T8.16(a)) - counting them here would
-    reproduce T8.12's original over-hiring mistake one level up.
+    `workload_forecast_scaling_only` (T8.27 introduced the behavior,
+    hardcoded; T8.28 made it a named, swept parameter - defaults `True`,
+    bit-identical to T8.27's shipped forecast for every caller that
+    doesn't set it) picks which per-tile variant feeds this forecast.
+    `True`: routine coverage ops (WATER/FEED/CARE/COLLECT_FERTILIZER) are
+    excluded, since this forecast sizes *marginal hiring demand* and
+    those ops happen at a fixed one-per-day rate regardless of labor
+    size - exactly the distinction `pending_task_count`'s own
+    `_ROUTINE_RECURRING_OPS` exclusion already draws for the reactive
+    path (T8.16(a)); counting them here would reproduce T8.12's original
+    over-hiring mistake one level up (this is what T8.26 originally did,
+    measured and decisively rejected - see `_DEFAULT_WORKLOAD_FORECAST_
+    SCALING_ONLY`'s own comment). `False`: the per-tile functions' full
+    total (T8.26's original formula) - genuinely scales with tile count
+    (unlike `True`, whose raw target is 0, always clipped to `min_hires_
+    per_day`, at every realistic farm size - see the same comment), not
+    yet measured at its own `turns_per_task_estimate`/`min`/`max_hires_
+    per_day` (T8.26 measured it at values T8.16(d) fitted to the
+    unrelated reactive path).
 
     Divided by the *full* `turns_per_day`, not `turns_left_today` - this
     is a fixed whole-day forecast computed from tile counts known in full
@@ -1137,17 +1176,21 @@ def hires_per_day(
         animal_care_aware = params.get("animal_care_aware", False)
         animal_fertilizer_income_aware = params.get("animal_fertilizer_income_aware", False)
         use_fertilizer = params.get("use_fertilizer", False)
+        scaling_only = params.get(
+            "workload_forecast_scaling_only", _DEFAULT_WORKLOAD_FORECAST_SCALING_ONLY
+        )
         animal_turns = sum(
             _animal_actions_per_tile_day(
                 a, effective_days_remaining, animal_care_aware, animal_fertilizer_income_aware,
-                scaling_only=True,
+                scaling_only=scaling_only,
             )
             * count
             for a, count in animal_tile_counts.items()
             if count > 0
         )
         crop_turns = sum(
-            _crop_actions_per_tile_day(c, effective_days_remaining, use_fertilizer, scaling_only=True) * count
+            _crop_actions_per_tile_day(c, effective_days_remaining, use_fertilizer, scaling_only=scaling_only)
+            * count
             for c, count in crop_tile_counts.items()
             if count > 0
         )

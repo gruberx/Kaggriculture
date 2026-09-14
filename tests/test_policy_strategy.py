@@ -770,6 +770,63 @@ def test_hires_per_day_workload_forecast_hiring_aware_respects_the_buffer_and_cl
     assert got == 3
 
 
+def test_hires_per_day_workload_forecast_scaling_only_defaults_to_on():
+    # T8.28: the flag defaults True, bit-identical to what T8.27 shipped
+    # (which always passed scaling_only=True with no way to turn it off).
+    # A caller that doesn't set the new flag explicitly still gets the
+    # same forecast as before this task.
+    params_implicit = {"dynamic_hiring": True, "workload_forecast_hiring_aware": True}
+    params_explicit = {
+        "dynamic_hiring": True,
+        "workload_forecast_hiring_aware": True,
+        "workload_forecast_scaling_only": True,
+    }
+    kwargs = dict(hour=0, turns_per_day=24, animal_tile_counts={"COW": 2}, crop_tile_counts={"MELON": 5})
+    assert hires_per_day(params_implicit, **kwargs) == hires_per_day(params_explicit, **kwargs)
+
+
+def test_hires_per_day_workload_forecast_scaling_only_can_be_disabled_for_the_total_work_variant():
+    # T8.28: workload_forecast_scaling_only=False routes hires_per_day's
+    # forecast through the per-tile functions' own full-total variant
+    # (T8.26's original formula, counting routine WATER/FEED/CARE/COLLECT_
+    # FERTILIZER too) instead of the scaling-only one - re-enabling the
+    # variant this task's own sweep needs to re-test at its own knobs
+    # (see _DEFAULT_WORKLOAD_FORECAST_SCALING_ONLY's own comment for why).
+    # 1 COW + 30 MELON: chosen so the two variants land on different
+    # clipped hire counts (2 vs 3), so this also proves the flag is
+    # actually wired to hires_per_day's output, not just to the per-tile
+    # helpers in isolation.
+    cow_actions = _animal_actions_per_tile_day(
+        "COW", 30, care_aware=False, fertilizer_income_aware=False, scaling_only=False
+    )
+    melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=False)
+    total_turns = (cow_actions * 1 + melon_actions * 30) * 2.0  # turns_per_task_estimate
+    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)  # min/max_hires_per_day defaults
+    params = {
+        "dynamic_hiring": True,
+        "workload_forecast_hiring_aware": True,
+        "workload_forecast_scaling_only": False,
+    }
+    got = hires_per_day(
+        params,
+        hour=12,
+        turns_per_day=24,
+        animal_tile_counts={"COW": 1},
+        crop_tile_counts={"MELON": 30},
+    )
+    assert got == expected
+    # And it must actually differ from the scaling_only=True path for the
+    # same tile counts - otherwise the flag isn't wired to anything.
+    scaling_only_got = hires_per_day(
+        {**params, "workload_forecast_scaling_only": True},
+        hour=12,
+        turns_per_day=24,
+        animal_tile_counts={"COW": 1},
+        crop_tile_counts={"MELON": 30},
+    )
+    assert got != scaling_only_got
+
+
 def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():
     # T8.3q: kaggriculture.py's _daily_refresh_animals sets
     # fertilizer_available=True every surviving day regardless of
