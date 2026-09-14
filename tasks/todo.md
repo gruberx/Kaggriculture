@@ -1434,6 +1434,35 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       measured aggregate win, not a regression). No Kaggle submission in this task - ask before any
       further one, as always.
 
+- [x] T8.30 — re-sweep the hiring-floor knobs now that `labor_units` genuinely scales (T8.29's own
+      named follow-up, user: "Пожалуйста начинай реализацию исправления этих проблем" after T8.29's
+      report). T8.28's own sweep of `min_hires_per_day`/`max_hires_per_day`/`turns_per_task_estimate`/
+      `hire_buffer_fraction` ran *before* T8.29's fix - every candidate it tried lost because raising
+      the floor bought idle hands with no extra planting capacity to use (`labor_units` was hardcoded
+      at 2 regardless of real hand count). That finding needed re-testing, not re-trusting, now that
+      planting capacity genuinely tracks the real forecast.
+      **Measured** (`tools/measure_t830.py`, joint `coordinate_ascent` sweep against the checked-in
+      baseline, i.e. plain `DEFAULT_PARAMS` - T8.29's fix is now the shipped default, nothing to
+      toggle): floors 3/4/5/6 (above the current 2), tighter `turns_per_task_estimate` (1.5, 1.0), one
+      buffer probe (0.1) - 8 candidates total. **Every single one lost decisively** to the shipped
+      baseline on the working block (win rates 0.00-0.04, all far below 0.5) - not close calls, and
+      *worse* than T8.28's own pre-fix rejection (which found win rates up to 0.20). `coordinate_
+      ascent` kept the shipped default `(2, 8, 2.0, 0.0)` as the winner (no candidate ever beat it).
+      Held-out gate confirms trivially: candidate == baseline (bit-identical), so all 50 games tied
+      (0W/0L/50T), `accept_candidate=False`.
+      **Conclusion, honestly recorded as predicted**: this closes the open question, the same way
+      T8.28 did before it, just now under the corrected `labor_units`. Raising the hiring floor still
+      does not help - not because planting capacity doesn't scale with it anymore (T8.29 fixed that),
+      but because the underlying `hires_per_day` forecast itself never asks for more than
+      `min_hires_per_day=2` hands at this farm's real scale (T8.28's own seed-900 trace already showed
+      the raw pre-clip forecast target never exceeding 1 across all 30 days) - forcing a higher floor
+      just buys idle hands the forecast never wanted, at real fib-scaled hiring cost, with nothing
+      productive to show for it. The bottleneck confirmed to be genuinely elsewhere (most likely land/
+      quadrant count limiting how much there is to plant in the first place, not the hiring formula) -
+      not chased further here, out of scope for this task. No parameter changed; `tools/measure_t830.py`
+      kept as a record of the re-test. No seed-900 trace or golden-episode re-record needed (nothing
+      changed). No Kaggle submission in this task - ask before any further one, as always.
+
 Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
 (commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,
 commit `777e46a`) - most notably T8.16(d)'s `dynamic_hiring` (98% held-out) and T8.27's corrected
