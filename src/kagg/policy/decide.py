@@ -609,6 +609,18 @@ _DEFAULT_INVESTMENT_COMMIT_MARGIN = 0.0
 # rejection.
 _DEFAULT_WATER_BONUS_WINDOW_AWARE = False
 
+# T8.18: verified directly against kaggriculture.py that PICKUP has no
+# structural prerequisite at all - only PLACE genuinely needs both an
+# animal in hand and a matching built structure. The shipped serial
+# if/elif chain in tasks._new_investment_tasks checks "no structure yet"
+# before PICKUP's own readiness, wasting a real, available second labor
+# unit (Stage B's now-shipped hires_per_day>=1) that could do BUILD_* and
+# PICKUP the same turn. Default False reproduces the exact prior serial
+# pipeline - a mechanism change gated the same way as every other
+# tunable here, for a clean accept/reject even though the "off" behavior
+# is arguably just a latent bug.
+_DEFAULT_PARALLEL_ANIMAL_ACQUISITION = False
+
 # T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
 # `plant_qty` scale with the real labor force (1 + hires_per_day) instead
 # of a hardcoded "one PLANT task per turn" baked in since Phase 3.
@@ -1119,6 +1131,9 @@ def decide(obs: dict, params: dict) -> dict:
     use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
     care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
     water_bonus_window_aware = params.get("water_bonus_window_aware", _DEFAULT_WATER_BONUS_WINDOW_AWARE)
+    parallel_animal_acquisition = params.get(
+        "parallel_animal_acquisition", _DEFAULT_PARALLEL_ANIMAL_ACQUISITION
+    )
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
@@ -1131,6 +1146,7 @@ def decide(obs: dict, params: dict) -> dict:
         plant_qty=plant_qty,
         care_aware=care_aware,
         water_bonus_window_aware=water_bonus_window_aware,
+        parallel_animal_acquisition=parallel_animal_acquisition,
     )
     assignment = assign_units(tasks, unit_positions)
 

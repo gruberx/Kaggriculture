@@ -211,7 +211,7 @@ def _compact_positions(candidates, board_size: int, anchor: str, unit_positions,
 def build_task_list(
     tiles,
     unit_positions=(),
-    plant_crop: str | None = None,
+    plant_crop: str | list[str] | None = None,
     desired_animal: str | None = None,
     shed: dict | None = None,
     farmer_inventory: dict | None = None,
@@ -221,13 +221,19 @@ def build_task_list(
     care_aware: bool = False,
     plant_qty: int = 1,
     water_bonus_window_aware: bool = False,
+    parallel_animal_acquisition: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
     `plant_crop` is the crop to plant, if any (sourced from the strategic
     layer's portfolio ranking - see SPEC-policy.md "1. Strategic layer" /
     kagg.policy.strategy) - `None` means don't plant this turn (no seeds
-    available, or nothing worth planting). `plant_qty` (T8.6) is how many
+    available, or nothing worth planting). A single crop name plants that
+    crop on every proposed tile (every release before T8.19); a `list[
+    str]` instead gives a per-tile sequence - `decide()`'s own round-
+    robin across a basket of top crops (`portfolio_basket_size`, T8.19),
+    already capped per-crop by seeds actually held - see `_new_investment_
+    tasks`'s own comment on the plant branch. `plant_qty` (T8.6) is how many
     *distinct* empty tiles to propose a PLANT task for in one call -
     defaults to 1, reproducing the original "plant the single nearest
     empty tile" behavior exactly; `decide()` computes a real value scaled
@@ -297,6 +303,11 @@ def build_task_list(
     the exact prior behavior (every non-urgent WATER task at `PRIORITY_
     ROUTINE_CARE` regardless of age) for every caller that doesn't pass
     it.
+
+    `parallel_animal_acquisition` (T8.18) - see `_new_investment_tasks`'s
+    own docstring for the mechanism. Defaults to `False`, reproducing the
+    exact prior serial (BUILD -> PICKUP -> PLACE) pipeline for every
+    caller that doesn't pass it.
     """
     shed = shed or {}
     farmer_inventory = farmer_inventory or {}
@@ -354,6 +365,7 @@ def build_task_list(
         _new_investment_tasks(
             empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
             plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor, plant_qty,
+            parallel_animal_acquisition,
         )
     )
 
@@ -371,6 +383,7 @@ def _new_investment_tasks(
     empty_tiles, matching_structure_tiles, unit_positions, board_size,
     plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor=_ANCHOR_SHED,
     plant_qty: int = 1,
+    parallel_animal_acquisition: bool = False,
 ) -> list[Task]:
     """T6.4's real finding, not anticipated when T6.2 first wrote this
     pipeline: PLACE's real handler (kaggriculture.py) consumes the animal
@@ -387,33 +400,71 @@ def _new_investment_tasks(
     (`unit_positions[:1]`) regardless of `anchor` - see build_task_list's
     matching comment for why.
 
-    The animal pipeline still ever proposes at most one task per call
-    (BUILD_*/PICKUP/PLACE all stay singular - T8.6 only parallelizes
-    planting, not animal acquisition, which is already a serial,
-    single-animal-at-a-time pipeline by design - see `decide.py`'s own
-    "never buy a second instance of an already-placed animal type"
-    comment). Only the `plant_crop` branch can return more than one task,
-    up to `plant_qty` (T8.6), one PLANT task per distinct empty tile via
-    `_compact_positions` - see its own docstring for why this reuses
-    `_compact_position`'s selection logic rather than reimplementing it.
+    `parallel_animal_acquisition` (T8.18): verified directly against
+    `kaggriculture.py`'s own handlers - `PICKUP` has no structural
+    prerequisite at all (it only needs a shed-adjacent unit and a
+    matching shed inventory entry), so it is genuinely independent of
+    `BUILD_COOP`/`BUILD_PASTURE`. Only `PLACE` has a real dependency (an
+    animal in hand *and* a matching built structure). The original
+    if/elif chain below (`parallel_animal_acquisition=False`, the
+    default - bit-identical to every prior release) still returns at
+    most one task per call, checking "no structure yet" *before*
+    `PICKUP`'s own readiness even though nothing about `PICKUP` actually
+    needs a structure - harmless at `hires_per_day=0` (one unit, one
+    task, order never mattered), but with Stage B's now-shipped
+    `hires_per_day>=1` this silently wastes a real, available second
+    labor unit: BUILD and PICKUP could run the same turn. When the flag
+    is on, every currently-actionable step fires in the same call
+    instead of the first match - `assign_units` already handles multiple
+    same-tier tasks correctly (T8.2's own greedy matching), no changes
+    needed there.
+
+    Only the `plant_crop` branch can return more than one task
+    independent of this flag, up to `plant_qty` (T8.6), one PLANT task
+    per distinct empty tile via `_compact_positions` - see its own
+    docstring for why this reuses `_compact_position`'s selection logic
+    rather than reimplementing it.
     """
     if desired_animal is not None:
         animal_in_hand = farmer_inventory.get(desired_animal, 0) > 0
         animal_in_shed = shed.get(desired_animal, 0) > 0
+        if not parallel_animal_acquisition:
+            if animal_in_hand and matching_structure_tiles:
+                pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
+                return [Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX)]
+            if not matching_structure_tiles and empty_tiles:
+                pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
+                build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
+                return [Task(PRIORITY_PLANT, pos, build_op)]
+            if matching_structure_tiles and animal_in_shed and not animal_in_hand:
+                pos = _closest_pos(shed_access_tiles(board_size), unit_positions[:1])
+                return [
+                    Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)
+                ]
+            return []
+        animal_tasks: list[Task] = []
         if animal_in_hand and matching_structure_tiles:
             pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
-            return [Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX)]
+            animal_tasks.append(Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX))
         if not matching_structure_tiles and empty_tiles:
             pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
             build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
-            return [Task(PRIORITY_PLANT, pos, build_op)]
-        if matching_structure_tiles and animal_in_shed and not animal_in_hand:
+            animal_tasks.append(Task(PRIORITY_PLANT, pos, build_op))
+        if animal_in_shed and not animal_in_hand:
             pos = _closest_pos(shed_access_tiles(board_size), unit_positions[:1])
-            return [Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)]
-        return []
+            animal_tasks.append(
+                Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)
+            )
+        return animal_tasks
     if plant_crop is not None and empty_tiles and plant_qty > 0:
         positions = _compact_positions(empty_tiles, board_size, anchor, unit_positions, plant_qty)
-        return [Task(PRIORITY_PLANT, pos, "PLANT", crop=plant_crop) for pos in positions]
+        # T8.19: plant_crop is either a single crop name (every prior
+        # release) or a per-tile sequence of names (portfolio_basket_
+        # size > 1, decide()'s own round-robin, already seed-capped) -
+        # zip stops at the shorter of positions/crops, so a caller-
+        # supplied list never proposes more tasks than it names crops for.
+        crops = plant_crop if isinstance(plant_crop, list) else [plant_crop] * len(positions)
+        return [Task(PRIORITY_PLANT, pos, "PLANT", crop=crop) for pos, crop in zip(positions, crops)]
     return []
 
 

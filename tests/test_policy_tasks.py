@@ -375,6 +375,22 @@ def test_build_task_list_plants_multiple_distinct_tiles_when_plant_qty_is_given(
         assert t.crop == "CARROT"
 
 
+def test_build_task_list_plant_crop_as_a_list_round_robins_crops_across_tiles():
+    # T8.19: portfolio_basket_size - decide() passes a per-tile sequence
+    # of crop names (already round-robined and seed-capped) instead of a
+    # single crop string, so each of plant_qty's tiles gets the crop
+    # named at the matching position in the list.
+    tiles = _empty_tiles()
+    tasks = build_task_list(
+        tiles, plant_crop=["MELON", "STRAWBERRY", "MELON"], plant_qty=3, unit_positions=[(4, 4)]
+    )
+    plant_tasks = [t for t in tasks if t.op == "PLANT"]
+    assert len(plant_tasks) == 3
+    assert sorted(t.crop for t in plant_tasks) == ["MELON", "MELON", "STRAWBERRY"]
+    positions = {t.pos for t in plant_tasks}
+    assert len(positions) == 3  # all distinct
+
+
 def test_build_task_list_caps_plant_qty_at_available_empty_tiles():
     tiles = [[{"kind": "WEED"} for _ in range(10)] for _ in range(10)]
     tiles[0][0] = None  # exactly one empty tile
@@ -590,6 +606,69 @@ def test_build_task_list_does_nothing_when_structure_exists_but_animal_not_bough
     tiles[4][4] = _empty_structure("PASTURE")
     tasks = build_task_list(tiles, unit_positions=[(0, 0)], desired_animal="COW")
     assert tasks == []
+
+
+# --- T8.18: parallel animal acquisition -----------------------------------
+#
+# Verified directly against kaggriculture.py: PICKUP has no structural
+# prerequisite at all (it only needs a shed-adjacent unit and a matching
+# shed inventory entry) - only PLACE genuinely needs both an animal in
+# hand and a matching built structure. The shipped serial if/elif chain
+# blocks PICKUP on "no structure yet" even though nothing about PICKUP
+# needs a structure, wasting a second labor unit (Stage B) that could be
+# doing BUILD_* and PICKUP on the very same turn.
+
+
+def test_build_task_list_serial_pipeline_still_blocks_pickup_on_the_missing_structure_by_default():
+    # parallel_animal_acquisition defaults to False - bit-identical to
+    # the original serial chain: with no structure yet, only BUILD_*
+    # fires this turn even though the animal already sits in the shed.
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="COW", shed={"COW": 1})
+    assert len(tasks) == 1
+    assert tasks[0].op == "BUILD_PASTURE"
+
+
+def test_build_task_list_parallel_animal_acquisition_builds_and_picks_up_in_the_same_turn():
+    # With the flag on: no structure yet, but the animal is already in
+    # the shed - BUILD_PASTURE and PICKUP are independent of each other
+    # (PICKUP needs no structure), so both fire this turn, letting a
+    # second labor unit do PICKUP while the farmer does BUILD.
+    tiles = _empty_tiles()
+    tasks = build_task_list(
+        tiles, unit_positions=[(4, 4)], desired_animal="COW", shed={"COW": 1},
+        parallel_animal_acquisition=True,
+    )
+    ops = {t.op for t in tasks}
+    assert ops == {"BUILD_PASTURE", "PICKUP"}
+
+
+def test_build_task_list_parallel_animal_acquisition_still_requires_both_for_place():
+    # PLACE's real dependency (an animal in hand AND a matching built
+    # structure) is real and doesn't go away - only one task fires here.
+    tiles = _empty_tiles()
+    tiles[4][4] = _empty_structure("PASTURE")
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], desired_animal="COW", farmer_inventory={"COW": 1},
+        parallel_animal_acquisition=True,
+    )
+    assert len(tasks) == 1
+    assert tasks[0].op == "PLACE"
+
+
+def test_build_task_list_parallel_animal_acquisition_does_not_repropose_pickup_once_in_hand():
+    # Once the animal is already in the farmer's own inventory, PICKUP
+    # has nothing left to do even though the shed might still show a
+    # stale/second unit of the same animal type - only PLACE applies.
+    tiles = _empty_tiles()
+    tiles[4][4] = _empty_structure("PASTURE")
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], desired_animal="COW",
+        farmer_inventory={"COW": 1}, shed={"COW": 1},
+        parallel_animal_acquisition=True,
+    )
+    ops = {t.op for t in tasks}
+    assert ops == {"PLACE"}
 
 
 def test_build_task_list_ignores_a_mismatched_empty_structure():
