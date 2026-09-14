@@ -342,6 +342,20 @@ DEFAULT_PARAMS = {
     # redundant with that, not a distinct win. Kept available (tested,
     # off by default) in case a future opponent/seed mix changes this.
     "portfolio_basket_size": 1,
+    # T8.22, the user's own request once corrected unit economics showed
+    # animals can be competitive (tools/analyze_unit_economics.py: a
+    # fully-cared animal beats every crop on raw $/tile-day at N=1, and
+    # still beats even contested MELON at realistic end-game shop-
+    # consumption scale): BUY_ANIMAL has no same-type limit in the real
+    # game (verified directly against kaggriculture.py, only shed_
+    # capacity/money gate it) - the prior "never pursue a second instance
+    # of an already-placed animal type" rule was entirely this module's
+    # own simplification. 1 reproduces that exact prior behavior for
+    # every caller that doesn't set it - see kagg.policy.decide's
+    # placed_animal_type_counts gate for the mechanism. Deliberately a
+    # simple swept scalar, not a labor-derived formula - matches
+    # hires_per_day/min_hires_per_day's own precedent.
+    "max_animals_per_type": 1,
     # T8.6 (tasks/plan.md): parallel planting + batched seed purchase -
     # lets plant_qty scale with the real labor force (1 + hires_per_day)
     # instead of the fixed "one PLANT task per turn" baked in since

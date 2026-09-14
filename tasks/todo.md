@@ -1089,9 +1089,35 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       both) - the real fix, if this is revisited, is `animal_consumption_horizon_aware`'s own
       over-extrapolation (e.g. discounting the assumed rate for how much of the horizon the current
       shop mix can actually be trusted to hold), not `care_aware`'s schedule.
-- [ ] T8.22 — lift the single-animal-type cap once labor genuinely supports a second. Investigated
-      and confirmed against `kaggriculture.py` (no engine-level cap - see the plan file), not yet
-      built. Sequenced after T8.17/T8.21 per the plan's own dependency reasoning.
+- [x] T8.22 — lift the single-animal-type cap once labor genuinely supports a second. Verified
+      directly against `kaggriculture.py`: `BUY_ANIMAL` has no engine-level same-type cap at all
+      (only `shed_capacity`/money), and `PLACE` only needs one matching empty structure - the "never
+      pursue a second instance" rule was entirely `decide.py`'s own simplification
+      (`placed_animal_types`). Changed to a count-based gate: `placed_animal_type_counts: dict[str,
+      int]` + new `max_animals_per_type` param (default `1`, bit-identical - reproduces the exact
+      prior rule for every caller that doesn't set it). RED+GREEN in `test_policy_decide.py`, full
+      suite green (410/410), compileall/boundary clean.
+      **Measured and decisively rejected** (`tools/measure_t822.py`, sweeping the cap against the
+      T8.16(d) baseline with `animal_care_aware`/`animal_fertilizer_income_aware`/`parallel_animal_
+      acquisition=True` - deliberately *without* T8.21's `consumption_horizon_aware` combination,
+      which that task's own measurement had already found harmful on its own, to avoid confounding
+      the two questions): `max_animals_per_type=2` -> 28%/24% (working/holdout), `=3` -> 14%/14%,
+      `=4` -> 2%/4% - a monotonic collapse, each step decisively worse than the last, not noise.
+      **Traced** (`tools/trace_t822.py`, seed 900): at cap=2, animal-tile count peaks at 4 mid-
+      episode; at cap=4, it peaks at 5 - but in both cases **every single animal is gone by episode
+      end** (final count 0). Confirmed directly against `kaggriculture.py`'s own
+      `_daily_refresh_animals`: an animal escapes (tile reverts to a bare structure, `"animal"` key
+      removed) once `consecutive_unfed >= 2` - the observed "max consecutive_unfed ever seen on a
+      surviving tile = 1" is exactly consistent with animals repeatedly reaching 1, then escaping the
+      very next missed-feed day before a stored value of 2 could ever be observed. The same
+      T8.3q "promised a mechanism the labor budget couldn't execute" failure mode this whole
+      animal-economics thread keeps finding - now for N animals instead of one: `min_hires_per_day=2`
+      (T8.16(d)) covers one animal's FEED+CARE+COLLECT_FERTILIZER+HARVEST plus crop maintenance, but
+      not two or more animals' worth on top of that. Stays off by default (`max_animals_per_type=1`,
+      bit-identical), kept available (tested). A concrete lead for later, not built here: gate
+      `max_animals_per_type` on real spare labor (e.g. only pursue a second animal once
+      `hires_per_day`/`min_hires_per_day` themselves have been raised enough to cover it), rather
+      than assuming today's single-animal-tuned labor floor scales for free.
 
 ## Not planned yet (see plan.md)
 

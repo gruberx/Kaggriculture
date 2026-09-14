@@ -609,6 +609,26 @@ _DEFAULT_INVESTMENT_COMMIT_MARGIN = 0.0
 # rejection.
 _DEFAULT_WATER_BONUS_WINDOW_AWARE = False
 
+# T8.22, the user's own request: verified directly against
+# kaggriculture.py that BUY_ANIMAL has no same-type limit at all (only
+# shed_capacity and money) and PLACE only needs one matching empty
+# structure per animal - the "never pursue a second instance of an
+# already-placed animal type" rule below (placed_animal_type_counts) was
+# entirely this module's own simplification, not a game constraint.
+# Prompted by the corrected unit-economics analysis (tools/analyze_unit_
+# economics.py): a fully-cared animal beats every crop on raw $/tile-day
+# at N=1, and still beats even *contested* MELON at realistic end-game
+# shop-consumption scale - real evidence the single-instance cap was
+# leaving money on the table, not just a hypothesis. Deliberately a
+# simple swept scalar (default 1, bit-identical), not a labor-derived
+# formula - matches this project's own established preference
+# (land_purchase_threshold_money, hires_per_day, min_hires_per_day were
+# all found by sweeping a plain number) - the arena finds the real
+# ceiling rather than a formula guessing at per-animal labor cost the
+# unit-economics analysis already showed is small and non-linear (shop
+# luck dominates over marginal labor cost).
+_DEFAULT_MAX_ANIMALS_PER_TYPE = 1
+
 # T8.18: verified directly against kaggriculture.py that PICKUP has no
 # structural prerequisite at all - only PLACE genuinely needs both an
 # animal in hand and a matching built structure. The shipped serial
@@ -1110,7 +1130,7 @@ def decide(obs: dict, params: dict) -> dict:
     # how many tiles are already committed to a plant - the real
     # denominator plant_budget needs to know how much more planting the
     # current labor force can still take on.
-    placed_animal_types: set[str] = set()
+    placed_animal_type_counts: dict[str, int] = {}
     free_tiles = 0
     unlocked_tiles = 0
     nearest_free_shed_distance: int | None = None
@@ -1128,7 +1148,9 @@ def decide(obs: dict, params: dict) -> dict:
             elif isinstance(tile, dict):
                 unlocked_tiles += 1
                 if "animal" in tile:
-                    placed_animal_types.add(tile["animal"])
+                    placed_animal_type_counts[tile["animal"]] = (
+                        placed_animal_type_counts.get(tile["animal"], 0) + 1
+                    )
                 elif tile.get("kind") in ("COOP", "PASTURE"):
                     empty_structure_kinds.add(tile["kind"])
                 elif tile.get("kind") == "PLANT":
@@ -1137,19 +1159,24 @@ def decide(obs: dict, params: dict) -> dict:
     if stuck_animal is not None:
         acquisition_animal = stuck_animal
         plant_crop = None  # finish the paid-for animal before starting a new crop too
-    elif desired_animal is not None and desired_animal in placed_animal_types:
+    elif (
+        desired_animal is not None
+        and placed_animal_type_counts.get(desired_animal, 0)
+        >= params.get("max_animals_per_type", _DEFAULT_MAX_ANIMALS_PER_TYPE)
+    ):
         # A second real bug found the same way: even with the stuck-
         # animal fix above, decide() kept re-buying *another* instance of
         # the same top-ranked animal indefinitely - a live, well-fed,
         # already-producing COW is not "done" in _top_investment_choice's
         # eyes, so it commissioned a second one, then a third, forever.
-        # Deliberate simplification, not a full fix: never pursue a
-        # second instance of an animal type we already have placed and
-        # alive, rather than re-ranking to find the next-best
-        # alternative - correct and safe for a single farmer (which
-        # can't reliably tend more than one animal's feeding anyway
-        # while also farming crops); revisit once multiple hands make
-        # tending more than one worthwhile.
+        # T8.22 (the user's own request): count-based, not a flat "never
+        # a second instance" ban - max_animals_per_type (default 1,
+        # bit-identical) lets the arena find how many instances of one
+        # animal type are actually worth pursuing, rather than assuming
+        # the answer is always exactly one. Still stops *something* -
+        # unconditionally chasing more copies forever with no cap at all
+        # would just recreate the original 18-BUY_ANIMAL-orders bug this
+        # gate was built to fix.
         acquisition_animal = None
     else:
         acquisition_animal = desired_animal
@@ -1241,14 +1268,14 @@ def decide(obs: dict, params: dict) -> dict:
     # COW to escape). Matches tasks._WHEAT_PICKUP_BATCH's batch size, not
     # by import (tasks.py has no dependency on this module) - keep the
     # two in sync by hand if either changes.
-    wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_types else 0
+    wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_type_counts else 0
 
     # T8.3l: feed is only worth restocking when there's an animal placed
     # or currently being pursued (acquisition_animal) - see
     # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED's own comment for the real
     # ping-pong this fixes.
     feed_needed = (
-        bool(placed_animal_types) or acquisition_animal is not None
+        bool(placed_animal_type_counts) or acquisition_animal is not None
         if params.get("wheat_buy_only_when_feed_needed", _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED)
         else True
     )

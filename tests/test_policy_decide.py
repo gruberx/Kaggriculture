@@ -897,6 +897,64 @@ def test_decide_does_not_buy_a_second_animal_of_a_type_already_placed_and_alive(
     assert action["farmer"] != ["BUILD_PASTURE"]
 
 
+def test_decide_max_animals_per_type_defaults_to_one_bit_identical():
+    # T8.22: max_animals_per_type defaults to 1 - the exact prior "never a
+    # second instance" rule from
+    # test_decide_does_not_buy_a_second_animal_of_a_type_already_placed_and_alive,
+    # reproduced bit-identically for every caller that doesn't pass it.
+    assert DEFAULT_PARAMS.get("max_animals_per_type", 1) == 1
+
+
+def test_decide_pursues_a_second_animal_of_the_same_type_when_the_cap_allows_it():
+    # T8.22, the user's own request once corrected unit economics showed
+    # animals can be competitive: BUY_ANIMAL has no same-type limit at all
+    # in the real game (kaggriculture.py) - the "never a second instance"
+    # rule was entirely this module's own simplification. With
+    # max_animals_per_type raised past the current count of 1, decide()
+    # must resume pursuing another COW instead of refusing forever.
+    obs = _obs()
+    # Every crop crashed (not just MELON) - confirmed directly against
+    # score_portfolio at animal_net_of_cost=True (the shipped default)
+    # that COW only tops the *full* ranking, not just MELON, once every
+    # crop is crashed this way (CARROT/WHEAT/TOMATO otherwise outrank it).
+    obs["market"]["inventory"] = {c: MARKET_I0 + 100_000 for c in CROPS}
+    obs["farms"][0]["tiles"][3][3] = {
+        "kind": "PASTURE",
+        "animal": "COW",
+        "placed_day": 0,
+        "yield_units": 0,
+        "consecutive_unfed": 0,
+        "fed_today": True,
+        "cared_today": False,
+        "fertilizer_available": False,
+        "pending_care_bonus": 0,
+    }
+    params = dict(DEFAULT_PARAMS, max_animals_per_type=2)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == [["BUY_ANIMAL", "COW", 1]]
+
+
+def test_decide_still_blocks_a_third_animal_once_the_raised_cap_is_reached():
+    obs = _obs()
+    obs["market"]["inventory"] = {c: MARKET_I0 + 100_000 for c in CROPS}  # COW is the top choice
+    animal_tile = {
+        "kind": "PASTURE",
+        "animal": "COW",
+        "placed_day": 0,
+        "yield_units": 0,
+        "consecutive_unfed": 0,
+        "fed_today": True,
+        "cared_today": False,
+        "fertilizer_available": False,
+        "pending_care_bonus": 0,
+    }
+    obs["farms"][0]["tiles"][3][3] = dict(animal_tile)
+    obs["farms"][0]["tiles"][3][4] = dict(animal_tile)
+    params = dict(DEFAULT_PARAMS, max_animals_per_type=2)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
 def test_decide_plants_nothing_when_no_crop_can_mature_in_time():
     obs = _obs()
     obs["day"] = 29
