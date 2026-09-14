@@ -1373,6 +1373,14 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       hardcoded. No Kaggle submission in this task (per the user's own chosen order) - the submission
       question returns now that this is settled.
 
+Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
+(commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,
+commit `777e46a`) - most notably T8.16(d)'s `dynamic_hiring` (98% held-out) and T8.27's corrected
+workload-forecast hiring (92% held-out), plus the T8.25 WHEAT feed-restock fix. Logged to
+`data/arena/submissions.jsonl` before the API call per `SPEC-ops.md`; confirmed registered via
+`get_competition_submission` (team `Gruberx`, 159087 bytes). Score not yet checked - per this
+project's own established finding, a fresh submission's score is volatile for its first ~20 minutes.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
