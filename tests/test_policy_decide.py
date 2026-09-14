@@ -310,6 +310,40 @@ def test_decide_labor_units_reflects_the_real_dynamic_hiring_forecast_not_the_st
     assert captured.get("plant_qty") == 4
 
 
+def test_decide_labor_units_reflects_free_tiles_via_the_workload_forecast(monkeypatch):
+    # T8.32 Stage 2: free_tiles is now threaded into both hires_per_day
+    # call sites (labor_units's own early call, and the late HIRE-
+    # queuing one) - this confirms the early one actually receives it,
+    # mirroring test_decide_labor_units_reflects_the_real_dynamic_
+    # hiring_forecast_not_the_static_fallback's own shape. The base
+    # fixture's fresh, empty farm already has free_tiles=100 (every tile
+    # is None) - hand-verified directly (not guessed) that plant_qty
+    # goes 3 (default weight 0.0, an empty farm's own forecast clips to
+    # min_hires_per_day=2, labor_units=3) -> 5 (workload_forecast_free_
+    # tile_weight=0.5, labor_units=5) for otherwise-identical params.
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    obs["market"]["inventory"]["MELON"] = 1  # scarce -> highest price -> ranks first
+    obs["private"]["seeds"] = {"MELON": 100}
+
+    captured = {}
+    original = decide_module.build_task_list
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "build_task_list", spy)
+    decide(obs, DEFAULT_PARAMS)
+    assert captured.get("plant_qty") == 3
+
+    captured.clear()
+    params = dict(DEFAULT_PARAMS, workload_forecast_free_tile_weight=0.5)
+    decide(obs, params)
+    assert captured.get("plant_qty") == 5
+
+
 def test_investment_buys_keep_a_reserved_slot_and_are_emitted_after_the_sells():
     # T8.5: BUY_SEED (part of `tail`) must still get a slot even when 9
     # sellable products alone would otherwise fill all 10, and must be

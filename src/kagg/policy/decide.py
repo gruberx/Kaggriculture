@@ -1395,7 +1395,9 @@ def decide(obs: dict, params: dict) -> dict:
     # counts/n_plant_tiles): animal_tile_counts=placed_animal_type_counts,
     # crop_tile_counts=_crop_tile_counts(me["tiles"]) (own-tiles-only,
     # matching T8.26's own choice for the identical late call below),
-    # hour=current_hour, turns_per_day, money=me["money"], and
+    # hour=current_hour, turns_per_day, money=me["money"],
+    # free_tiles=free_tiles (T8.32 Stage 2, harmless at the shipped
+    # workload_forecast_free_tile_weight=0.0 default), and
     # days_remaining (hires_per_day_days_remaining, needed again
     # unchanged by the late target_hires call further down). The one
     # input genuinely NOT available this early is pending_task_count -
@@ -1420,6 +1422,7 @@ def decide(obs: dict, params: dict) -> dict:
         animal_tile_counts=placed_animal_type_counts,
         crop_tile_counts=_crop_tile_counts(me["tiles"]),
         days_remaining=hires_per_day_days_remaining,
+        free_tiles=free_tiles,
     )
     labor_units = 1 + early_target_hires
     max_plants_per_unit = params.get("max_plants_per_unit", _DEFAULT_MAX_PLANTS_PER_UNIT)
@@ -1570,6 +1573,7 @@ def decide(obs: dict, params: dict) -> dict:
         animal_tile_counts=placed_animal_type_counts,
         crop_tile_counts=_crop_tile_counts(me["tiles"]),
         days_remaining=hires_per_day_days_remaining,
+        free_tiles=free_tiles,
     )
     hires_today = me.get("hires_today", 0)
     hires: list[list] = []

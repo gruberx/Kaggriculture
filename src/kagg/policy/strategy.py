@@ -788,6 +788,22 @@ _DEFAULT_WORKLOAD_FORECAST_HIRING_AWARE = True
 # variant it accepts. Default True is bit-identical to what T8.27
 # shipped, for every caller that doesn't set this flag.
 _DEFAULT_WORKLOAD_FORECAST_SCALING_ONLY = True
+
+# T8.32 Stage 2, the user's own follow-up after Stage 1's own measured-
+# but-not-accepted joint land-gate/hiring-floor sweep (64% held-out, real
+# but short of the acceptance bar - tasks/todo.md's own T8.32 entry): the
+# forecast above has always only ever counted already-planted tiles,
+# never free/unlocked-but-unplanted land, so hiring never proactively
+# ramps ahead of newly-opened land - only reactively, once enough of it
+# is already planted by existing labor to show up in crop_tile_counts.
+# Weights free_tiles into the same forecast (see hires_per_day's own
+# docstring addendum for the exact formula). Default 0.0 (bit-identical
+# for every caller that doesn't set it, matching this module's own
+# graduated-weight convention - e.g. T8.3h's crop_self_impact_opponent_
+# weight - rather than an all-or-nothing bool). Not yet measured in
+# self-play.
+_DEFAULT_WORKLOAD_FORECAST_FREE_TILE_WEIGHT = 0.0
+
 # Matches tools/analyze_unit_economics.py's own SEASON_LENGTH_DAYS - a
 # "no days_remaining given -> assume a full season" steady-state fallback,
 # the same convention `crop_revenue_per_tile_day`/`animal_revenue_per_
@@ -1032,6 +1048,7 @@ def hires_per_day(
     animal_tile_counts: dict[str, int] | None = None,
     crop_tile_counts: dict[str, int] | None = None,
     days_remaining: int | None = None,
+    free_tiles: int | None = None,
 ) -> int:
     """How many farm hands to hire right now.
 
@@ -1154,6 +1171,25 @@ def hires_per_day(
     `days_remaining` -> steady state" convention elsewhere in this
     module. `dynamic_hiring` defaults to `False`, reproducing the exact
     prior behavior for every caller that doesn't pass the new arguments.
+
+    `free_tiles`/`workload_forecast_free_tile_weight` (T8.32 Stage 2, the
+    user's own follow-up after Stage 1's joint land-gate/hiring-floor
+    sweep measured a real, promising effect - 64% held-out - that didn't
+    quite clear the acceptance bar): the forecast above has always only
+    ever counted *already-planted* tiles, never free/unlocked-but-
+    unplanted land - so hiring never proactively ramps ahead of newly-
+    opened land, only reactively once enough of it is already planted by
+    existing labor to show up in `crop_tile_counts`. When the forecast
+    branch engages (both tile-count dicts given) and `free_tiles` is
+    also given, `free_tiles * workload_forecast_free_tile_weight` is
+    added to `total_turns` alongside `animal_turns`/`crop_turns`, before
+    the `turns_per_task` multiplication (same units as those two terms -
+    an "actions per tile-day equivalent," not literal turns). Default
+    weight `0.0` (bit-identical for every caller that doesn't set it,
+    `free_tiles` or not) - a free tile needs no WATER/HARVEST yet, only
+    an eventual PLANT, so a real weight should be small relative to 1.0
+    (a fully-planted tile's own rate), reflecting anticipated, not
+    confirmed, work.
     """
     params = params or {}
     static = params.get("hires_per_day", _DEFAULT_HIRES_PER_DAY)
@@ -1194,7 +1230,11 @@ def hires_per_day(
             for c, count in crop_tile_counts.items()
             if count > 0
         )
-        total_turns = (animal_turns + crop_turns) * turns_per_task
+        free_tile_weight = params.get(
+            "workload_forecast_free_tile_weight", _DEFAULT_WORKLOAD_FORECAST_FREE_TILE_WEIGHT
+        )
+        free_tile_turns = (free_tiles or 0) * free_tile_weight if free_tiles is not None else 0
+        total_turns = (animal_turns + crop_turns + free_tile_turns) * turns_per_task
         target = math.ceil(total_turns / turns_per_day) - 1
         target = math.ceil(target * (1 + buffer_fraction))
         return min(max(target, min_hires), max_hires)

@@ -827,6 +827,84 @@ def test_hires_per_day_workload_forecast_scaling_only_can_be_disabled_for_the_to
     assert got != scaling_only_got
 
 
+def test_hires_per_day_workload_forecast_free_tile_weight_defaults_to_zero():
+    # T8.32 Stage 2: a caller that passes free_tiles but doesn't set the
+    # new weight explicitly must get exactly today's forecast (bit-
+    # identical to omitting free_tiles altogether) - free land, on its
+    # own, must not silently change hiring pressure until the weight is
+    # deliberately turned on.
+    params = {"dynamic_hiring": True, "workload_forecast_hiring_aware": True}
+    kwargs = dict(hour=0, turns_per_day=24, animal_tile_counts={"COW": 2}, crop_tile_counts={"MELON": 5})
+    without_free_tiles = hires_per_day(params, **kwargs)
+    with_free_tiles_default_weight = hires_per_day(params, free_tiles=50, **kwargs)
+    assert with_free_tiles_default_weight == without_free_tiles
+
+
+def test_hires_per_day_workload_forecast_free_tile_weight_raises_the_forecast():
+    # T8.32 Stage 2, the user's own follow-up after T8.32 Stage 1's
+    # measured-but-not-accepted land+hiring joint sweep: hires_per_day's
+    # forecast has always counted only *already-planted* tiles, never
+    # free/unlocked-but-unplanted land - so hiring never proactively
+    # ramps ahead of newly-opened land. free_tiles * workload_forecast_
+    # free_tile_weight is added to the forecast's total_turns alongside
+    # the existing animal_turns/crop_turns terms (before the turns_per_
+    # task_estimate multiplication, for unit consistency - see
+    # hires_per_day's own docstring addendum), hand-computed below.
+    # free_tiles=50/weight=1.0 chosen so the two variants land on
+    # different clipped hire counts (4 vs 2, both verified directly via
+    # score/turns computation before writing this, matching
+    # test_hires_per_day_workload_forecast_scaling_only_can_be_disabled_
+    # for_the_total_work_variant's own convention), so this also proves
+    # the weight is actually wired to hires_per_day's output, not just
+    # to the raw total_turns math in isolation.
+    cow_actions = _animal_actions_per_tile_day(
+        "COW", 30, care_aware=False, fertilizer_income_aware=False, scaling_only=True
+    )
+    melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
+    free_tile_weight = 1.0
+    total_turns = (cow_actions * 1 + melon_actions * 10 + 50 * free_tile_weight) * 2.0
+    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)
+    params = {
+        "dynamic_hiring": True,
+        "workload_forecast_hiring_aware": True,
+        "workload_forecast_free_tile_weight": free_tile_weight,
+    }
+    got = hires_per_day(
+        params,
+        hour=12,
+        turns_per_day=24,
+        animal_tile_counts={"COW": 1},
+        crop_tile_counts={"MELON": 10},
+        free_tiles=50,
+    )
+    assert got == expected
+    # And it must actually differ from weight=0.0 for the same free_tiles -
+    # otherwise the new param isn't wired to anything.
+    zero_weight_got = hires_per_day(
+        {**params, "workload_forecast_free_tile_weight": 0.0},
+        hour=12,
+        turns_per_day=24,
+        animal_tile_counts={"COW": 1},
+        crop_tile_counts={"MELON": 10},
+        free_tiles=50,
+    )
+    assert got != zero_weight_got
+
+
+def test_hires_per_day_workload_forecast_free_tile_weight_ignored_without_tile_counts():
+    # free_tiles alone must not activate the forecast branch on its own -
+    # the branch's existing gate (both animal_tile_counts AND crop_tile_
+    # counts must be given) is unchanged; free_tiles is an additive term
+    # inside that branch, not a new way to enter it.
+    params = {
+        "dynamic_hiring": True,
+        "workload_forecast_hiring_aware": True,
+        "workload_forecast_free_tile_weight": 1.0,
+        "hires_per_day": 4,
+    }
+    assert hires_per_day(params, free_tiles=50) == 4  # falls through to the static value, as always
+
+
 def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():
     # T8.3q: kaggriculture.py's _daily_refresh_animals sets
     # fertilizer_available=True every surviving day regardless of

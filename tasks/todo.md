@@ -1519,7 +1519,7 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       follow-ups (T8.30 re-swept and confirmed rejected; T8.31 built and accepted). No Kaggle
       submission in this task - ask before any further one, as always.
 
-- [ ] T8.32 — comprehensive land+hiring re-sweep, the user's own follow-up hypothesis after seeing
+- [x] T8.32 — comprehensive land+hiring re-sweep, the user's own follow-up hypothesis after seeing
       T8.30/T8.31's results (2026-09-14): late/capped quadrant openings and the hiring floor likely
       interact - land alone can't help without hands to work it, hands alone can't help without land
       to put them on. Two research agents confirmed this precisely: the game allows 4 quadrants/100
@@ -1561,6 +1561,42 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       directly (see below), and a candidate worth revisiting later (e.g. a wider grid search around
       `(10000, 0.2, 4)`, or simply a larger held-out sample) if Stage 2 alone doesn't close the gap.
       No parameter changed; no golden-episode re-record (nothing shipped differs).
+
+      **Stage 2** (the deeper fix for the cold-start gap Stage 1's own prediction named): `hires_per_
+      day`'s forecast had always counted only *already-planted* tiles, never free/unlocked-but-
+      unplanted land, so hiring never proactively ramped ahead of newly-opened land. Added `workload_
+      forecast_free_tile_weight` (float, default `0.0`) - `free_tiles * weight` is added into the
+      forecast's `total_turns` alongside the existing `animal_turns`/`crop_turns` terms; `hires_per_
+      day` gains a new `free_tiles` parameter, threaded into both of `decide.py`'s existing call sites
+      (T8.29's own early `labor_units` call and the late HIRE-queuing one). RED tests first
+      (`test_policy_strategy.py`, 3 new: weight defaults to `0.0`/bit-identical even with `free_tiles`
+      given, a nonzero weight hand-verified to raise the forecast, `free_tiles` alone doesn't activate
+      the branch without both tile-count dicts) plus a `test_policy_decide.py` glue test mirroring
+      T8.29's own shape (fresh empty farm, `free_tiles=100` from the base fixture: `plant_qty` 3 at the
+      default weight -> 5 at `weight=0.5`, hand-verified directly before writing the assertion). Full
+      suite green (450/450), compileall/boundary clean.
+      **Measured** (`tools/measure_t832b.py`, two sweeps of `workload_forecast_free_tile_weight`
+      {0.1, 0.25, 0.5, 1.0}): **Stage A** (weight alone, shipped land gate untouched) - 0.1/0.25
+      produced zero behavioral difference (all ties, land stays locked so there's nothing extra to
+      hire for), 0.5/1.0 actively **lost** (8%/4%, worsening to 8%/8%) - confirms the predicted risk
+      exactly: proactive hiring ahead of tiles still locked behind the strict gate is pure wasted
+      cost. **Stage B** (weight combined with Stage 1's own unaccepted `(10000, 0.2, 4)`) - all four
+      weights reproduced Stage 1's own result **exactly** (working 56%, held-out 64%, identical
+      W/L counts and Wilson intervals at every weight tried) - verified this is real, not a wiring bug,
+      via a direct mid-episode check (`plant_qty` 5 -> 7 at `weight=1.0` in a realistic farm state, so
+      the mechanism does change intermediate hiring/planting decisions) - the marginal extra hiring
+      pressure from free tiles, on top of Stage 1's already-loosened land+hiring, doesn't happen to
+      flip enough of these 100 seeds' final win/loss outcome to move the aggregate number, even though
+      it measurably changes behavior mid-game. **Conclusion**: neither Stage 1 alone, Stage 2 alone, nor
+      any combination tried clears this project's own strict acceptance bar. Stage 1's `(10000, 0.2, 4)`
+      remains the most promising lead measured so far (64% held-out, real mechanism confirmed by trace)
+      but stays unaccepted; Stage 2's land-aware forecast is a real, correctly-wired mechanism that adds
+      no further measured benefit on top of Stage 1 and actively hurts without it. No parameter changed;
+      `workload_forecast_free_tile_weight` ships at its bit-identical default (`0.0`) purely so this
+      remains a named, swept knob rather than unbuilt. No golden-episode re-record (nothing shipped
+      differs). Both directions (a wider grid search around Stage 1's own winner, and/or a larger
+      held-out sample) remain open, honestly-recorded leads for a future task, not abandoned. No Kaggle
+      submission in this task - ask before any further one, as always.
 
 Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
 (commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,

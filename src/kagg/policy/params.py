@@ -140,6 +140,17 @@ DEFAULT_PARAMS = {
     # and tools/measure_t828.py for the sweep. Default True stays
     # bit-identical to what T8.27 shipped.
     "workload_forecast_scaling_only": True,
+    # T8.32 Stage 2, the user's own follow-up after Stage 1's own
+    # measured-but-not-accepted joint land-gate/hiring-floor sweep (64%
+    # held-out, real but short of the acceptance bar - tasks/todo.md's
+    # own T8.32 entry): hires_per_day's forecast has always only counted
+    # already-planted tiles, never free/unlocked-but-unplanted land, so
+    # hiring never proactively ramps ahead of newly-opened land. Weights
+    # free_tiles into the same forecast. Default 0.0 (bit-identical for
+    # every caller that doesn't set it) - not yet measured in self-play,
+    # see kagg.policy.strategy.hires_per_day's own docstring for the
+    # mechanism.
+    "workload_forecast_free_tile_weight": 0.0,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,
