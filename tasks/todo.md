@@ -1216,6 +1216,49 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
         effect Part 1 alone showed) and insufficient alone to reverse the `max_animals_per_type>1`
         rejection even where it helps most. Kept available (tested) for a future combination once
         `max_animals_per_type` itself is revisited.
+- [x] T8.26 — proactive, tile-count-derived hiring forecast (the user's own proposed formula),
+      built to test whether T8.22's remaining gap (even after T8.25's price fix) is a labor-ramp-lag
+      problem: `hires_per_day`'s existing `dynamic_hiring` path sizes today's hiring target from the
+      *currently visible* task backlog (`pending_task_count`), which only grows as the day's turns
+      reveal more work, instead of a number already known in full at hour 0 from real tile counts.
+      Ported `_crop_actions_per_tile_day`/`_animal_actions_per_tile_day` from
+      `tools/analyze_unit_economics.py` (this session's own unit-economics analysis, verified
+      directly against real WATER/FEED/CARE/HARVEST/FERTILIZE handler semantics) into `strategy.py`
+      (the shipped bundle). New `workload_forecast_hiring_aware` param + `animal_tile_counts`/
+      `crop_tile_counts`/`days_remaining` args on `hires_per_day()`: when on and both tile-count
+      dicts are given, `total_turns = (sum of per-type actions/tile-day x real tile counts) x
+      turns_per_task_estimate` (folding in movement/travel overhead once, confirmed with the user
+      not to double-count it), divided by the *full* `turns_per_day` (not the shrinking remainder,
+      so the target doesn't inflate through the day for the same real tile-derived workload),
+      buffered/clipped exactly as the existing path. `decide()` wired to pass real signals
+      unconditionally (`placed_animal_type_counts`, own-tiles-only `_crop_tile_counts(me["tiles"])`
+      - *not* the opponent-blended `_combined_crop_tile_counts`, and a real `days_remaining`).
+      RED+GREEN across `test_policy_strategy.py`/`test_policy_decide.py`, full suite green (432/432),
+      compileall/boundary clean.
+      **Measured and decisively rejected** (`tools/measure_t826.py`): **Stage 1 (alone, crop-only
+      farm, vs the plain T8.16(d) baseline) - 10%/0%, a real, decisive loss**, not noise. Traced to
+      reproducing T8.12's own original rejected mistake: the ported per-tile action functions (built
+      for `analyze_unit_economics.py`'s isolated "how much labor does one fully-tended tile need"
+      question) count routine WATER/FEED/CARE at their full per-day rate, but `pending_task_count`
+      (the existing reactive path) deliberately *excludes* exactly these ops - T8.16(a)'s own
+      measured fix, for the identical reason: a tile needs exactly one WATER/FEED per day
+      *regardless* of labor size, so counting it as scaling demand over-hires without a matching
+      gain. **Stage 2** (combined with T8.25's `wheat_urgency_reserve=3` fix + `max_animals_per_
+      type` at 3/4) confirmed no rescue either: cap=3 38%/42% (vs T8.25 alone's 40%/44% -
+      statistically indistinguishable, marginally worse), cap=4 16%/24% (vs T8.25 alone's 14%/22% -
+      likewise indistinguishable) - the proactive forecast adds no measurable benefit on top of
+      T8.25's already-real gain, and actively hurts on its own. Stays off by default (`False`,
+      already the code's own default - no change needed there). Kept available (tested) for a
+      future corrected version that excludes routine per-day-regardless-of-labor ops from the
+      forecast, matching `pending_task_count`'s own already-fixed exclusion - not built here.
+      **Combined T8.25+T8.26 outcome**: the user's original question ("is limited hiring the main
+      reason for poor results?") turned out to have a more fundamental answer underneath it - a
+      real price-ceiling bug (T8.25) that was silently causing animal starvation regardless of labor
+      supply, which the user's own sharp follow-up question (burstiness/averaging risk) led directly
+      to discovering. Fixing it substantially improves (but does not reverse) the animal-economics
+      picture; a *proactive* hiring forecast on top, as directly proposed, measured worse, not
+      better - the existing reactive `dynamic_hiring` path (T8.16(d)) remains the best-measured
+      hiring mechanism. `max_animals_per_type` stays at its T8.22-rejected default of 1.
 
 ## Not planned yet (see plan.md)
 
@@ -1275,6 +1318,14 @@ targets — gated behind a Stage-1 baseline that doesn't exist yet).
   2/3/4 - see T8.22's own trace), decisively enough that the self-impact half never got to matter in
   practice. Stays a real gap only if `max_animals_per_type>1` is revisited with the labor-gating fix
   T8.22's own entry names (real spare labor before allowing a second animal).
+  **T8.25 found the escapes were not primarily a labor problem at all**: the true cause was the
+  WHEAT price-ceiling bug (animals starved because there was no WHEAT to feed with, not because no
+  hand was free to FEED) - fixing it (`wheat_urgency_reserve`) substantially closes the gap
+  (cap=3: 14%/14% -> 40%/44%) without any labor change. T8.26 then tested whether a *proactive*
+  hiring forecast closes the remainder - measured and decisively rejected (see T8.26's own entry).
+  The self-impact half of this question, and the FEED-vs-PLANT task-priority question T8.26's own
+  plan named, both remain untested - `max_animals_per_type` never reached a net win in aggregate
+  self-play even with both fixes, so neither mechanism yet has a scenario where it would bind.
 
 **Open questions recorded for later, not forgotten (the user's own request, 2026-09-13, T8.3k):**
 - **Labor cost (farmer turns) is still completely unranked**, a distinct gap from T8.3k's seed-cost

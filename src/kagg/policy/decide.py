@@ -1392,9 +1392,26 @@ def decide(obs: dict, params: dict) -> dict:
     # hands exist - more labor doesn't create more of this work, unlike
     # PLANT/HARVEST, which scale with how many hands are free to act.
     pending_task_count = sum(1 for t in tasks if t.op not in _ROUTINE_RECURRING_OPS)
+    # T8.26: real tile-count signals passed unconditionally, same
+    # "always give the real signal, let the callee's own flag decide"
+    # pattern every other params-gated mechanism in this module follows
+    # (e.g. animal_care_aware passed to build_task_list regardless of
+    # whether it's on) - hires_per_day's own workload_forecast_hiring_
+    # aware flag is what actually gates whether these are used.
+    # placed_animal_type_counts is the same six-purpose tile scan's own
+    # dict computed above; _crop_tile_counts(me["tiles"]) is deliberately
+    # own-tiles-only, NOT the opponent-blended _combined_crop_tile_counts
+    # used for the unrelated crop-self-impact mechanism - hiring workload
+    # is about our own farm's labor demand, not a market-price signal.
+    hires_per_day_days_remaining = max(
+        0, params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS) - current_day
+    )
     target_hires = hires_per_day(
         params, pending_task_count=pending_task_count, hour=current_hour,
         turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY), money=me["money"],
+        animal_tile_counts=placed_animal_type_counts,
+        crop_tile_counts=_crop_tile_counts(me["tiles"]),
+        days_remaining=hires_per_day_days_remaining,
     )
     hires_today = me.get("hires_today", 0)
     hires: list[list] = []

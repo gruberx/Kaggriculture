@@ -217,6 +217,49 @@ def test_decide_dynamic_hiring_excludes_routine_watering_from_the_task_count(mon
     assert expected < len(tasks)  # the exclusion must actually remove something
 
 
+def test_decide_passes_real_tile_counts_and_days_remaining_to_hires_per_day(monkeypatch):
+    # T8.26: decide() must feed hires_per_day() the real, already-computed
+    # tile-count signals (placed_animal_type_counts, own-tiles-only
+    # _crop_tile_counts - NOT the opponent-blended _combined_crop_tile_
+    # counts, which is for the unrelated crop-self-impact mechanism) and a
+    # real days_remaining, regardless of workload_forecast_hiring_aware's
+    # own on/off state - hires_per_day itself is what gates whether they're
+    # used, matching every other "always pass the real signal, let the
+    # callee's own flag decide" pattern in this module (e.g. animal_care_
+    # aware passed to build_task_list unconditionally).
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    obs["day"] = 5
+    tiles = obs["farms"][0]["tiles"]
+    tiles[3][3] = {
+        "kind": "PASTURE", "animal": "COW", "placed_day": 0, "yield_units": 0,
+        "consecutive_unfed": 0, "fed_today": True, "cared_today": False,
+        "fertilizer_available": False, "pending_care_bonus": 0,
+    }
+    tiles[0][0] = {
+        "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": False,
+        "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+        "fertilized_until_day": -1,
+    }
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "animal_tile_counts" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, dynamic_hiring=True))
+
+    assert captured.get("animal_tile_counts") == {"COW": 1}
+    assert captured.get("crop_tile_counts") == {"WHEAT": 1}
+    season_length_days = DEFAULT_PARAMS.get("season_length_days", 30)
+    assert captured.get("days_remaining") == season_length_days - 5
+
+
 def test_investment_buys_keep_a_reserved_slot_and_are_emitted_after_the_sells():
     # T8.5: BUY_SEED (part of `tail`) must still get a slot even when 9
     # sellable products alone would otherwise fill all 10, and must be

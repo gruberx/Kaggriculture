@@ -727,6 +727,27 @@ _DEFAULT_HIRE_CASH_RESERVE = 0
 # every caller that doesn't set it - see hires_per_day's own docstring.
 _DEFAULT_HIRE_BUFFER_FRACTION = 0.0
 
+# T8.26: **measured and decisively rejected** (tools/measure_t826.py: 10%/
+# 0% alone on a crop-only farm against the plain T8.16(d) baseline) -
+# traced to reproducing T8.12's own original mistake: the ported per-tile
+# action functions below count routine WATER/FEED/CARE at their full
+# per-day rate, but pending_task_count (the existing reactive path)
+# deliberately excludes exactly these ops (T8.16(a)'s own measured fix,
+# for the same reason - a tile needs one WATER/FEED per day regardless of
+# labor size, so counting it as scaling demand over-hires with no matching
+# gain). See kagg.policy.params.DEFAULT_PARAMS's own comment for the full
+# measured story. Off by default - the pending_task_count-derived
+# (reactive) path stays hires_per_day's default behavior for every caller
+# that doesn't set this. Kept available (tested) for a future corrected
+# version that excludes routine ops from the forecast - not built here.
+_DEFAULT_WORKLOAD_FORECAST_HIRING_AWARE = False
+# Matches tools/analyze_unit_economics.py's own SEASON_LENGTH_DAYS - a
+# "no days_remaining given -> assume a full season" steady-state fallback,
+# the same convention `crop_revenue_per_tile_day`/`animal_revenue_per_
+# tile_day` already use elsewhere in this module. decide() passes the
+# episode's real days_remaining in practice.
+_DEFAULT_WORKLOAD_FORECAST_DAYS_REMAINING = 30
+
 # **dynamic_hiring: originally measured and rejected (T8.12), now
 # measured and ACCEPTED (T8.16)**. T8.12's own rejection: 2/50 working,
 # 4/50 holdout, 0 ties either block - traced (seed 900) to `len(tasks)`
@@ -794,6 +815,57 @@ _DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION = 0.1
 # already prevents nearly all land purchases - stays disabled (99 is
 # unreachable on any real board).
 _DEFAULT_LAND_BUY_MIN_FRONTIER_DISTANCE = 99
+
+
+def _crop_actions_per_tile_day(crop: str, days_remaining: int, use_fertilizer: bool) -> float:
+    """Average farmer-actions/day for one fully-tended tile of `crop` -
+    T8.26, ported verbatim from tools/analyze_unit_economics.py (this
+    session's own unit-economics analysis, verified directly against
+    kaggriculture.py's own handlers) into the shipped bundle, so
+    `hires_per_day`'s workload forecast below can use it without a
+    tools/-only dependency.
+
+    WATER 1/day for the tile's whole life (anti-weed insurance, not just
+    the yield bonus window); HARVEST once for a one-time crop (one call
+    empties all banked yield_units and clears the tile) or once per
+    scheduled production tick for an ongoing crop (harvested promptly,
+    matching `_animal_full_care_units`'s own "labor-unconstrained"
+    assumption); FERTILIZE (optional) once every 3 days
+    (fertilized_until_day covers today + 2 more); PLANT once at the
+    start.
+    """
+    total_yield, tile_days = _crop_yield_and_tile_days(crop, days_remaining)
+    water_actions = tile_days
+    harvest_actions = total_yield if CROPS[crop]["ongoing"] else 1
+    fertilize_actions = math.ceil(tile_days / 3) if use_fertilizer else 0
+    plant_actions = 1
+    total_actions = water_actions + harvest_actions + fertilize_actions + plant_actions
+    return total_actions / tile_days
+
+
+def _animal_actions_per_tile_day(
+    animal: str, days_remaining: int, care_aware: bool, fertilizer_income_aware: bool
+) -> float:
+    """Average farmer-actions/day for one fully-tended animal - T8.26,
+    ported verbatim from tools/analyze_unit_economics.py (see
+    `_crop_actions_per_tile_day`'s own docstring for why it lives here
+    now too).
+
+    FEED 1/day (an unfed animal risks escape); CARE (optional) 1/day;
+    COLLECT_FERTILIZER (optional) 1/day - fertilizer_available is set
+    True at the end of *every* day the animal survives, fed or not
+    (`_daily_refresh_animals`); HARVEST once per scheduled production
+    tick (`forecast_animal_schedule`'s own count, harvested promptly);
+    BUILD_*/PICKUP/PLACE: 3, one-time setup.
+    """
+    schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining)
+    feed_actions = days_remaining
+    care_actions = days_remaining if care_aware else 0
+    collect_fertilizer_actions = days_remaining if fertilizer_income_aware else 0
+    harvest_actions = len(schedule)
+    setup_actions = 3
+    total_actions = feed_actions + care_actions + collect_fertilizer_actions + harvest_actions + setup_actions
+    return total_actions / days_remaining
 
 
 def should_buy_land(
@@ -870,6 +942,9 @@ def hires_per_day(
     hour: int = 0,
     turns_per_day: int = 24,
     money: float | None = None,
+    animal_tile_counts: dict[str, int] | None = None,
+    crop_tile_counts: dict[str, int] | None = None,
+    days_remaining: int | None = None,
 ) -> int:
     """How many farm hands to hire right now.
 
@@ -920,6 +995,50 @@ def hires_per_day(
     farm. Default `0.0` (no buffer), reproducing the exact pre-T8.16
     formula for every caller that doesn't set it.
 
+    `workload_forecast_hiring_aware`/`animal_tile_counts`/`crop_tile_
+    counts` (T8.26, the user's own proposed formula): a *proactive*
+    alternative to the `pending_task_count` path above, which sizes the
+    target from the currently-*visible* task backlog - a number that only
+    grows as the day's turns reveal more work, so it structurally lags a
+    day's real, already-known-at-hour-0 workload. When this flag is set
+    and both tile-count dicts are given (real per-type tile counts -
+    `decide()` passes `placed_animal_type_counts`/`_crop_tile_counts(me[
+    "tiles"])`, own tiles only), the target is derived directly from them
+    instead: `total_turns = (sum(_animal_actions_per_tile_day(a,
+    days_remaining, animal_care_aware, animal_fertilizer_income_aware) *
+    animal_tile_counts[a] for each type present) + sum(_crop_actions_per_
+    tile_day(c, days_remaining, use_fertilizer) * crop_tile_counts[c] for
+    each type present)) * turns_per_task_estimate` - the same task-count-
+    to-turn-count conversion the `pending_task_count` path above already
+    uses (folding in movement/travel overhead once, not a second additive
+    term), buffered by `hire_buffer_fraction` and clipped to `[min_hires_
+    per_day, max_hires_per_day]`, same as always.
+
+    Divided by the *full* `turns_per_day`, not `turns_left_today` - this
+    is a fixed whole-day forecast computed from tile counts known in full
+    at hour 0, not a shrinking backlog, so dividing by the remaining
+    turns would keep inflating the target through the day for the exact
+    same real work. Computed identically regardless of what hour it's
+    called from, so `decide()`'s own hire-emission loop naturally
+    front-loads the day's hires into its first turn(s) instead of
+    trickling them out as the day's turns tick by.
+
+    `animal_care_aware`/`animal_fertilizer_income_aware`/`use_fertilizer`
+    are read from `params` (already-named parameters elsewhere in this
+    module) rather than taken as separate arguments here, so this
+    forecast automatically matches whatever care/fertilizer mechanisms
+    are actually turned on for the episode - a farm not doing CARE
+    shouldn't be staffed as if it were.
+
+    Falls back to the `pending_task_count` path (or the plain static
+    value) whenever the flag is off, or on but either tile-count dict is
+    `None`/`days_remaining` is `None` - bit-identical for every existing
+    caller that doesn't pass the new arguments (`days_remaining` alone
+    defaults to a full season - see `_DEFAULT_WORKLOAD_FORECAST_DAYS_
+    REMAINING` - once both tile-count dicts are actually given, since a
+    caller that bothers to pass real tile counts but no `days_remaining`
+    still wants *a* real forecast, not a silent fallback).
+
     Graceful fallback to the plain static value (not an error) whenever
     `dynamic_hiring` is off, or on but `pending_task_count` is `None` (no
     task-list information given) - matches `net_of_cost`'s own "no
@@ -931,17 +1050,44 @@ def hires_per_day(
     static = params.get("hires_per_day", _DEFAULT_HIRES_PER_DAY)
     if not params.get("dynamic_hiring", _DEFAULT_DYNAMIC_HIRING):
         return static
-    if pending_task_count is None:
-        return static
     min_hires = params.get("min_hires_per_day", _DEFAULT_MIN_HIRES_PER_DAY)
     max_hires = params.get("max_hires_per_day", _DEFAULT_MAX_HIRES_PER_DAY)
     cash_reserve = params.get("hire_cash_reserve", _DEFAULT_HIRE_CASH_RESERVE)
     if money is not None and money < cash_reserve:
         return min_hires
     turns_per_task = params.get("turns_per_task_estimate", _DEFAULT_TURNS_PER_TASK_ESTIMATE)
+    buffer_fraction = params.get("hire_buffer_fraction", _DEFAULT_HIRE_BUFFER_FRACTION)
+    workload_forecast_aware = params.get(
+        "workload_forecast_hiring_aware", _DEFAULT_WORKLOAD_FORECAST_HIRING_AWARE
+    )
+    if workload_forecast_aware and animal_tile_counts is not None and crop_tile_counts is not None:
+        effective_days_remaining = (
+            days_remaining if days_remaining is not None else _DEFAULT_WORKLOAD_FORECAST_DAYS_REMAINING
+        )
+        animal_care_aware = params.get("animal_care_aware", False)
+        animal_fertilizer_income_aware = params.get("animal_fertilizer_income_aware", False)
+        use_fertilizer = params.get("use_fertilizer", False)
+        animal_turns = sum(
+            _animal_actions_per_tile_day(
+                a, effective_days_remaining, animal_care_aware, animal_fertilizer_income_aware
+            )
+            * count
+            for a, count in animal_tile_counts.items()
+            if count > 0
+        )
+        crop_turns = sum(
+            _crop_actions_per_tile_day(c, effective_days_remaining, use_fertilizer) * count
+            for c, count in crop_tile_counts.items()
+            if count > 0
+        )
+        total_turns = (animal_turns + crop_turns) * turns_per_task
+        target = math.ceil(total_turns / turns_per_day) - 1
+        target = math.ceil(target * (1 + buffer_fraction))
+        return min(max(target, min_hires), max_hires)
+    if pending_task_count is None:
+        return static
     turns_left_today = max(1, turns_per_day - hour)
     needed_unit_turns = pending_task_count * turns_per_task
     target = math.ceil(needed_unit_turns / turns_left_today) - 1
-    buffer_fraction = params.get("hire_buffer_fraction", _DEFAULT_HIRE_BUFFER_FRACTION)
     target = math.ceil(target * (1 + buffer_fraction))
     return min(max(target, min_hires), max_hires)
