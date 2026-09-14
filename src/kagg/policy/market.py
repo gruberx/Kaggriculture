@@ -167,6 +167,11 @@ def sell_orders(
 _DEFAULT_WHEAT_RESTOCK_THRESHOLD = 5
 _DEFAULT_WHEAT_RESTOCK_QTY = 10
 _DEFAULT_WHEAT_MAX_BUY_PRICE = 40
+# T8.25 Part 2, off by default (0 - see the "> 0" gate below) until
+# measured: 0 means no urgency buffer is configured, i.e. the override
+# below never fires and every existing caller keeps the plain price-cap
+# behavior it had before this param existed.
+_DEFAULT_WHEAT_URGENCY_RESERVE = 0
 
 
 def buy_wheat_order(
@@ -190,6 +195,29 @@ def buy_wheat_order(
     False whenever no animal is placed and none is the current investment
     choice. Defaults to True so every existing caller keeps restocking
     unconditionally, matching pre-T8.3l behavior.
+
+    T8.25: `wheat_max_buy_price` (below) was found to be a real, previously
+    undiscovered bug, not a deliberately-tuned ceiling - a static, never-
+    swept $40 cap (no measured-history comment, unlike nearly every other
+    tunable in this module) that silently blocks *all* restocking for the
+    rest of the episode once WHEAT's market price drifts past it, which it
+    structurally does every sufficiently long game (nobody grows WHEAT at
+    scale - crop_revenue_per_tile_day never favors it - so there is no
+    supply-side counterweight to steady town/shop consumption). Traced
+    directly (seed 900): a 4-5 animal farm's shed buffer drains to zero by
+    day 20 once price crosses $40 around day 17 - a 10-day feed drought
+    matching real escape events exactly. See params.py's own
+    wheat_max_buy_price comment for the resweep's measured story.
+
+    `wheat_urgency_reserve` (T8.25 Part 2): when `wheat_on_hand` is at or
+    below this reserve (and > 0, i.e. explicitly configured) and
+    `feed_needed`, the price cap is ignored entirely for this turn's
+    restock - an escaped animal (sunk purchase price + all its future
+    revenue) is worth paying above the normal ceiling to avoid, bounded
+    only by money itself (the real engine's own BUY_PRODUCT handler
+    already rejects an order the farm can't afford - nothing here needs to
+    duplicate that check). Defaults to 0 (disabled): every existing caller
+    that doesn't pass it keeps the plain price-cap behavior unchanged.
     """
     if not feed_needed:
         return None
@@ -197,10 +225,13 @@ def buy_wheat_order(
     threshold = params.get("wheat_restock_threshold", _DEFAULT_WHEAT_RESTOCK_THRESHOLD)
     if wheat_on_hand >= threshold:
         return None
+    qty = params.get("wheat_restock_qty", _DEFAULT_WHEAT_RESTOCK_QTY)
+    urgency_reserve = params.get("wheat_urgency_reserve", _DEFAULT_WHEAT_URGENCY_RESERVE)
+    if urgency_reserve > 0 and wheat_on_hand <= urgency_reserve:
+        return ["BUY_PRODUCT", "WHEAT", qty]
     max_price = params.get("wheat_max_buy_price", _DEFAULT_WHEAT_MAX_BUY_PRICE)
     if wheat_price > max_price:
         return None
-    qty = params.get("wheat_restock_qty", _DEFAULT_WHEAT_RESTOCK_QTY)
     return ["BUY_PRODUCT", "WHEAT", qty]
 
 

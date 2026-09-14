@@ -197,6 +197,41 @@ def test_buy_wheat_order_restocks_when_low_and_affordable():
     assert order == ["BUY_PRODUCT", "WHEAT", 10]
 
 
+def test_buy_wheat_order_urgency_override_ignores_price_cap_when_critically_low():
+    # T8.25 Part 2: once wheat_on_hand is at or below wheat_urgency_reserve,
+    # an escaped animal is worth more than the price ceiling was ever meant
+    # to protect against - see kagg.policy.market's own module docstring
+    # addendum and the plan's traced seed-900 story (WHEAT price drifting
+    # past wheat_max_buy_price for the entire rest of the season).
+    order = buy_wheat_order(
+        wheat_on_hand=0,
+        wheat_price=1000,
+        params={"wheat_max_buy_price": 40, "wheat_urgency_reserve": 2, "wheat_restock_threshold": 5, "wheat_restock_qty": 10},
+    )
+    assert order == ["BUY_PRODUCT", "WHEAT", 10]
+
+
+def test_buy_wheat_order_urgency_override_is_inactive_above_the_reserve():
+    # Still price-gated as normal once wheat_on_hand clears the urgency
+    # reserve, even though it's still below the restock threshold.
+    order = buy_wheat_order(
+        wheat_on_hand=3,
+        wheat_price=1000,
+        params={"wheat_max_buy_price": 40, "wheat_urgency_reserve": 2, "wheat_restock_threshold": 5},
+    )
+    assert order is None
+
+
+def test_buy_wheat_order_urgency_override_defaults_to_disabled():
+    # Bit-identical to pre-T8.25 behavior for every existing caller that
+    # doesn't pass wheat_urgency_reserve - the price cap alone still
+    # blocks the purchase even at wheat_on_hand=0.
+    order = buy_wheat_order(
+        wheat_on_hand=0, wheat_price=1000, params={"wheat_max_buy_price": 40, "wheat_restock_threshold": 5}
+    )
+    assert order is None
+
+
 def test_market_orders_never_emits_buy_product_for_anything_but_wheat():
     # tasks/plan.md T3.3's literal acceptance criterion.
     shed = _full_shed()

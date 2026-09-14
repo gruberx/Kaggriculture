@@ -1171,6 +1171,52 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       (bit-identical), kept available (tested) - a real, working mechanism without yet a self-play
       case that needs it.
 
+- [x] T8.25 — fix the WHEAT feed-restock price ceiling (`wheat_max_buy_price`), a real,
+      previously undiscovered bug found while investigating the user's own hiring/burstiness
+      questions about T8.22's collapse. **Root cause** (verified directly against
+      `kagg.policy.market.buy_wheat_order`): a static, never-swept $40 cap silently blocks *all*
+      WHEAT feed restocking once market price drifts past it, with no urgency override - and WHEAT
+      price drifts upward for the *entire* season structurally (nobody grows it at scale, T8.24's
+      own finding, so town/shop consumption has no supply-side counterweight). Traced (seed 900):
+      price crosses $40 around day 25 with 0 animals (harmless), ~day 22 with 1 (buffer barely
+      survives), ~day 17 with 4-5 (buffer drains to 0 by day 20 - a 10-day feed drought matching
+      T8.22's own escape events, turns 504/528/624, exactly).
+      **Part 1** (`market.py`): re-swept `wheat_max_buy_price` itself as a plain scalar (80, 150,
+      effectively unbounded) - project precedent (`land_purchase_threshold_money`/`hires_per_day`).
+      **Part 2**: new `wheat_urgency_reserve` param - when `wheat_on_hand` is at or below it (and
+      `> 0`, i.e. explicitly configured) and `feed_needed`, `buy_wheat_order` ignores the price cap
+      entirely for that turn, bounded only by money. RED+GREEN in `test_policy_market.py`, full
+      suite green, compileall/boundary clean.
+      **Measured** (`tools/measure_t825.py`/`measure_t825b.py`, `tools/trace_t825.py`):
+      - **Part 1 alone, unconditionally raising the cap - a real, decisive net LOSS** for the
+        `animal_care_aware`-alone (single-animal) scenario: 12%/28% (working/holdout), identical
+        across all three values tried (80/150/1,000,000). Traced directly (seeds 900/100): price
+        does cross $40 (48-53), but that single animal's shed buffer already survives to episode
+        end *without* any restock above $40 - raising the cap just buys the same already-surviving
+        buffer back at a worse price, ~$200-300/episode wasted with no escape ever actually at
+        risk in that scenario.
+      - **Part 2 alone (cap left at 40), the real fix**: `wheat_urgency_reserve=3` found
+        **bit-identical in practice** to Part 1's blanket raise in every comparison run (identical
+        W/L splits down to the exact count) - the restock-threshold gate (`wheat_on_hand <
+        wheat_restock_threshold=5`) means on-hand stock is already at or below the urgency reserve
+        by the time a restock is even attempted once price has drifted past $40, so the two designs
+        converge. Substantially closes (but does not reverse) T8.22's own decisively-rejected
+        `max_animals_per_type` sweep: cap=2 28%/24% -> 36%/26%, **cap=3 14%/14% -> 40%/44%** (the
+        closest to parity of any cap tried across either session), cap=4 2%/4% -> 14%/22% - a real,
+        large improvement at every cap, not noise, but still a net loss in aggregate self-play.
+      - **Seed-900 trace directly confirms the mechanism** (`tools/trace_t825.py`, cap=4): without
+        the fix, all 5 animals are gone by episode end (escaped from neglect) and the shed sits at
+        a permanent WHEAT zero for the final 263 turns; **with the fix, all 5 animals survive the
+        full season**, the zero-stock run drops to 1 turn, and final money is actually *higher*
+        than the plain baseline (46101 vs 41365, +11.5%) - the root-cause diagnosis holds up under
+        direct inspection, not just aggregate win rate.
+      - Both `wheat_max_buy_price` (stays 40) and `wheat_urgency_reserve` (stays 0/off) are **kept
+        at their pre-fix defaults** - real, working, decisively-traced mechanisms, but a net loss at
+        today's shipped `max_animals_per_type=1` (the same single-animal-buffer-already-survives
+        effect Part 1 alone showed) and insufficient alone to reverse the `max_animals_per_type>1`
+        rejection even where it helps most. Kept available (tested) for a future combination once
+        `max_animals_per_type` itself is revisited.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
@@ -1209,6 +1255,11 @@ targets — gated behind a Stage-1 baseline that doesn't exist yet).
   measurement explicitly could not test contested demand (the harness has no way to bias the
   opponent toward animal purchases); remains a real, unmodeled gap if a future session finds a way
   to exercise it.
+  **A third, related but distinct issue found and fixed by T8.25**: independent of any opponent
+  contested-demand pressure, WHEAT's own market price drifts past `wheat_max_buy_price` from
+  ordinary town/shop consumption alone, in every sufficiently long game - a static, never-swept cap
+  was silently blocking all feed restocking for the rest of the season once that happened, with no
+  urgency override. See T8.25's own entry above for the full traced story and measured fix.
 - **Animal-product self-impact + escape risk, once hiring lifts the one-animal-per-type cap** - the
   user's own observation: WOOL/MILK/EGG overproduction from stacking animals is a structural
   non-issue *today* only because of a hard cap in `decide.py` ("never pursue a second instance of an

@@ -78,7 +78,37 @@ DEFAULT_PARAMS = {
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,
     "wheat_restock_qty": 10,
+    # T8.25 Part 1: found to be a real, previously undiscovered bug rather
+    # than a deliberately-tuned ceiling - see kagg.policy.market.buy_
+    # wheat_order's own comment for the traced story (a static, never-
+    # swept cap that silently blocks all feed restocking once market
+    # price structurally drifts past it, every sufficiently long game).
+    # **Re-swept and NOT raised**: tools/measure_t825.py's Stage 1 found
+    # unconditionally raising this cap (80/150/1_000_000, all three tried,
+    # identical results) is a real, decisive net LOSS for the animal_care_
+    # aware-alone scenario (12%/28%) - traced directly (a single animal's
+    # shed buffer already survives to episode end without any restock
+    # above $40; raising the cap just buys the same already-surviving
+    # buffer back at a worse price, ~$200-300/episode wasted with no
+    # escape ever actually at risk there). wheat_urgency_reserve below is
+    # the real, working fix - a targeted override, not a blanket raise.
+    # Stays at 40, unchanged.
     "wheat_max_buy_price": 40,
+    # T8.25 Part 2: 0 disables the override below (see buy_wheat_order's
+    # own comment). **Measured, real, working - but kept off by default**:
+    # tools/measure_t825b.py found wheat_urgency_reserve=3 alone (cap left
+    # at 40) bit-identical in practice to Part 1's blanket raise (the
+    # restock-threshold gate means on-hand stock is already at or below
+    # the reserve by the time a restock is attempted post-$40) - it closes
+    # T8.22's own max_animals_per_type rejection substantially (cap=3:
+    # 14%/14% -> 40%/44%) and directly confirmed via seed-900 trace
+    # (tools/trace_t825.py): 5/5 animals now survive the full season vs
+    # 0/5 before, final money +11.5% on that seed. But it does NOT reverse
+    # T8.22's rejection in aggregate, and - like Part 1 - is a net loss at
+    # today's shipped max_animals_per_type=1 (the same single-animal
+    # buffer-already-survives effect). Kept available (tested) for a
+    # future combination once max_animals_per_type itself is revisited.
+    "wheat_urgency_reserve": 0,
     # T8.1: "SHED" (shed-anchored placement) is implemented and tested,
     # but T8.3b's clean, isolated re-measurement (on top of T8.2+T8.3)
     # found it a real net loss even combined with the fallback below.
