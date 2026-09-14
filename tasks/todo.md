@@ -1015,9 +1015,17 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       gains `parallel_animal_acquisition` (default `False`, bit-identical): when on, `BUILD_*` and
       `PICKUP` both fire the same call whenever they're independently actionable, instead of the old
       first-match-wins chain (up to 3 sequential turns even with 2+ free labor units). RED tests +
-      GREEN in `test_policy_tasks.py`; full suite green. **Not yet self-play measured** -
-      `tools/measure_t818.py` written (hires_per_day=2 base, since the effect only shows once a real
-      second hand exists), not yet run this session.
+      GREEN in `test_policy_tasks.py`; full suite green. **Measured - 100% ties on both blocks**
+      (0W/0L/50T working, 0W/0L/50T holdout, `tools/measure_t818.py`, `hires_per_day=2` base against
+      the new T8.16(d) default baseline): candidate and baseline produced byte-identical outcomes on
+      every one of the 100 seeds tested - not a rejection, a genuine no-op, consistent with the
+      mechanism's own stated prediction ("a null result here is plausible... not that the mechanism
+      is wrong"). Most likely explanation: with every `animal_*_aware` flag still off by default,
+      COW/SHEEP/GOOSE essentially never outrank a crop in `_top_investment_choice` under these
+      seeds/this baseline, so `BUY_ANIMAL` (and therefore the parallelized BUILD/PICKUP pipeline)
+      never actually fires - T8.17 (below) is the direct test of whether that changes. Kept available
+      (tested, off by default) - worth re-measuring once T8.17 makes animal acquisition a real,
+      regular occurrence in self-play.
 - [x] T8.19 — a small crop basket (`portfolio_basket_size`) instead of always the single top-ranked
       product. Fully wired (`_top_crop_basket`, round-robin `plant_crop`/`plant_qty`, a cumulative-
       spendable multi-crop seed-buying loop in `decide.py`; `tasks.py`'s plant branch accepts a
