@@ -1463,7 +1463,7 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       kept as a record of the re-test. No seed-900 trace or golden-episode re-record needed (nothing
       changed). No Kaggle submission in this task - ask before any further one, as always.
 
-- [ ] T8.31 — let animals compete for investment, not just win-or-nothing against the single top crop
+- [x] T8.31 — let animals compete for investment, not just win-or-nothing against the single top crop
       (the second of T8.29's own named follow-ups, same user request as T8.30 above). Confirmed
       structurally this session via direct `score_portfolio` computation: at day 0 (fresh market),
       MELON scores ~119/tile-day vs COW's ~23, and even saturating a single crop type to 25+ tiles
@@ -1484,6 +1484,40 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       flip per this session's own direct computation) is far too wide for any margin in a plausible
       range to matter - `investment_commit_margin` is not the lever. This is real, decisive evidence
       that Stage 1's new-mechanism approach is necessary, not a wasted detour.
+
+      **Stage 1** (the real fix, new mechanism): added `always_pursue_one_animal` (bool, `decide.py`/
+      `params.py`/`policy.json`) - when set and the farm has no animal anywhere in any form (not
+      placed, not stuck in the shed, nothing in `farmer_inventory` for any animal type), the single
+      best-scoring animal (via new helper `_top_animal_choice`, mirroring `_top_investment_choice`'s
+      animal branch and maturity check but scored via `score_portfolio` **without** ever comparing
+      against `best_crop_score`) is pursued in parallel with whatever crop the normal ranking already
+      picked - inserted right after `have_animal_anywhere` is computed in `decide()`, downstream of
+      the existing `stuck_animal`/`max_animals_per_type` gates, which still take over unaffected once
+      any animal exists. RED tests first (`test_policy_decide.py`, 6 new: 3 for `_top_animal_choice`
+      in isolation - best animal wins, skips one that can't mature in time, `None` once nothing can -
+      and 3 for `decide()`'s new parallel path - explicit-off reproduces the pre-T8.31 either/or
+      behavior bit-identically, `True` queues `BUY_ANIMAL` alongside the crop's own `BUY_SEED`, and
+      the path correctly stops firing once any animal already exists anywhere). Fixing exposed 3 more
+      tests whose intent was unrelated to this new mechanism (fertilizer-priority, wheat-restock-
+      ping-pong) - fixed the same way as T8.29's own churn, by pinning `always_pursue_one_animal=False`
+      explicitly.
+      **Measured** (`tools/measure_t831.py`, the flag alone against the checked-in baseline):
+      **working 94% (47W/3L/0T), holdout 96% (48W/2L/0T)**, Wilson [0.865, 0.989] - a decisive,
+      accepted win, stronger than the prediction stated up front ("genuinely uncertain in direction").
+      Traced (`tools/trace_t831.py`, seed 900): the candidate acquires a COW by day 1 and holds it the
+      entire game (zero animals on the baseline throughout, confirming the structural bias was real,
+      not just theoretical), final money slightly *higher* on this seed too (37023 vs 36814, +0.6%)
+      even with the 2nd quadrant opening one day later than the baseline. Default flipped to `True` in
+      `params.py`/`policy.json`. Full suite green (446/446), compileall/boundary clean.
+      Golden episodes re-recorded - an honest, notable finding, not glossed over: **all six fixed
+      seeds moved lower** (e.g. starter/seed2: 46745 -> 42108, -9.9%) despite the large, decisive
+      96%-holdout self-play win - the real ongoing spend of always acquiring an animal (cost + feed)
+      is a real cost these six particular seeds don't happen to recoup, while the much larger 100-seed
+      self-play sample does recoup it on net (and seed 900's own trace shows the opposite direction
+      directly) - genuine seed-to-seed variance, not a sign the fix is wrong; the self-play win rate
+      is the real acceptance signal, not six fixed numbers. This closes both of T8.29's own named
+      follow-ups (T8.30 re-swept and confirmed rejected; T8.31 built and accepted). No Kaggle
+      submission in this task - ask before any further one, as always.
 
 Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
 (commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,

@@ -19,6 +19,7 @@ from kagg.policy.decide import (
     _combined_crop_tile_counts,
     _crop_has_time_to_mature,
     _crop_tile_counts,
+    _top_animal_choice,
     _top_crop_basket,
     _top_investment_choice,
     decide,
@@ -580,7 +581,11 @@ def test_decide_fertilizes_when_explicitly_enabled():
     }
     obs["farms"][0]["farmer"] = [2, 2]
     obs["private"]["inventories"] = [{"FERTILIZER": 1}]
-    action = decide(obs, dict(DEFAULT_PARAMS, use_fertilizer=True))
+    # always_pursue_one_animal explicitly off (T8.31's shipped default is
+    # True): this test is about FERTILIZE's own priority, not the new
+    # parallel animal-acquisition mechanism, which would otherwise move
+    # the farmer toward the animal instead of fertilizing this turn.
+    action = decide(obs, dict(DEFAULT_PARAMS, use_fertilizer=True, always_pursue_one_animal=False))
     assert action["farmer"] == ["FERTILIZE"]
 
 
@@ -800,6 +805,80 @@ def test_top_investment_choice_commit_margin_allows_a_wide_animal_lead():
     params = dict(DEFAULT_PARAMS, animal_net_of_cost=False, investment_commit_margin=0.10)
     choice = _top_investment_choice(market_inventory, current_day=0, params=params)
     assert choice == ("COW", "animal")
+
+
+def test_top_animal_choice_returns_the_best_scoring_animal_with_time_to_mature():
+    # T8.31 Stage 1: _top_animal_choice ranks animals in isolation, never
+    # against best_crop_score - a fresh market at day 0 under shipped
+    # defaults (verified directly via score_portfolio, not guessed):
+    # COW=23.23 > SHEEP=19.13 > GOOSE=6.50, all with time to mature.
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    assert _top_animal_choice(market_inventory, current_day=0, params=DEFAULT_PARAMS) == "COW"
+
+
+def test_top_animal_choice_skips_an_animal_that_cannot_mature_in_time():
+    # animal_net_of_cost off (isolating wiring from T8.3m's ranking
+    # economics, matching this file's own established convention) - at
+    # this market, COW=86.0 > SHEEP=70.67 > GOOSE=50.0 (verified
+    # directly). Day 22/season 30: COW can no longer mature
+    # (_animal_has_time_to_mature confirms False) but SHEEP still can -
+    # the walk must skip COW and return SHEEP, not None.
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    assert _top_animal_choice(market_inventory, current_day=22, params=params) == "SHEEP"
+
+
+def test_top_animal_choice_returns_none_once_nothing_can_mature():
+    # Day 29 of a 30-day season: every animal's first production would
+    # land past the season end (verified directly via
+    # _animal_has_time_to_mature for all three) - forcing a purchase here
+    # would only waste capital on something that can never pay off.
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    assert _top_animal_choice(market_inventory, current_day=29, params=DEFAULT_PARAMS) is None
+
+
+def test_decide_always_pursue_one_animal_off_reproduces_the_exact_pre_t831_either_or_behavior():
+    # T8.31 Stage 1: always_pursue_one_animal is accepted True by
+    # default (measured, tasks/todo.md), so the pre-T8.31 either/or
+    # behavior stays reachable via an explicit override, mirroring
+    # plant_while_pursuing_animal's own pattern - the base fixture's
+    # default market (MELON wins the crop ranking outright, far
+    # outranking any animal) must produce no BUY_ANIMAL order at all
+    # with the flag explicitly off.
+    obs = _obs()
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
+def test_decide_always_pursue_one_animal_queues_the_best_animal_alongside_a_crop_top_pick():
+    # With no animal anywhere yet and always_pursue_one_animal=True, the
+    # best-scoring animal (COW at this fresh market - verified via
+    # _top_animal_choice's own test above) is pursued in PARALLEL with
+    # whatever the crop ranking already picked (MELON here), not instead
+    # of it - mirrors plant_while_pursuing_animal's existing shape in the
+    # opposite direction (that flag plants a crop while an animal is the
+    # top pick; this one buys an animal while a crop is).
+    obs = _obs()
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=True)
+    action = decide(obs, params)
+    buy_animal_orders = [o for o in action["market"] if o[0] == "BUY_ANIMAL"]
+    assert buy_animal_orders == [["BUY_ANIMAL", "COW", 1]]
+    buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
+    assert len(buy_seed_orders) == 1
+    assert buy_seed_orders[0][1] == "MELON"
+
+
+def test_decide_always_pursue_one_animal_stops_once_any_animal_exists_anywhere():
+    # Once an animal exists in any form (placed, stuck in the shed, or in
+    # farmer_inventory), this path must not fire again - the existing
+    # stuck_animal/max_animals_per_type "finish what's already bought"
+    # logic take over exactly as today, unaffected by this new flag.
+    obs = _obs()
+    obs["private"]["shed"]["COW"] = 1  # already bought, awaiting BUILD/PLACE
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=True)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
 
 
 def test_decide_buys_a_seed_for_the_top_crop_alongside_the_top_animal_by_default():
@@ -1107,7 +1186,12 @@ def test_decide_does_not_buy_wheat_before_any_animal_exists():
     # ever on the farm. With no animal placed and none being pursued
     # (crops rank ahead of every animal by default with an empty
     # market), there is no feed to restock for at all.
-    action = decide(_obs(), DEFAULT_PARAMS)
+    # always_pursue_one_animal explicitly off (T8.31's shipped default is
+    # True, which would otherwise pursue an animal in parallel here even
+    # with crops ranking first) - this test is about the wheat-restock
+    # ping-pong fix, not T8.31's own mechanism.
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False)
+    action = decide(_obs(), params)
     assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
 
 
@@ -1140,7 +1224,12 @@ def test_decide_defaults_wheat_buy_only_when_feed_needed_to_true_when_unset():
     # Mirrors test_decide_defaults_crop_net_of_seed_cost_to_true_when_unset's
     # pattern: a params dict missing the key entirely must behave like the
     # documented default (True), not like it's off.
-    params = {k: v for k, v in DEFAULT_PARAMS.items() if k != "wheat_buy_only_when_feed_needed"}
+    # always_pursue_one_animal explicitly off - see test_decide_does_not_
+    # buy_wheat_before_any_animal_exists's own comment for why.
+    params = {
+        k: v for k, v in DEFAULT_PARAMS.items() if k != "wheat_buy_only_when_feed_needed"
+    }
+    params["always_pursue_one_animal"] = False
     action = decide(_obs(), params)
     assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
 

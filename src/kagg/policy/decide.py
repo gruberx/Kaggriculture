@@ -641,6 +641,24 @@ _DEFAULT_WATER_BONUS_WINDOW_AWARE = False
 # luck dominates over marginal labor cost).
 _DEFAULT_MAX_ANIMALS_PER_TYPE = 1
 
+# T8.31, the user's own follow-up after T8.29: decouples animal
+# acquisition from _top_investment_choice's single strict top-pick
+# ranking, which structurally almost never chooses an animal (MELON
+# scores ~119/tile-day at a fresh market vs COW's ~23 - verified directly
+# via score_portfolio - and per-crop-scoped self-impact decay means the
+# ranking always rotates to a fresh crop type instead of ever being
+# forced toward an animal). Stage 0 (tasks/todo.md) measured that
+# loosening investment_commit_margin cannot fix this on its own - even
+# margin=-0.5 produced zero behavioral change across 400 self-play games.
+# When set and the farm has no animal anywhere in any form, the single
+# best-scoring animal (via the new _top_animal_choice, scored on its own -
+# never compared against the crop ranking) is pursued in parallel with
+# whatever crop the normal ranking already picked - see the gating block
+# in decide() (right after have_animal_anywhere) for the full mechanism.
+# Default False, bit-identical to every pre-T8.31 caller - not yet
+# measured in self-play.
+_DEFAULT_ALWAYS_PURSUE_ONE_ANIMAL = False
+
 # T8.18: verified directly against kaggriculture.py that PICKUP has no
 # structural prerequisite at all - only PLACE genuinely needs both an
 # animal in hand and a matching built structure. The shipped serial
@@ -928,6 +946,55 @@ def _top_investment_choice(
                 continue
             if _animal_has_time_to_mature(name, current_day, season_length_days):
                 return name, "animal"
+    return None
+
+
+def _top_animal_choice(market_inventory: dict, current_day: int, params: dict) -> str | None:
+    """The highest-scoring animal that still has time to mature this
+    season, as a plain animal name - `None` if none does.
+
+    T8.31 Stage 1: unlike `_top_investment_choice`, this ranks animals in
+    complete isolation - never compared against `best_crop_score` at
+    all. Exists for `always_pursue_one_animal` (see that param's own
+    comment and the gating block in `decide()` that uses it), a caller
+    that has already decided an animal is wanted regardless of how it
+    stacks up against the crop ranking. T8.31 Stage 0 (see
+    tasks/todo.md) measured that loosening `investment_commit_margin`
+    cannot fix this: even the widest margin tested (-0.5) produced zero
+    behavioral change across 400 self-play games, because the real score
+    gap to a strong crop like MELON is far too wide (roughly -80% margin
+    needed to flip, an economically extreme value) - so the fix decouples
+    animal acquisition from the single top-investment ranking entirely
+    rather than trying to force that ranking to flip.
+
+    Reads the same `params` entries `_top_investment_choice` reads for
+    its own animal branch of `score_portfolio` (`animal_net_of_cost`/
+    `animal_fertilizer_income_aware`/`animal_care_aware`/`animal_
+    consumption_horizon_aware`/`rank_season_aware`) - identical
+    economics, just no crop-score comparison gate. `crop_tile_counts`/
+    `unlocked_shops`/`net_of_seed_cost` are irrelevant here (they only
+    affect crop scores, which this function never reads) so they're
+    passed as `None`/`False` rather than threaded through as arguments.
+    """
+    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
+    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
+    animal_fertilizer_income_aware = params.get(
+        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
+    )
+    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
+    animal_consumption_horizon_aware = params.get(
+        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
+    )
+    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
+    scores = score_portfolio(
+        market_inventory, None, None, False,
+        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
+        animal_care_aware, animal_consumption_horizon_aware,
+    )
+    for name in sorted(ANIMALS, key=scores.__getitem__, reverse=True):
+        if _animal_has_time_to_mature(name, current_day, season_length_days):
+            return name
     return None
 
 
@@ -1247,6 +1314,45 @@ def decide(obs: dict, params: dict) -> dict:
     have_animal_anywhere = acquisition_animal is not None and (
         shed.get(acquisition_animal, 0) > 0 or farmer_inventory.get(acquisition_animal, 0) > 0
     )
+
+    # T8.31 Stage 1, the user's own follow-up after T8.29: _top_investment_
+    # choice's single strict top-pick structurally almost never chooses an
+    # animal (MELON scores ~119/tile-day at a fresh market vs COW's ~23 -
+    # verified directly via score_portfolio - and self-impact decay is
+    # scoped per-crop, not farm-wide, so the ranking always rotates to a
+    # fresh crop type rather than ever being forced toward an animal).
+    # Stage 0 (tasks/todo.md) measured that loosening investment_commit_
+    # margin cannot fix this - even margin=-0.5 produced zero behavioral
+    # change across 400 self-play games, the real score gap is far wider
+    # than any plausible margin. always_pursue_one_animal (default False,
+    # bit-identical for every caller that doesn't set it) decouples
+    # animal acquisition from that ranking entirely instead: once the
+    # normal ranking has had its turn above (stuck_animal/max_animals_
+    # per_type-gated, exactly as before) and STILL left acquisition_
+    # animal at None, and the farm has no animal anywhere in any form
+    # (no placed tile of any type, nothing sitting in the shed or
+    # farmer_inventory for any animal), pick the single best-scoring
+    # animal via _top_animal_choice - scored on its own, never compared
+    # against the crop ranking - and pursue it in parallel with whatever
+    # plant_crop the crop ranking already picked (mirrors plant_while_
+    # pursuing_animal's existing shape in the opposite direction: that
+    # flag plants a crop while an animal is the top pick, this one buys
+    # an animal while a crop is). have_animal_anywhere stays correctly
+    # False below - the gating condition here already confirmed nothing
+    # is pending for any animal type, this one included. Once any animal
+    # exists anywhere, this path stops firing on its own (the gate's own
+    # condition goes False) - stuck_animal/max_animals_per_type's
+    # existing "finish what's already bought" logic take over exactly as
+    # today, unaffected.
+    if (
+        params.get("always_pursue_one_animal", _DEFAULT_ALWAYS_PURSUE_ONE_ANIMAL)
+        and acquisition_animal is None
+        and not placed_animal_type_counts
+        and not any(shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0 for a in ANIMALS)
+    ):
+        always_pursue_choice = _top_animal_choice(obs["market"]["inventory"], current_day, params)
+        if always_pursue_choice is not None:
+            acquisition_animal = always_pursue_choice
 
     # T8.6: labor_units is 1 (the farmer) plus however many hands the
     # hiring mechanism targets hiring today - the real capacity this

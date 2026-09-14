@@ -314,13 +314,36 @@ AGENT_MAIN_PATH = os.path.join(
 # found the same pattern directly on seed 900: more tiles planted sooner,
 # a quadrant opened a day earlier, but slightly lower final money on that
 # one seed) - not a regression to investigate.
+#
+# Re-recorded an eighteenth time for T8.31: always_pursue_one_animal
+# (default True) decouples animal acquisition from _top_investment_
+# choice's single strict top-pick ranking - once the farm has no animal
+# anywhere, the best-scoring animal is pursued in parallel with whatever
+# crop the normal ranking already picked, instead of never being
+# considered at all whenever a crop like MELON structurally outranks
+# every animal (see kagg.policy.decide's own _DEFAULT_ALWAYS_PURSUE_
+# ONE_ANIMAL comment for the full mechanism). Measured and accepted
+# directly against the checked-in baseline (tools/measure_t831.py: 94%/
+# 96% working/holdout, 48W/2L/0T on the held-out block, Wilson
+# [0.865, 0.989]) - a decisive win, stronger than the prediction stated
+# up front. Honest finding on these six fixed seeds, not glossed over:
+# every single one moved *lower* (e.g. starter/seed2: 46745 -> 42108,
+# -9.9%; pass/seed2: 45816 -> 45471, -0.8%) despite the large, decisive
+# 96%-holdout self-play win - the real spend of always acquiring an
+# animal (cost + ongoing feed) is a real cost these six particular seeds
+# don't happen to recoup, while the much larger 100-seed self-play
+# sample does recoup it on net. tools/trace_t831.py found the opposite on
+# seed 900 specifically (COW acquired day 1, final money slightly
+# *higher*: 36814 -> 37023) - genuine seed-to-seed variance, not a sign
+# the fix is wrong; the self-play win rate over 100 seeds is the real
+# acceptance signal here, not six fixed numbers.
 _GOLDEN = {
-    ("starter", 1): (44462.0, 4043.0),
-    ("starter", 2): (46745.0, 3506.0),
-    ("starter", 3): (45665.0, 3613.0),
-    ("pass", 1): (44462.0, 3000.0),
-    ("pass", 2): (45816.0, 3000.0),
-    ("pass", 3): (44943.0, 3000.0),
+    ("starter", 1): (42122.0, 3657.0),
+    ("starter", 2): (42108.0, 3767.0),
+    ("starter", 3): (44688.0, 3571.0),
+    ("pass", 1): (42123.0, 3000.0),
+    ("pass", 2): (45471.0, 3000.0),
+    ("pass", 3): (45440.0, 3000.0),
 }
 
 

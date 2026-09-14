@@ -392,6 +392,24 @@ DEFAULT_PARAMS = {
     # in self-play - see kagg.policy.decide's own comment for the
     # mechanism.
     "investment_commit_margin": 0.0,
+    # T8.31, the user's own follow-up after T8.29: Stage 0 measured that
+    # loosening investment_commit_margin cannot make an animal win
+    # _top_investment_choice's single strict top-pick ranking (even
+    # margin=-0.5 produced zero behavioral change across 400 self-play
+    # games - the real score gap to a strong crop like MELON is far too
+    # wide). This decouples animal acquisition from that ranking
+    # entirely instead: when set and the farm has no animal anywhere in
+    # any form, the single best-scoring animal (scored on its own, never
+    # compared against the crop ranking) is pursued in parallel with
+    # whatever crop the normal ranking already picked. **Measured and
+    # accepted**: working 94% (47W/3L/0T), holdout 96% (48W/2L/0T),
+    # Wilson [0.865, 0.989] - a decisive win, stronger than predicted.
+    # Traced (seed 900): the candidate acquires a COW by day 1 and holds
+    # it the whole game (zero animals on the baseline throughout), final
+    # money slightly higher (37023 vs 36814) even with the 2nd quadrant
+    # opening one day later - see kagg.policy.decide's own comment for
+    # the mechanism.
+    "always_pursue_one_animal": True,
     # T8.11, the user's own observation, traced to a real bottleneck: the
     # real WATER handler only adds yield for a one-time crop on ages
     # inside its bonus window - every other day's watering is pure

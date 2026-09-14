@@ -33,6 +33,7 @@
   "animal_care_aware": false,
   "animal_consumption_horizon_aware": false,
   "investment_commit_margin": 0.0,
+  "always_pursue_one_animal": true,
   "water_bonus_window_aware": false,
   "parallel_animal_acquisition": false,
   "portfolio_basket_size": 1,
