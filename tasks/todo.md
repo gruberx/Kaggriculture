@@ -1519,6 +1519,49 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       follow-ups (T8.30 re-swept and confirmed rejected; T8.31 built and accepted). No Kaggle
       submission in this task - ask before any further one, as always.
 
+- [ ] T8.32 — comprehensive land+hiring re-sweep, the user's own follow-up hypothesis after seeing
+      T8.30/T8.31's results (2026-09-14): late/capped quadrant openings and the hiring floor likely
+      interact - land alone can't help without hands to work it, hands alone can't help without land
+      to put them on. Two research agents confirmed this precisely: the game allows 4 quadrants/100
+      tiles for $7,000 total (not a game limit); the real limiter is this repo's own `should_buy_land`
+      gate (`land_purchase_threshold_money=15000`, `land_buy_max_free_tile_fraction=0.1`), tuned in
+      T8.3/T8.8 when the farm had only 1-2 labor units and genuinely could not work even one 25-tile
+      quadrant, never re-tested since T8.29's labor fix and T8.31's animal-pursuit mechanism landed;
+      `hires_per_day`'s forecast only ever counts already-planted tiles, never free/potential land.
+      Seed 900 (T8.29/T8.31 traces): 2nd quadrant opens day 14-15/30, never reaches a 3rd, despite
+      money sitting at $20k-37k through the back half of the season - well past the gate's own
+      threshold.
+
+      **Stage 1** (cheap joint measurement, no new code): `tools/measure_t832.py`, joint
+      `coordinate_ascent` sweep of `(land_purchase_threshold_money, land_buy_max_free_tile_fraction,
+      min_hires_per_day)` - 7 curated combinations including land-only loosening, hiring-floor-only
+      raising (a direct cross-check against T8.30's own result), and several joint strengths.
+      **Result**: land-only loosening (10000, 0.2, 2) lost (20%); hiring-floor-only (15000, 0.1, 4)
+      lost completely (0%), reproducing T8.30's own direction. **Every joint combination that raised
+      both together scored above the land-only or hiring-only results** - winner `(10000, 0.2, 4)`:
+      working 56% (0.560, Wilson [0.423, 0.688]), **held-out 64% (32W/18L/0T), Wilson
+      [0.501, 0.759]** - a real, positive point estimate, clearly the strongest result this project has
+      measured for either knob alone (T8.30's own best was 0.040), but **`accept_candidate=False`**:
+      the held-out interval still overlaps the even-odds baseline's own Wilson interval
+      ([0.366, 0.634], `harness.wilson_interval(25,50)`) - `wilson_intervals_overlap` correctly finds
+      genuine overlap in `[0.501, 0.634]`, so this does not clear the project's own strict
+      non-overlap acceptance bar at n=50, despite a numerically higher win rate (`tools/tuning.py`'s
+      own documented discipline: "a numerically higher win rate alone isn't enough if the two
+      intervals still overlap"). **Not accepted as the new default** - `params.py`/`policy.json`
+      unchanged.
+      Traced anyway (`tools/trace_t832.py`, seed 900, since this is a real, promising, well-evidenced
+      direction even though unaccepted) to see the mechanism directly, and it confirms cleanly: the
+      candidate hires 4 hands from day 0 (vs the baseline's 2), opens the 2nd quadrant on day 12 (vs
+      day 15), and opens a **3rd quadrant on day 15 - something the baseline never reaches at all**
+      across the full 30-day season on this seed; `plant_tiles` peaks at 32 vs the baseline's ~26;
+      final money 43286 vs 37023 (+17% on this one seed, consistent with the 64% aggregate). The
+      mechanism the user hypothesized is real and works exactly as described - it just hasn't yet
+      cleared this project's own strict acceptance bar at the current sample size/parameterization.
+      **Not a rejection to abandon** - a promising, honestly-recorded direction that motivates Stage 2
+      directly (see below), and a candidate worth revisiting later (e.g. a wider grid search around
+      `(10000, 0.2, 4)`, or simply a larger held-out sample) if Stage 2 alone doesn't close the gap.
+      No parameter changed; no golden-episode re-record (nothing shipped differs).
+
 Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
 (commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,
 commit `777e46a`) - most notably T8.16(d)'s `dynamic_hiring` (98% held-out) and T8.27's corrected
