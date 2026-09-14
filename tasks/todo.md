@@ -1005,10 +1005,35 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       animal economics are bad, and a real day-1 hiring floor was the missing piece) was correct -
       see T8.17 below for the still-open follow-up (does this labor fix alone make COW/SHEEP
       profitable, or is T8.17's own animal-awareness stack also needed).
-- [ ] T8.17 — re-measure `animal_consumption_horizon_aware`/`animal_fertilizer_income_aware`/
-      `animal_care_aware` individually then combined, against the new T8.16(d) baseline - the actual
-      "are COW/SHEEP genuinely profitable" answer, now that the labor floor is fixed. Not yet run -
-      the immediate next step.
+- [x] T8.17 — re-measure `animal_consumption_horizon_aware`/`animal_fertilizer_income_aware`/
+      `animal_care_aware` individually then combined, against the new T8.16(d) baseline
+      (`tools/measure_t817.py`) - the actual "are COW/SHEEP genuinely profitable" answer, now that
+      the labor floor is fixed. **Run. None accepted - but the story is real and different from
+      every earlier attempt, not a repeat of the old architectural-bug contamination**:
+      - `animal_consumption_horizon_aware` alone: **0/50 working, 0/50 holdout - every single
+        episode lost**, worse than T8.10's original 1/50-0/50 rejection. `investment_commit_margin`
+        is still 0.0 by default, so this is very plausibly the same hysteresis-flip pattern T8.14
+        was built to fix, now amplified: with real spare labor (T8.16(d)), a mistaken animal
+        commitment gets *fully* executed (feeding, placing, tending) instead of being starved by a
+        single farmer's limited bandwidth, so a wrong pick costs more, not less, once labor stops
+        being the bottleneck. Not yet re-tested combined with a nonzero `investment_commit_margin` -
+        a concrete next step if this flag is revisited.
+      - `animal_fertilizer_income_aware` alone: 24%/32% (working/holdout) - still a clear loss, but
+        materially less decisive than any of its earlier rejections.
+      - `animal_care_aware` alone: 48%/56% - the closest any animal-economics flag has come to
+        parity all session; Wilson interval [0.42, 0.69] still overlaps 0.5, so correctly not
+        accepted, but this is the one genuinely promising lead this task produced.
+      - All three combined: 44%/54%, essentially tracking `animal_care_aware` alone (consumption-
+        horizon-aware's own strong negative and fertilizer's milder one roughly cancel against
+        care's mild positive) - not a clean synergy, not a clean rejection either.
+      **The honest answer to the session's opening question**: T8.16(d)'s real labor fix was
+      necessary but not sufficient. Once genuine spare labor exists, COW/SHEEP's *execution*
+      constraint (a single farmer can't feed+care+collect+harvest) is real and now testable - but at
+      least one of the three accuracy improvements (`animal_consumption_horizon_aware`) is actively
+      harmful even with labor no longer the bottleneck, and none of the three yet clears the
+      held-out bar. `animal_care_aware` alone is the one lead worth returning to (closest to parity,
+      real upward movement from every prior measurement) - a future session could try it combined
+      with `investment_commit_margin` or on its own with a larger seed sample.
 - [x] T8.18 — parallelize the animal-acquisition pipeline. Verified directly against
       `kaggriculture.py`: `PICKUP` has no structural prerequisite at all, only `PLACE` needs both an
       animal in hand and a matching built structure. `tasks._new_investment_tasks`'s animal branch
