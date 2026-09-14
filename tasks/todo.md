@@ -1118,6 +1118,24 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       `max_animals_per_type` on real spare labor (e.g. only pursue a second animal once
       `hires_per_day`/`min_hires_per_day` themselves have been raised enough to cover it), rather
       than assuming today's single-animal-tuned labor floor scales for free.
+- [x] T8.23 — verify (not assume) that crop+animal coexistence emerges naturally from
+      `plant_while_pursuing_animal` (T8.9, on by default) - the user's own diversification
+      hypothesis ("melon + milk won't crash one market as hard as melon alone"). Scoped down from
+      the plan's own multi-animal framing: T8.22's `max_animals_per_type>1` was decisively rejected
+      (above), so the "repeated same-type stacking starves crop planting via `stuck_animal`" risk
+      that task's fallback-fix trigger named cannot arise in the shipped default
+      (`max_animals_per_type` stays `1`) - traced the scenario that's actually viable instead:
+      `animal_care_aware=True` alone (T8.17's closest lead to parity, 48%/56%), otherwise default.
+      **Verification only, no code changes** (`tools/trace_t823.py`, seed 900): the candidate holds
+      one SHEEP for 718 of 720 turns while planting 15 STRAWBERRY tiles - **identical final crop-tile
+      count to the animal-free baseline (15)**, and every PLANT that happened landed during an
+      animal-pursuit-or-held turn (66 of them) with zero starvation of animal-free planting
+      opportunities (there were none to starve - the animal is held almost the entire episode).
+      `plant_while_pursuing_animal`'s independent-signal design works exactly as the plan predicted:
+      crop planting proceeds at its normal pace regardless of a concurrent animal purchase/care
+      cycle. No fallback fix needed - the fallback plan (narrowing when `stuck_animal` pauses new
+      crop commitments) stays a documented option for if/when `max_animals_per_type>1` is ever
+      revisited with the labor-gating fix T8.22's own entry names.
 
 ## Not planned yet (see plan.md)
 
