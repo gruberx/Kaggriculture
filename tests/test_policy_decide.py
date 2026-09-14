@@ -1304,3 +1304,99 @@ def test_decide_plant_qty_stops_at_the_watering_capacity_cap(monkeypatch):
     # only term that can be observed binding here.
     decide(obs, params)
     assert captured.get("plant_qty") == 2
+
+
+def test_top_crop_basket_threads_wheat_feed_units_needed_to_rank_portfolio():
+    # T8.24: confirms the threading only - the underlying economics
+    # (wheat_feed_credit_per_tile_day's own make-vs-buy mechanism) is
+    # already covered directly in test_policy_strategy.py. _top_crop_
+    # basket's own crop-only ranking must match rank_portfolio's own
+    # output (filtered to crops, same maturity filter) when given the
+    # identical wheat_self_sufficiency_aware/wheat_feed_units_needed -
+    # exactly like every other score_portfolio-derived flag this
+    # function already threads straight through.
+    from kagg.policy.strategy import rank_portfolio
+
+    market_inventory = {}
+    params = dict(DEFAULT_PARAMS, wheat_self_sufficiency_aware=True)
+    basket = _top_crop_basket(
+        market_inventory, current_day=0, params=params, basket_size=8,
+        wheat_feed_units_needed=20,
+    )
+    expected_full_ranking = rank_portfolio(
+        market_inventory, wheat_self_sufficiency_aware=True, wheat_feed_units_needed=20,
+    )
+    expected_crop_ranking = [n for n in expected_full_ranking if n in CROPS][: len(basket)]
+    assert basket == expected_crop_ranking
+
+
+def test_top_crop_basket_wheat_feed_units_needed_defaults_to_zero():
+    params = dict(DEFAULT_PARAMS, wheat_self_sufficiency_aware=True)
+    assert _top_crop_basket({}, current_day=0, params=params, basket_size=8) == _top_crop_basket(
+        {}, current_day=0, params=params, basket_size=8, wheat_feed_units_needed=0,
+    )
+
+
+def _spy_on_top_crop_basket(monkeypatch):
+    # decide() calls _top_crop_basket with wheat_feed_units_needed passed
+    # as a keyword (see its own call site) - captured straight from
+    # kwargs, no positional-index guessing needed.
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original = decide_module._top_crop_basket
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "_top_crop_basket", spy)
+    return captured
+
+
+def test_decide_computes_zero_wheat_feed_demand_with_no_animal(monkeypatch):
+    captured = _spy_on_top_crop_basket(monkeypatch)
+    obs = _obs()
+    params = dict(DEFAULT_PARAMS, wheat_self_sufficiency_aware=True)
+    decide(obs, params)
+    assert captured.get("wheat_feed_units_needed") == 0
+
+
+def test_decide_computes_real_wheat_feed_demand_with_a_placed_animal(monkeypatch):
+    captured = _spy_on_top_crop_basket(monkeypatch)
+    obs = _obs()
+    obs["day"] = 5
+    obs["farms"][0]["tiles"][3][3] = {
+        "kind": "PASTURE",
+        "animal": "COW",
+        "placed_day": 0,
+        "yield_units": 0,
+        "consecutive_unfed": 0,
+        "fed_today": True,
+        "cared_today": False,
+        "fertilizer_available": False,
+        "pending_care_bonus": 0,
+    }
+    params = dict(DEFAULT_PARAMS, wheat_self_sufficiency_aware=True)
+    decide(obs, params)
+    season_length_days = params.get("season_length_days", 30)
+    assert captured.get("wheat_feed_units_needed") == season_length_days - 5
+
+
+def test_decide_computes_zero_wheat_feed_demand_when_flag_is_off(monkeypatch):
+    captured = _spy_on_top_crop_basket(monkeypatch)
+    obs = _obs()
+    obs["farms"][0]["tiles"][3][3] = {
+        "kind": "PASTURE",
+        "animal": "COW",
+        "placed_day": 0,
+        "yield_units": 0,
+        "consecutive_unfed": 0,
+        "fed_today": True,
+        "cared_today": False,
+        "fertilizer_available": False,
+        "pending_care_bonus": 0,
+    }
+    params = dict(DEFAULT_PARAMS, wheat_self_sufficiency_aware=False)
+    decide(obs, params)
+    assert captured.get("wheat_feed_units_needed") == 0

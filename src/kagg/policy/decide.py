@@ -551,6 +551,18 @@ _DEFAULT_ANIMAL_CARE_AWARE = False
 # same convention as T8.3q's fertilizer/CARE rejections.
 _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE = False
 
+# T8.24, the user's own follow-up once animal economics started looking
+# real: once real feed demand exists, growing WHEAT domestically instead
+# of always buying it (market.buy_wheat_order) avoids a real, previously
+# unpriced cost - especially under contested demand (an opponent also
+# running animals would push WHEAT's own purchase price up via their own
+# BUY_PRODUCT orders). See kagg.policy.strategy.wheat_feed_credit_per_
+# tile_day for the mechanism (a real make-vs-buy price asymmetry: BUY is
+# quoted at post-buy inventory, scarcity pushes it UP; SELL at pre-sell
+# inventory, glut pushes it DOWN). Off by default - the exact prior WHEAT
+# ranking for every caller that doesn't set it.
+_DEFAULT_WHEAT_SELF_SUFFICIENCY_AWARE = False
+
 # T8.14: exactly the "concrete lead for later" T8.10's own rejection
 # comment above named - a minimum score margin an animal candidate must
 # clear over the best crop before `_top_investment_choice` will return
@@ -927,6 +939,7 @@ def _top_crop_basket(
     unlocked_shops: list | None = None,
     net_of_seed_cost: bool = False,
     basket_size: int = 1,
+    wheat_feed_units_needed: int = 0,
 ) -> list[str]:
     """Generalizes `_top_crop_choice` (T8.19, the user's own observation:
     committing every new tile to a single top-ranked product invites a
@@ -940,6 +953,17 @@ def _top_crop_basket(
     margin details both share. `decide()` uses the result to round-robin
     new PLANT commitments across the basket instead of concentrating them
     in the single top pick - see its own `portfolio_basket_size` comment.
+
+    `wheat_feed_units_needed` (T8.24, the user's own follow-up): passed
+    straight through to `rank_portfolio`'s own `wheat_feed_units_needed`
+    - see `wheat_feed_credit_per_tile_day`'s own docstring for the
+    mechanism. `decide()` computes the real value (0 when no animal is
+    placed or pursued, or `wheat_self_sufficiency_aware` is off) - this
+    function only needs to read `wheat_self_sufficiency_aware` itself
+    from `params` (the same "flag gates whether the number is used at
+    all" convention every other animal-awareness flag here follows).
+    Defaults to `0`, reproducing the exact prior WHEAT ranking for every
+    caller that doesn't pass it, regardless of the flag.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
@@ -951,12 +975,16 @@ def _top_crop_basket(
     animal_consumption_horizon_aware = params.get(
         "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
     )
+    wheat_self_sufficiency_aware = params.get(
+        "wheat_self_sufficiency_aware", _DEFAULT_WHEAT_SELF_SUFFICIENCY_AWARE
+    )
     days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
     basket: list[str] = []
     for name in rank_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
         days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
         animal_care_aware, animal_consumption_horizon_aware,
+        wheat_self_sufficiency_aware, wheat_feed_units_needed,
     ):
         if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
             basket.append(name)
@@ -1039,6 +1067,14 @@ def decide(obs: dict, params: dict) -> dict:
     private = obs["private"]
     seeds = private.get("seeds", {})
     shed = private.get("shed", {})
+    # Moved up from its old spot below the crop-basket call (T8.24): a
+    # single trivial dict lookup, no ordering dependency on anything
+    # computed in between - needed early now so the WHEAT feed-demand
+    # check just below can read it. Index 0 is always the farmer's own
+    # inventory - see its own fuller comment at its original use site
+    # further down (PLACE/FEED/PICKUP's real handlers, tasks._PINNED_
+    # UNIT_INDEX).
+    farmer_inventory = (private.get("inventories") or [{}])[0]
 
     current_day = obs.get("day", 0)
     current_hour = obs.get("hour", 0)
@@ -1063,6 +1099,42 @@ def decide(obs: dict, params: dict) -> dict:
     desired_crop = desired_name if desired_kind == "crop" else None
     desired_animal = desired_name if desired_kind == "animal" else None
 
+    # T8.24, the user's own follow-up: real WHEAT feed-demand signal for
+    # _top_crop_basket's own wheat_feed_units_needed, computed here since
+    # it needs to exist before that call (below) - deliberately NOT the
+    # full six-purpose tile scan further down (placed_animal_type_counts
+    # etc.) to avoid reordering that scan's own dependencies; a small,
+    # single-purpose check instead. "An animal exists in some form" means
+    # any of: this turn's top investment choice is itself an animal
+    # (desired_animal, already computed above - pursuit is starting
+    # *this* turn even before any tile/shed state reflects it), an
+    # animal already bought and awaiting BUILD/PICKUP/PLACE (shed or
+    # farmer_inventory), or an animal already placed and alive (a tile
+    # with an "animal" key) - matches feed_needed's own later, similar
+    # definition as closely as this early a call site allows. One WHEAT
+    # unit covers exactly one FEED day (kaggriculture.py's fixed rate),
+    # so the full remaining season is the real horizon of feed-days to
+    # credit against, uncapped by any single tile's own yield (`wheat_
+    # feed_credit_per_tile_day` caps that itself).
+    wheat_self_sufficiency_aware = params.get(
+        "wheat_self_sufficiency_aware", _DEFAULT_WHEAT_SELF_SUFFICIENCY_AWARE
+    )
+    if wheat_self_sufficiency_aware:
+        has_animal_context = (
+            desired_animal is not None
+            or any(shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0 for a in ANIMALS)
+            or any(
+                isinstance(tile, dict) and "animal" in tile
+                for row in me["tiles"] for tile in row
+            )
+        )
+        wheat_feed_units_needed = (
+            max(0, params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS) - current_day)
+            if has_animal_context else 0
+        )
+    else:
+        wheat_feed_units_needed = 0
+
     # T8.9, opt-in (see _top_crop_choice's own docstring for why this
     # isn't the default despite fixing a real bug): when enabled, the
     # crop(s) to plant/buy-seed-for are the best crop(s) the market
@@ -1086,25 +1158,17 @@ def decide(obs: dict, params: dict) -> dict:
         fallback_crops = _top_crop_basket(
             obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops,
             net_of_seed_cost, basket_size=portfolio_basket_size,
+            wheat_feed_units_needed=wheat_feed_units_needed,
         )
     else:
         fallback_crops = []
     fallback_crop = fallback_crops[0] if fallback_crops else None
     have_seed = fallback_crop is not None and seeds.get(fallback_crop, 0) > 0
     plant_crop = fallback_crop if have_seed else None
-    # Index 0 is always the farmer's own inventory (_farmer_inventory's
-    # own indexing convention - hands are index 1+). PLACE/FEED's real
-    # handlers consume from here, never the shed directly - see
-    # tasks.build_task_list's own docstring for why both are needed.
-    # T8.4: reading only index 0 here is correct *by construction*, not
-    # merely by convention - tasks.py pins every inventory-resolving op
-    # (wheat/animal PICKUP, FEED, PLACE) to unit_index 0, so no other
-    # unit's inventory can ever hold the wheat/animal this function reads
-    # for. See tasks._PINNED_UNIT_INDEX's own docstring for the full
-    # story (the real gap this closes: before T8.4, a hired hand could
-    # silently pick up the wheat/animal into inventories[1+], which
-    # decide() would then never see again).
-    farmer_inventory = (private.get("inventories") or [{}])[0]
+    # farmer_inventory itself is defined up near shed/seeds now (T8.24
+    # needed it earlier, before the crop-basket call above) - see that
+    # definition's own comment for the indexing convention and why index
+    # 0 is correct by construction (tasks._PINNED_UNIT_INDEX).
 
     # Real bug found while implementing T6.4: _top_investment_choice's
     # ranking can shift turn to turn as market prices move, and reacting

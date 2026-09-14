@@ -356,6 +356,13 @@ DEFAULT_PARAMS = {
     # simple swept scalar, not a labor-derived formula - matches
     # hires_per_day/min_hires_per_day's own precedent.
     "max_animals_per_type": 1,
+    # T8.24, the user's own follow-up: once real animal-feed demand
+    # exists, growing WHEAT domestically instead of always buying it
+    # (kagg.policy.market.buy_wheat_order) avoids a real, previously
+    # unpriced BUY-side price - see kagg.policy.strategy.wheat_feed_
+    # credit_per_tile_day for the make-vs-buy mechanism. Off by default -
+    # the exact prior WHEAT ranking for every caller that doesn't set it.
+    "wheat_self_sufficiency_aware": False,
     # T8.6 (tasks/plan.md): parallel planting + batched seed purchase -
     # lets plant_qty scale with the real labor force (1 + hires_per_day)
     # instead of the fixed "one PLANT task per turn" baked in since

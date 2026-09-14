@@ -34,6 +34,7 @@
   "parallel_animal_acquisition": false,
   "portfolio_basket_size": 1,
   "max_animals_per_type": 1,
+  "wheat_self_sufficiency_aware": false,
   "max_plants_per_unit": 100,
   "max_plant_tasks_per_turn": 8,
   "seed_buffer_per_unit": 1,

@@ -1136,6 +1136,40 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       cycle. No fallback fix needed - the fallback plan (narrowing when `stuck_animal` pauses new
       crop commitments) stays a documented option for if/when `max_animals_per_type>1` is ever
       revisited with the labor-gating fix T8.22's own entry names.
+- [x] T8.24 — grow WHEAT domestically to avoid the animal-feed BUY-side purchase price, once real
+      feed demand exists. New `wheat_feed_credit_per_tile_day` (`strategy.py`): a real make-vs-buy
+      price asymmetry `gamelib.market.price` already has (BUY quoted at *post-buy* inventory, rising
+      as more is bought; SELL at *pre-sell* inventory, falling as more is sold) that
+      `crop_revenue_per_tile_day`'s plain sale-side walk never priced. Splits one WHEAT tile's yield
+      into `feed_units` (diverted, credited at the avoided buy price) and the remainder (still sold
+      normally) - a pure additive delta on top of the existing WHEAT score, never double-counting a
+      unit. Threaded through `score_portfolio`/`rank_portfolio`/`_top_crop_basket` (new
+      `wheat_self_sufficiency_aware`/`wheat_feed_units_needed` params, both bit-identical off/`0` by
+      default) into `decide()`, which computes real feed demand early (before the crop-ranking calls
+      - `farmer_inventory` moved up to support this) from three signals: this turn's top choice is
+      itself an animal, an animal already bought and awaiting placement, or one already placed and
+      alive. RED+GREEN across `test_policy_strategy.py`/`test_policy_decide.py` (a caught and fixed
+      test-authoring mistake along the way: the credit's sign is genuinely state-dependent, not
+      always positive - see the corrected test names/comments), full suite green (421/421),
+      compileall/boundary clean.
+      **Scope note**: the plan deferred this until T8.22 landed (multi-animal feed demand); T8.22 was
+      decisively rejected, so this measures the scenario that's actually viable instead - a single
+      placed/pursued animal (`animal_care_aware=True`, T8.17's closest lead).
+      **Measured - null/inconclusive, not accepted** (`tools/measure_t824.py`): alone (no animal-
+      awareness flag) - **100% ties, 0W/0L/50T on both blocks**, an exact no-op, exactly as predicted
+      (T8.18 already established animals essentially never get bought under default economics, so the
+      flag has nothing to attach to). Combined with `animal_care_aware` - mostly ties again (47/50
+      working, 41/50 holdout), with only a handful of decided games in each (3 working, 9 holdout) -
+      too few to draw a confident conclusion, though the decided-game ratio (1W/2L, 3W/6L - both
+      exactly 1:2) leans slightly negative rather than positive. Consistent with the mechanism's own
+      predicted ceiling: WHEAT's market is the deepest/flattest of any product (`T=400`), so one
+      tile's feed-diversion delta is real (confirmed directly in unit tests) but numerically small -
+      too small to reliably move a 720-turn episode's outcome at this seed count. The plan's own
+      contested-demand scenario (an opponent also buying WHEAT for feed, pushing the purchase price
+      up further) was **not measured** - an honest scope limit, same as the plan itself anticipated:
+      the harness has no way to bias the opponent toward animal purchases. Stays off by default
+      (bit-identical), kept available (tested) - a real, working mechanism without yet a self-play
+      case that needs it.
 
 ## Not planned yet (see plan.md)
 
@@ -1170,6 +1204,11 @@ targets — gated behind a Stage-1 baseline that doesn't exist yet).
   when scoring WHEAT as a crop, and (b) the opponent feeding their own animals is a second, distinct
   kind of opponent-driven WHEAT pressure (tightening supply) from T8.3g/T8.3h's crop-tile one
   (adding supply) - both currently unmodeled.
+  **(a) addressed by T8.24** (`wheat_feed_credit_per_tile_day`, built, tested, measured - null/
+  inconclusive at self-play scale, see T8.24's own entry above). **(b) still open** - T8.24's own
+  measurement explicitly could not test contested demand (the harness has no way to bias the
+  opponent toward animal purchases); remains a real, unmodeled gap if a future session finds a way
+  to exercise it.
 - **Animal-product self-impact + escape risk, once hiring lifts the one-animal-per-type cap** - the
   user's own observation: WOOL/MILK/EGG overproduction from stacking animals is a structural
   non-issue *today* only because of a hard cap in `decide.py` ("never pursue a second instance of an
@@ -1179,6 +1218,12 @@ targets — gated behind a Stage-1 baseline that doesn't exist yet).
   of T8.3f's self-impact (bounded by *some* real horizon, e.g. remaining season days, since animal
   production is otherwise unbounded) becomes a real gap to close then, alongside the crop
   re-validation above.
+  **Resolved by T8.22, not in the direction this question anticipated**: the cap WAS lifted
+  (`max_animals_per_type`) and measured directly - the *escape risk* half of this question turned
+  out to dominate completely (every animal escaped from neglect by episode end at every cap tried,
+  2/3/4 - see T8.22's own trace), decisively enough that the self-impact half never got to matter in
+  practice. Stays a real gap only if `max_animals_per_type>1` is revisited with the labor-gating fix
+  T8.22's own entry names (real spare labor before allowing a second animal).
 
 **Open questions recorded for later, not forgotten (the user's own request, 2026-09-13, T8.3k):**
 - **Labor cost (farmer turns) is still completely unranked**, a distinct gap from T8.3k's seed-cost

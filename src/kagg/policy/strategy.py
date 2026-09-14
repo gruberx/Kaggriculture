@@ -174,6 +174,61 @@ def crop_revenue_per_tile_day(
     return total_revenue / tile_days
 
 
+def wheat_feed_credit_per_tile_day(
+    sell_at_inventory: int,
+    feed_units_needed: int,
+    already_committed_units: int = 0,
+    expected_consumption: float = 0,
+    days_remaining: int | None = None,
+) -> float:
+    """T8.24, the user's own follow-up: the marginal value of growing
+    WHEAT domestically instead of always buying it
+    (`kagg.policy.market.buy_wheat_order`) when real animal-feed demand
+    exists - a real, previously unpriced make-vs-buy asymmetry
+    `crop_revenue_per_tile_day`'s plain sale-side walk can't see.
+    `gamelib.market.price`'s own docstring: BUY is quoted at *post-buy*
+    inventory (inventory falls as more is bought, pushing price UP,
+    scarcity) while SELL is quoted at *pre-sell* inventory (inventory
+    rises as more is sold, pushing price DOWN, glut) - the same market
+    curve, walked in opposite directions from the same starting point. A
+    WHEAT tile's yield diverted to feed avoids the (higher) buy-side price
+    instead of earning the (lower) sell-side price.
+
+    Splits one tile's `total_yield` (`_crop_yield_and_tile_days("WHEAT",
+    ...)`) into `feed_units` (diverted to feed, capped at both the tile's
+    own yield and `feed_units_needed` - one WHEAT unit covers exactly one
+    FEED day, kaggriculture.py's own fixed rate) and the remainder
+    `sale_units` (sold normally) - never both credited for the same
+    physical unit. Returns the DELTA versus selling the whole yield
+    (avoided-buy revenue on `feed_units` minus the sale revenue those
+    same units would have earned) - a caller adds this ON TOP of
+    `crop_revenue_per_tile_day`'s own WHEAT score (that function's own
+    full-yield sale walk already covers `sale_units`' real contribution
+    correctly; this only corrects the units that get diverted), never in
+    place of it. `expected_consumption`/`already_committed_units` shift
+    the sale-side walk's starting point the same way
+    `crop_revenue_per_tile_day` already does, for the units that are
+    still sold; the buy-avoidance walk always starts from the plain
+    `sell_at_inventory` snapshot (today's real purchase price, not
+    adjusted by our own crop-side market activity, which doesn't affect
+    what a same-turn WHEAT purchase would cost).
+
+    `feed_units_needed=0` (the default, e.g. no animal placed or
+    pursued) makes `feed_units=0`, returning exactly `0.0` - a pure
+    no-op for every caller that doesn't pass a real feed demand.
+    """
+    total_yield, tile_days = _crop_yield_and_tile_days("WHEAT", days_remaining)
+    feed_units = max(0, min(total_yield, feed_units_needed))
+    if feed_units == 0:
+        return 0.0
+    sale_start = sell_at_inventory + already_committed_units - expected_consumption
+    diverted_sale_revenue = sum(price("WHEAT", sale_start + k) for k in range(feed_units))
+    feed_avoided_revenue = sum(
+        price("WHEAT", sell_at_inventory - k) for k in range(1, feed_units + 1)
+    )
+    return (feed_avoided_revenue - diverted_sale_revenue) / tile_days
+
+
 def _animal_full_care_schedule(animal: str, days_remaining: int) -> list[tuple[int, int]]:
     """Exact day-by-day simulation of `CARE`'s `pending_care_bonus`
     mechanic under continuous feeding and care from day 0 through
@@ -405,6 +460,8 @@ def score_portfolio(
     animal_fertilizer_income_aware: bool = False,
     animal_care_aware: bool = False,
     animal_consumption_horizon_aware: bool = False,
+    wheat_self_sufficiency_aware: bool = False,
+    wheat_feed_units_needed: int = 0,
 ) -> dict[str, float]:
     """Every crop and animal name mapped to its own revenue per tile-day
     at `market_inventory`'s *current* level for its own product (missing
@@ -490,6 +547,22 @@ def score_portfolio(
     `animal_net_of_cost`/`animal_fertilizer_income_aware`/`animal_care_
     aware`, same reason as those three. Defaults to `False`, reproducing
     the exact prior behavior for every caller that doesn't pass it.
+
+    `wheat_self_sufficiency_aware`/`wheat_feed_units_needed` (T8.24, the
+    user's own follow-up): adds `wheat_feed_credit_per_tile_day`'s own
+    delta to WHEAT's score alone (every other item untouched) - see that
+    function's own docstring for the make-vs-buy mechanism. Real feed
+    demand (how many remaining days' worth of FEED an existing/pursued
+    animal needs) isn't something this function can determine on its own
+    (it has no notion of farm state, only market prices) - a caller
+    (`decide()`) computes and passes it in, the same "caller supplies the
+    number, this function just prices it" convention `expected_
+    consumption`/`crop_tile_counts` already use. Both default to
+    off/`0`, reproducing the exact prior WHEAT score for every caller
+    that doesn't pass them - `wheat_feed_units_needed=0` alone is already
+    a no-op regardless of the flag (see `wheat_feed_credit_per_tile_
+    day`'s own docstring), the flag is an extra, explicit gate for a
+    clean isolated on/off comparison in self-play (T8.3b's own lesson).
     """
     crop_tile_counts = crop_tile_counts or {}
     unlocked_shops = unlocked_shops or []
@@ -503,6 +576,11 @@ def score_portfolio(
         scores[crop] = crop_revenue_per_tile_day(
             crop, inv, already_committed_units, expected_consumption, net_of_seed_cost, crop_days_remaining
         )
+        if crop == "WHEAT" and wheat_self_sufficiency_aware:
+            scores[crop] += wheat_feed_credit_per_tile_day(
+                inv, wheat_feed_units_needed, already_committed_units, expected_consumption,
+                crop_days_remaining,
+            )
     animal_days_remaining = days_remaining if animal_net_of_cost else None
     feed_price = price("WHEAT", market_inventory.get("WHEAT", MARKET_I0)) if animal_net_of_cost else 0
     fertilizer_sell_at_inventory = market_inventory.get("FERTILIZER", MARKET_I0)
@@ -529,6 +607,8 @@ def rank_portfolio(
     animal_fertilizer_income_aware: bool = False,
     animal_care_aware: bool = False,
     animal_consumption_horizon_aware: bool = False,
+    wheat_self_sufficiency_aware: bool = False,
+    wheat_feed_units_needed: int = 0,
 ) -> list[str]:
     """All crop and animal names, ranked descending by revenue per
     tile-day - a thin wrapper sorting `score_portfolio`'s own dict (see
@@ -540,7 +620,7 @@ def rank_portfolio(
     scores = score_portfolio(
         market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost, days_remaining,
         rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware, animal_care_aware,
-        animal_consumption_horizon_aware,
+        animal_consumption_horizon_aware, wheat_self_sufficiency_aware, wheat_feed_units_needed,
     )
     return sorted(scores, key=scores.__getitem__, reverse=True)
 

@@ -872,3 +872,94 @@ def test_score_portfolio_matches_independent_per_item_calculation():
     assert scores["COW"] == pytest.approx(
         animal_revenue_per_tile_day("COW", MARKET_I0, expected_consumption=cow_consumption)
     )
+
+
+def test_wheat_feed_credit_per_tile_day_splits_yield_between_feed_and_sale():
+    # T8.24, the user's own follow-up: growing WHEAT domestically instead
+    # of always buying it (kagg.policy.market.buy_wheat_order) avoids the
+    # real, currently-unpriced BUY-side price (price() quotes BUY at
+    # *post-buy* inventory - falling as more is bought, pushing price UP)
+    # instead of earning the (lower) SELL-side price (quoted at pre-sell
+    # inventory - rising as more is sold, pushing price DOWN). A WHEAT
+    # tile's total_yield=4 units (_crop_yield_and_tile_days, tile_days=5)
+    # split: feed_units_needed=2 diverts 2 units to feed (avoided BUY
+    # price), the remaining 2 are sold normally (SELL price) - this is a
+    # pure DELTA versus selling the whole yield, addable on top of
+    # crop_revenue_per_tile_day's own WHEAT score without double-counting
+    # any unit.
+    from kagg.gamelib.market import price as _price
+    from kagg.policy.strategy import wheat_feed_credit_per_tile_day
+
+    feed_units_needed = 2
+    diverted_sale_revenue = sum(_price("WHEAT", MARKET_I0 + k) for k in range(feed_units_needed))
+    feed_avoided_revenue = sum(_price("WHEAT", MARKET_I0 - k) for k in range(1, feed_units_needed + 1))
+    expected = (feed_avoided_revenue - diverted_sale_revenue) / 5
+    got = wheat_feed_credit_per_tile_day(MARKET_I0, feed_units_needed)
+    assert got == pytest.approx(expected)
+
+
+def test_wheat_feed_credit_per_tile_day_caps_feed_units_at_the_tiles_own_yield():
+    # feed_units_needed way beyond total_yield=4 must not divert more
+    # units than the tile actually produces - feed_units floors at
+    # total_yield, not feed_units_needed itself. diverted_sale_revenue is
+    # still the *full* total_yield-unit sale walk here (all 4 units are
+    # diverted, so all 4 would otherwise have sold) - not zero: it's the
+    # opportunity cost of *not* selling them, which needs the same
+    # k=0..feed_units-1 walk crop_revenue_per_tile_day's own full-yield
+    # sale price uses, regardless of how much feed demand exists beyond
+    # that.
+    from kagg.gamelib.market import price as _price
+    from kagg.policy.strategy import wheat_feed_credit_per_tile_day
+
+    total_yield = 4
+    feed_avoided_revenue = sum(_price("WHEAT", MARKET_I0 - k) for k in range(1, total_yield + 1))
+    diverted_sale_revenue = sum(_price("WHEAT", MARKET_I0 + k) for k in range(total_yield))
+    expected = (feed_avoided_revenue - diverted_sale_revenue) / 5
+    got = wheat_feed_credit_per_tile_day(MARKET_I0, feed_units_needed=100)
+    assert got == pytest.approx(expected)
+
+
+def test_wheat_feed_credit_per_tile_day_is_zero_with_no_feed_demand():
+    from kagg.policy.strategy import wheat_feed_credit_per_tile_day
+
+    assert wheat_feed_credit_per_tile_day(MARKET_I0, feed_units_needed=0) == 0.0
+
+
+def test_score_portfolio_wheat_self_sufficiency_aware_matches_independent_calculation():
+    # Cross-checked directly against wheat_feed_credit_per_tile_day itself
+    # (same convention as test_score_portfolio_matches_independent_per_
+    # item_calculation above), not asserted to always raise WHEAT's score
+    # unconditionally - the delta's sign genuinely depends on real market
+    # state (see wheat_feed_credit_per_tile_day's own docstring: it can
+    # be negative when town-center consumption already favors the
+    # sale-side price more than a same-turn buy order would cost at raw
+    # inventory - a real, correct result, not a bug).
+    _, wheat_tile_days = _crop_yield_and_tile_days("WHEAT")
+    wheat_consumption = expected_daily_consumption("WHEAT", []) * wheat_tile_days
+    without = score_portfolio(_MARKET_AT_I0)
+    with_credit = score_portfolio(
+        _MARKET_AT_I0, wheat_self_sufficiency_aware=True, wheat_feed_units_needed=4,
+    )
+    from kagg.policy.strategy import wheat_feed_credit_per_tile_day
+
+    expected_delta = wheat_feed_credit_per_tile_day(MARKET_I0, 4, 0, wheat_consumption)
+    assert expected_delta != 0  # the scenario must actually exercise a real, nonzero effect
+    assert with_credit["WHEAT"] == pytest.approx(without["WHEAT"] + expected_delta)
+    # Every other item must be untouched - this is a WHEAT-only credit.
+    for name in without:
+        if name != "WHEAT":
+            assert with_credit[name] == pytest.approx(without[name])
+
+
+def test_score_portfolio_wheat_self_sufficiency_aware_defaults_to_false():
+    assert score_portfolio(_MARKET_AT_I0) == score_portfolio(
+        _MARKET_AT_I0, wheat_self_sufficiency_aware=False, wheat_feed_units_needed=4,
+    )
+
+
+def test_score_portfolio_wheat_self_sufficiency_aware_is_a_noop_with_zero_feed_units():
+    without = score_portfolio(_MARKET_AT_I0)
+    with_flag_but_no_demand = score_portfolio(
+        _MARKET_AT_I0, wheat_self_sufficiency_aware=True, wheat_feed_units_needed=0,
+    )
+    assert with_flag_but_no_demand == without
