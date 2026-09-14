@@ -1598,6 +1598,24 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       held-out sample) remain open, honestly-recorded leads for a future task, not abandoned. No Kaggle
       submission in this task - ask before any further one, as always.
 
+      **Addendum - larger-sample retest** (user request: "Попробуй увеличить выборку"): Stage 1's own
+      `(10000, 0.2, 4)` scored 64% on the standard 50-seed held-out block but was not accepted (interval
+      overlap with the even-odds baseline). `tools/measure_t832_large_n.py` retested the same single
+      candidate against the checked-in baseline on a 200-seed sample (`range(900, 1100)` - the original
+      50 held-out seeds 900-949 plus 150 freshly-unused ones 950-1099, never touched by any prior
+      search/tuning decision in this project), using the same `accept_candidate`-vs-even-odds convention
+      as every prior script. **Result: win_rate dropped from 64% (n=50) to 54.5% (109W/91L/0T, n=200)**,
+      Wilson interval `[0.476, 0.613]` overlapping the even-odds baseline's own `[0.431, 0.569]` at
+      n=200 - `accept_candidate=False`, and clearly does *not* clear even the mathematically-computed
+      n=190 threshold that would have been sufficient at a genuine 64% rate. **Conclusion: the original
+      64%/n=50 was mostly sampling noise, not a stable large-sample effect** - the real underlying effect
+      of `(10000, 0.2, 4)` is more likely a weak ~54-55% edge, which this project's strict acceptance bar
+      correctly continues to reject even at 4x the sample size. This resolves the "larger held-out
+      sample" lead named above: it was tried, and it revised the estimate down rather than confirming it.
+      **Not accepted; no parameter changed.** No golden-episode re-record (nothing shipped differs). This
+      closes out the T8.32 line of investigation for now - a materially different mechanism, not a bigger
+      sample of the same one, would be needed to move further. No Kaggle submission in this task.
+
 Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
 (commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,
 commit `777e46a`) - most notably T8.16(d)'s `dynamic_hiring` (98% held-out) and T8.27's corrected
