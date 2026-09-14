@@ -287,13 +287,25 @@ AGENT_MAIN_PATH = os.path.join(
 # large jump on every one of these six seeds (e.g. starter/seed1: 38093
 # -> 45650, +19.8%), consistent with the self-play result, not a
 # regression to investigate.
+#
+# Re-recorded a sixteenth time for T8.27: workload_forecast_hiring_aware
+# flipped on by default - a proactive, tile-count-derived hiring forecast
+# (T8.26's own idea, corrected to exclude routine coverage ops per
+# _ROUTINE_RECURRING_OPS's own reasoning) measured and accepted directly
+# against this exact shipped baseline (tools/measure_t827.py, Stage 1:
+# 92%/98% working/holdout, Wilson [0.812, 0.968] entirely clear of 50% -
+# see kagg.policy.strategy's own _DEFAULT_WORKLOAD_FORECAST_HIRING_AWARE
+# comment for the full traced story). Five of six seeds improved (e.g.
+# pass/seed1: 43879 -> 44707, +1.9%); pass/seed3 dipped slightly (46818 ->
+# 46536, -0.6%) - consistent with a real but not-100%-uniform self-play
+# win, not a regression to investigate.
 _GOLDEN = {
-    ("starter", 1): (45650.0, 3825.0),
-    ("starter", 2): (44170.0, 3506.0),
-    ("starter", 3): (47072.0, 3613.0),
-    ("pass", 1): (43879.0, 3000.0),
-    ("pass", 2): (41937.0, 3000.0),
-    ("pass", 3): (46818.0, 3000.0),
+    ("starter", 1): (46105.0, 3847.0),
+    ("starter", 2): (44914.0, 3506.0),
+    ("starter", 3): (47092.0, 3613.0),
+    ("pass", 1): (44707.0, 3000.0),
+    ("pass", 2): (42693.0, 3000.0),
+    ("pass", 3): (46536.0, 3000.0),
 }
 
 

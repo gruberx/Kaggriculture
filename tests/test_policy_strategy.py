@@ -618,16 +618,75 @@ def test_animal_actions_per_tile_day_matches_independent_calculation():
                 assert got == pytest.approx(expected)
 
 
+def test_crop_actions_per_tile_day_scaling_only_excludes_water():
+    # T8.27: scaling_only=True drops the routine, coverage-only WATER term
+    # - matches _ROUTINE_RECURRING_OPS's own "one per day regardless of
+    # labor size" reasoning in decide.py, extended here to the tile-count
+    # forecast (see hires_per_day's own T8.27 docstring addendum for why).
+    for crop in ("MELON", "TOMATO"):
+        for use_fertilizer in (False, True):
+            total_yield, tile_days = _crop_yield_and_tile_days(crop, days_remaining=30)
+            harvest_actions = total_yield if CROPS[crop]["ongoing"] else 1
+            fertilize_actions = math.ceil(tile_days / 3) if use_fertilizer else 0
+            expected = (harvest_actions + fertilize_actions + 1) / tile_days
+            got = _crop_actions_per_tile_day(
+                crop, days_remaining=30, use_fertilizer=use_fertilizer, scaling_only=True
+            )
+            assert got == pytest.approx(expected)
+
+
+def test_crop_actions_per_tile_day_scaling_only_defaults_to_off():
+    # Bit-identical to the full total for every existing caller that
+    # doesn't pass the new flag.
+    for crop in ("MELON", "TOMATO"):
+        full = _crop_actions_per_tile_day(crop, days_remaining=30, use_fertilizer=True)
+        default = _crop_actions_per_tile_day(crop, days_remaining=30, use_fertilizer=True, scaling_only=False)
+        assert default == pytest.approx(full)
+
+
+def test_animal_actions_per_tile_day_scaling_only_excludes_feed_care_and_fertilizer():
+    # T8.27: scaling_only=True drops FEED/CARE/COLLECT_FERTILIZER - all
+    # routine, fixed-per-day-regardless-of-labor terms, the animal-side
+    # analogs of _ROUTINE_RECURRING_OPS's own crop-side WATER/FEED
+    # exclusion (T8.16(a)).
+    for animal in ("COW", "SHEEP"):
+        for care_aware in (False, True):
+            for fertilizer_income_aware in (False, True):
+                schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=30)
+                harvest_actions = len(schedule)
+                expected = (harvest_actions + 3) / 30
+                got = _animal_actions_per_tile_day(
+                    animal, 30, care_aware, fertilizer_income_aware, scaling_only=True
+                )
+                assert got == pytest.approx(expected)
+
+
+def test_animal_actions_per_tile_day_scaling_only_defaults_to_off():
+    # Bit-identical to the full total for every existing caller that
+    # doesn't pass the new flag.
+    for animal in ("COW", "SHEEP"):
+        full = _animal_actions_per_tile_day(animal, 30, care_aware=True, fertilizer_income_aware=True)
+        default = _animal_actions_per_tile_day(
+            animal, 30, care_aware=True, fertilizer_income_aware=True, scaling_only=False
+        )
+        assert default == pytest.approx(full)
+
+
 def test_hires_per_day_workload_forecast_hiring_aware_matches_a_hand_computed_target():
-    # T8.26: the user's own proposed formula - total_turns = (per-type
-    # actions/tile-day x tile counts, summed over every animal/crop type
-    # present) x turns_per_task_estimate, buffered by hire_buffer_fraction,
-    # divided by the *full* turns_per_day (not the shrinking remainder -
-    # see hires_per_day's own docstring addendum for why), floor -1 for
-    # the farmer's own turn, clipped to [min_hires_per_day, max_hires_per_
-    # day]. A single COW tile plus 10 MELON tiles, hand-computed below.
-    cow_actions = _animal_actions_per_tile_day("COW", 30, care_aware=False, fertilizer_income_aware=False)
-    melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False)
+    # T8.26/T8.27: the user's own proposed formula - total_turns = (per-
+    # type actions/tile-day x tile counts, summed over every animal/crop
+    # type present) x turns_per_task_estimate, buffered by hire_buffer_
+    # fraction, divided by the *full* turns_per_day (not the shrinking
+    # remainder - see hires_per_day's own docstring addendum for why),
+    # floor -1 for the farmer's own turn, clipped to [min_hires_per_day,
+    # max_hires_per_day]. A single COW tile plus 10 MELON tiles, hand-
+    # computed below. T8.27: the forecast now uses scaling_only=True (see
+    # hires_per_day's own docstring addendum) - excludes routine coverage
+    # ops, matching the existing pending_task_count path's own exclusion.
+    cow_actions = _animal_actions_per_tile_day(
+        "COW", 30, care_aware=False, fertilizer_income_aware=False, scaling_only=True
+    )
+    melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
     total_turns = (cow_actions * 1 + melon_actions * 10) * 2.0  # turns_per_task_estimate
     expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)  # min/max_hires_per_day defaults
     params = {"dynamic_hiring": True, "workload_forecast_hiring_aware": True}
@@ -655,12 +714,31 @@ def test_hires_per_day_workload_forecast_hiring_aware_is_hour_independent():
     assert at_hour_0 == at_hour_20
 
 
-def test_hires_per_day_workload_forecast_hiring_aware_defaults_to_off():
-    # Bit-identical to the existing dynamic_hiring/pending_task_count path
-    # for every caller that doesn't pass the new flag - falls all the way
-    # through to the static value here since no pending_task_count is
-    # given either.
+def test_hires_per_day_workload_forecast_hiring_aware_defaults_to_on():
+    # T8.27: accepted and flipped True by default (Stage 1 of
+    # tools/measure_t827.py - this flag alone, against the exact shipped
+    # baseline, won decisively: 92%/98%, holdout Wilson [0.812, 0.968]).
+    # A caller that doesn't set the flag explicitly but does supply real
+    # tile counts now gets the proactive forecast, not the static/reactive
+    # fallback.
+    cow_actions = _animal_actions_per_tile_day(
+        "COW", 30, care_aware=False, fertilizer_income_aware=False, scaling_only=True
+    )
+    melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
+    total_turns = (cow_actions * 2 + melon_actions * 5) * 2.0  # turns_per_task_estimate
+    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)  # min/max_hires_per_day defaults
     params = {"dynamic_hiring": True}
+    got = hires_per_day(
+        params, hour=0, turns_per_day=24, animal_tile_counts={"COW": 2}, crop_tile_counts={"MELON": 5}
+    )
+    assert got == expected
+
+
+def test_hires_per_day_workload_forecast_hiring_aware_can_be_explicitly_disabled():
+    # The pre-T8.27 behavior (falls all the way through to the static
+    # value here since no pending_task_count is given either) is still
+    # available by explicitly setting the flag False.
+    params = {"dynamic_hiring": True, "workload_forecast_hiring_aware": False}
     got = hires_per_day(
         params, hour=0, turns_per_day=24, animal_tile_counts={"COW": 2}, crop_tile_counts={"MELON": 5}
     )
@@ -677,7 +755,9 @@ def test_hires_per_day_workload_forecast_hiring_aware_falls_back_without_tile_co
 
 def test_hires_per_day_workload_forecast_hiring_aware_respects_the_buffer_and_clip():
     # A large buffer must not bypass max_hires_per_day, same invariant as
-    # the pending_task_count path's own test above.
+    # the pending_task_count path's own test above. T8.27: scaling_only
+    # excludes the dominant routine WATER/FEED terms, so this needs larger
+    # tile counts than before T8.27 to still clear max_hires_per_day=3.
     params = {
         "dynamic_hiring": True,
         "workload_forecast_hiring_aware": True,
@@ -685,7 +765,7 @@ def test_hires_per_day_workload_forecast_hiring_aware_respects_the_buffer_and_cl
         "max_hires_per_day": 3,
     }
     got = hires_per_day(
-        params, hour=0, turns_per_day=24, animal_tile_counts={"COW": 5}, crop_tile_counts={"MELON": 20}
+        params, hour=0, turns_per_day=24, animal_tile_counts={"COW": 25}, crop_tile_counts={"MELON": 100}
     )
     assert got == 3
 

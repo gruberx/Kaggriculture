@@ -1260,6 +1260,51 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       better - the existing reactive `dynamic_hiring` path (T8.16(d)) remains the best-measured
       hiring mechanism. `max_animals_per_type` stays at its T8.22-rejected default of 1.
 
+- [x] T8.27 — corrected workload-forecast hiring: exclude routine coverage ops from T8.26's own
+      per-tile forecast, my own recommended next step in response to the user's open "what's next?"
+      question (2026-09-14). Diagnosed T8.26's decisive rejection precisely: `_crop_actions_per_
+      tile_day`/`_animal_actions_per_tile_day` (ported from `tools/analyze_unit_economics.py`) counted
+      routine WATER/FEED/CARE/COLLECT_FERTILIZER at their full per-day rate, while the existing
+      reactive path (`pending_task_count`) deliberately excludes the routine crop-side ops
+      (`decide.py`'s `_ROUTINE_RECURRING_OPS`, T8.16(a)'s own fix for T8.12's original mistake) -
+      T8.26 reproduced that exact mistake one level up, at tile-count granularity. Added a new
+      `scaling_only: bool = False` parameter to both functions (default `False` bit-identical for
+      every existing caller, including `analyze_unit_economics.py`-parity tests): crops exclude
+      `water_actions`, animals exclude `feed_actions`/`care_actions`/`collect_fertilizer_actions`.
+      `hires_per_day`'s `workload_forecast_hiring_aware` branch always passes `scaling_only=True` -
+      the only caller that wants marginal-hiring-sized demand rather than total labor. RED+GREEN
+      across `test_policy_strategy.py` (new `scaling_only` cases + updated hand-computed target),
+      full suite green (437/437), compileall/boundary clean.
+      **Measured** (`tools/measure_t827.py`, same two-stage structure as T8.26):
+      **Stage 1 (this flag alone, against the exact shipped `DEFAULT_PARAMS` baseline) reversed
+      T8.26's own rejection completely**: 98% working (49W/1L/0T), 92% holdout (46W/4L/0T), Wilson
+      [0.812, 0.968] entirely clear of 50%, `accept_candidate=True`. Confirms the diagnosis was
+      correct and sufficient for the crop-only case - not merely plausible. **Accepted and shipped
+      as the new default** (`workload_forecast_hiring_aware: True`), since this comparison *is* a
+      direct, held-out-gated acceptance test against the shipped baseline, not just a diagnostic
+      sanity check. Re-recorded the golden-episode fixture (`test_agent_golden_episodes.py`, sixteenth
+      re-record): 5/6 seeds improved (e.g. pass/seed1: 43879 -> 44707, +1.9%), one dipped slightly
+      (pass/seed3: 46818 -> 46536, -0.6%) - consistent with a real, non-uniform self-play win.
+      **Stage 2** (combined with T8.25's `wheat_urgency_reserve=3` fix + `animal_care_aware`/
+      `animal_fertilizer_income_aware`/`parallel_animal_acquisition` + `max_animals_per_type` swept
+      2/3/4 - a bundle of mechanisms NOT shipped by default) stayed decisively rejected: 12%/12%
+      (cap=2), 24%/22% (cap=3), 16%/24% (cap=4) - all worse than T8.25 alone (cap=3: 40%/44%), and
+      cap=3/4 even worse than T8.26's own original miscounted forecast (38%/42%, 16%/24%). A real,
+      unexpected surprise given Stage 1's clean reversal - traced directly (`tools/trace_t827.py`,
+      seed 900) rather than accepted at face value: hand count at each day's post-hire point (hour 1)
+      is nearly identical between T8.25-alone (reactive path) and the T8.27 combo (proactive
+      forecast) - both clip to `min_hires_per_day=2` for almost the entire 30-day episode - ruling out
+      gross under/over-hiring by volume as the direct cause. The two runs diverge instead in exactly
+      *which* days deviate from the floor (T8.25-alone dips to 0-1 hands on days 5-7; T8.27 stays flat
+      at 2 throughout) and in how many animal tiles get acquired (3 vs 5) and final money (49155 vs
+      41091) - a real, subtle interaction between the forecast's specific day-to-day computed value
+      (even when clipped to the same floor most days) and the deterministic policy engine's investment
+      timing, not a simple magnitude bug in the `scaling_only` fix itself. Left as a genuinely open
+      question for whoever next revisits `max_animals_per_type` (flagged, not chased further here -
+      Stage 1's own separately-earned win stands on its own merits per T8.3b's isolation discipline).
+      `max_animals_per_type` stays at its T8.22-rejected default of 1; `wheat_urgency_reserve`,
+      `animal_care_aware`, `animal_fertilizer_income_aware`, `parallel_animal_acquisition` all stay off.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

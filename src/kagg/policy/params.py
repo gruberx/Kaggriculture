@@ -77,28 +77,35 @@ DEFAULT_PARAMS = {
     # T8.26, the user's own proposed formula: a proactive, tile-count-
     # derived hiring forecast (known in full at hour 0) instead of
     # dynamic_hiring's reactive pending_task_count path (which only grows
-    # as the day's turns reveal more work). Off by default - the exact
-    # prior dynamic_hiring behavior for every caller that doesn't set it.
-    # **Measured and decisively rejected** (tools/measure_t826.py, Stage
-    # 1: alone, crop-only farm, vs the plain T8.16(d) baseline): 10%/0% -
-    # a real, decisive loss, not noise. Traced to reproducing T8.12's own
-    # original rejected mistake (see dynamic_hiring's comment above): the
-    # ported _crop_actions_per_tile_day/_animal_actions_per_tile_day
-    # (built for tools/analyze_unit_economics.py's isolated per-tile
-    # question - "how much labor does one fully-tended tile need") count
-    # routine WATER/FEED/CARE at their full per-day rate, but
-    # pending_task_count (the existing reactive path) deliberately
-    # excludes exactly these ops (T8.16(a)'s own measured fix) - a tile
-    # needs exactly one WATER/FEED per day *regardless* of labor size, so
-    # counting it as scaling demand over-hires without a matching gain,
-    # the identical failure mode T8.16(a) already fixed once. Stage 2
-    # (combined with T8.25's price fix + max_animals_per_type=3/4)
-    # confirmed no rescue either - statistically indistinguishable from
-    # (marginally worse than) T8.25 alone. Kept available (tested) for a
-    # future corrected version that excludes routine per-day-regardless-
-    # of-labor ops from the forecast, matching pending_task_count's own
-    # already-fixed exclusion - not built here.
-    "workload_forecast_hiring_aware": False,
+    # as the day's turns reveal more work). T8.26 itself was **measured
+    # and decisively rejected** (tools/measure_t826.py, Stage 1: alone,
+    # crop-only farm, vs the plain T8.16(d) baseline): 10%/0% - traced to
+    # reproducing T8.12's own original rejected mistake - the ported
+    # _crop_actions_per_tile_day/_animal_actions_per_tile_day count routine
+    # WATER/FEED/CARE/COLLECT_FERTILIZER at their full per-day rate, but
+    # pending_task_count (the reactive path) deliberately excludes the
+    # routine crop-side ops (T8.16(a)'s own measured fix) - a tile needs
+    # exactly one WATER/FEED per day *regardless* of labor size, so
+    # counting it as scaling demand over-hires without a matching gain.
+    #
+    # T8.27 fixed the diagnosed cause directly (a new scaling_only=True
+    # argument on both per-tile functions, always passed from this
+    # forecast branch - see strategy.hires_per_day's own docstring) and
+    # re-measured (tools/measure_t827.py). **Stage 1 - this flag alone,
+    # against the exact shipped baseline - reversed completely: 92%/98%
+    # (working/holdout), Wilson [0.812, 0.968] entirely clear of 50%,
+    # accept_candidate=True. Accepted - default flipped True.** Stage 2
+    # (combined with a separate, not-yet-shipped animal-economics bundle -
+    # animal_care_aware/animal_fertilizer_income_aware/parallel_animal_
+    # acquisition/wheat_urgency_reserve=3/max_animals_per_type raised to
+    # 2-4) stayed decisively rejected (12-24%, worse than T8.25 alone).
+    # Traced (tools/trace_t827.py, seed 900): hand count is nearly
+    # identical between the reactive and proactive paths there (both clip
+    # to min_hires_per_day=2 almost the whole episode) - ruling out gross
+    # under-hiring as the cause; a genuinely open question for whoever
+    # next revisits max_animals_per_type, not a defect in this flag's own,
+    # separately-earned Stage-1 win (T8.3b's isolation discipline).
+    "workload_forecast_hiring_aware": True,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,

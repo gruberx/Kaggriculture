@@ -7,7 +7,7 @@
   "turns_per_task_estimate": 2.0,
   "hire_cash_reserve": 0,
   "hire_buffer_fraction": 0.0,
-  "workload_forecast_hiring_aware": false,
+  "workload_forecast_hiring_aware": true,
   "sell_margin": 0,
   "drip_sell_max_per_turn": 5,
   "wheat_restock_threshold": 5,
