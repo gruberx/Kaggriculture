@@ -1248,8 +1248,8 @@ def decide(obs: dict, params: dict) -> dict:
         shed.get(acquisition_animal, 0) > 0 or farmer_inventory.get(acquisition_animal, 0) > 0
     )
 
-    # T8.6: labor_units is 1 (the farmer) plus however many hands
-    # hires_per_day(params) targets hiring today - the real capacity this
+    # T8.6: labor_units is 1 (the farmer) plus however many hands the
+    # hiring mechanism targets hiring today - the real capacity this
     # turn's planting decision should scale with, not the fixed "one tile
     # per turn" assumption baked in since Phase 3. plant_budget guards
     # against planting more than the labor force can realistically water
@@ -1260,10 +1260,62 @@ def decide(obs: dict, params: dict) -> dict:
     # safety valve, not yet a binding constraint at labor_units=1.
     # max_plant_tasks_per_turn caps how many PLANT tasks one
     # build_task_list call ever proposes, independent of the other three
-    # bounds. At the shipped hires_per_day=0 (labor_units=1), plant_qty
-    # collapses to min(seeds_held, free_tiles, 1, ...) - never more than
-    # 1 - reproducing today's exact single-PLANT-per-turn behavior.
-    labor_units = 1 + hires_per_day(params)
+    # bounds. At the shipped static hires_per_day=1 with dynamic_hiring
+    # off, plant_qty collapses to min(seeds_held, free_tiles, 2, ...) -
+    # reproducing the pre-T8.6/T8.12 flat behavior.
+    #
+    # T8.29 fix: this used to be a bare `hires_per_day(params)` call with
+    # no runtime arguments at all - `hour`/`animal_tile_counts`/
+    # `crop_tile_counts`/`days_remaining`/`money` all omitted. Every one
+    # of hires_per_day's real paths (reactive pending_task_count,
+    # proactive workload-forecast) needs at least one of those; with none
+    # given, both fell straight through to the static fallback (default
+    # 1) regardless of dynamic_hiring being on (shipped default since
+    # T8.16(d)) or the farm's real hand count/workload - labor_units was
+    # hardcoded at 2 every turn of every game, decoupled from the actual
+    # hiring mechanism. A live self-play trace (T8.29's own todo.md entry)
+    # confirmed the resulting symptom chain directly: hand count pinned
+    # at 2 for all 30 days, cash stuck near the $500-1000 floor, a single
+    # quadrant most of the game, zero animals ever acquired - this one
+    # stale value throttled plant_budget/plant_qty/seed_target (below) to
+    # a fictional 2-unit labor force no matter how many hands were really
+    # hired. It also retroactively explains T8.28's own rejection of
+    # raising min_hires_per_day: extra hands had no extra planting
+    # capacity to use, since this throttle never moved.
+    #
+    # The real, forecast-aware target is computed here instead, using
+    # every argument already available this early (right after the
+    # six-purpose tile scan above, which produced placed_animal_type_
+    # counts/n_plant_tiles): animal_tile_counts=placed_animal_type_counts,
+    # crop_tile_counts=_crop_tile_counts(me["tiles"]) (own-tiles-only,
+    # matching T8.26's own choice for the identical late call below),
+    # hour=current_hour, turns_per_day, money=me["money"], and
+    # days_remaining (hires_per_day_days_remaining, needed again
+    # unchanged by the late target_hires call further down). The one
+    # input genuinely NOT available this early is pending_task_count -
+    # it needs `tasks`, which needs `plant_qty`, which needs
+    # `labor_units` itself (a real circular dependency). Under the
+    # shipped default (workload_forecast_hiring_aware=True) this is
+    # harmless: that branch never reads pending_task_count, so this call
+    # returns exactly what the late target_hires call (which does have
+    # pending_task_count) would also return. The one honest, narrow gap:
+    # a non-default reactive-only configuration
+    # (workload_forecast_hiring_aware=False with dynamic_hiring=True)
+    # still falls back to the static value here, since its
+    # pending_task_count-driven target isn't knowable yet at this point
+    # in decide() - a real limitation for that specific combination, not
+    # a silent regression from today's shipped behavior for it.
+    hires_per_day_days_remaining = max(
+        0, params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS) - current_day
+    )
+    early_target_hires = hires_per_day(
+        params, hour=current_hour,
+        turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY), money=me["money"],
+        animal_tile_counts=placed_animal_type_counts,
+        crop_tile_counts=_crop_tile_counts(me["tiles"]),
+        days_remaining=hires_per_day_days_remaining,
+    )
+    labor_units = 1 + early_target_hires
     max_plants_per_unit = params.get("max_plants_per_unit", _DEFAULT_MAX_PLANTS_PER_UNIT)
     plant_budget = max(0, max_plants_per_unit * labor_units - n_plant_tiles)
     max_plant_tasks_per_turn = params.get("max_plant_tasks_per_turn", _DEFAULT_MAX_PLANT_TASKS_PER_TURN)
@@ -1403,9 +1455,9 @@ def decide(obs: dict, params: dict) -> dict:
     # own-tiles-only, NOT the opponent-blended _combined_crop_tile_counts
     # used for the unrelated crop-self-impact mechanism - hiring workload
     # is about our own farm's labor demand, not a market-price signal.
-    hires_per_day_days_remaining = max(
-        0, params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS) - current_day
-    )
+    # hires_per_day_days_remaining was already computed above (T8.29,
+    # for the early labor_units call) - reused here unchanged, not
+    # recomputed, since current_day hasn't moved between the two calls.
     target_hires = hires_per_day(
         params, pending_task_count=pending_task_count, hour=current_hour,
         turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY), money=me["money"],

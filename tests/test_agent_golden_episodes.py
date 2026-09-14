@@ -299,13 +299,28 @@ AGENT_MAIN_PATH = os.path.join(
 # pass/seed1: 43879 -> 44707, +1.9%); pass/seed3 dipped slightly (46818 ->
 # 46536, -0.6%) - consistent with a real but not-100%-uniform self-play
 # win, not a regression to investigate.
+#
+# Re-recorded a seventeenth time for T8.29: fixed labor_units's stale
+# hiring signal - `1 + hires_per_day(params)` was a bare call with no
+# runtime arguments, always falling through to the static fallback
+# (labor_units hardcoded at 2 every turn regardless of dynamic_hiring's
+# real forecast) - see kagg.policy.decide's own T8.29 comment above the
+# fix for the full causal story. Measured and accepted directly against
+# the exact pre-fix checked-in baseline (tools/measure_t829.py: 92%/98%
+# working/holdout, 49W/1L/0T on the held-out block). A mixed but net
+# real move across these six seeds (e.g. starter/seed2: 44914 -> 46745,
+# +4.1%; pass/seed1: 44707 -> 44462, -0.5%), consistent with a real,
+# large aggregate win that isn't uniform seed-by-seed (tools/trace_t829.py
+# found the same pattern directly on seed 900: more tiles planted sooner,
+# a quadrant opened a day earlier, but slightly lower final money on that
+# one seed) - not a regression to investigate.
 _GOLDEN = {
-    ("starter", 1): (46105.0, 3847.0),
-    ("starter", 2): (44914.0, 3506.0),
-    ("starter", 3): (47092.0, 3613.0),
-    ("pass", 1): (44707.0, 3000.0),
-    ("pass", 2): (42693.0, 3000.0),
-    ("pass", 3): (46536.0, 3000.0),
+    ("starter", 1): (44462.0, 4043.0),
+    ("starter", 2): (46745.0, 3506.0),
+    ("starter", 3): (45665.0, 3613.0),
+    ("pass", 1): (44462.0, 3000.0),
+    ("pass", 2): (45816.0, 3000.0),
+    ("pass", 3): (44943.0, 3000.0),
 }
 
 

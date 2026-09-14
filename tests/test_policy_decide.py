@@ -130,12 +130,15 @@ def test_decide_does_not_rebuy_a_seed_already_on_hand():
     # hires_per_day(params)) * seed_buffer_per_unit - with the default
     # hires_per_day=1, that's 2, not 1, so this test stocks the full
     # target rather than assuming the pre-T8.6 flat "1 is always enough."
+    # T8.29: dynamic_hiring off (pin the static hires_per_day=1) so
+    # labor_units is exactly 2, deterministic - this test is about the
+    # already-on-hand check, not the dynamic hiring forecast.
     obs = _obs()
     from kagg.policy.strategy import rank_portfolio
 
     top_crop = next(name for name in rank_portfolio(obs["market"]["inventory"]) if name in CROPS)
     obs["private"]["seeds"][top_crop] = 2
-    action = decide(obs, DEFAULT_PARAMS)
+    action = decide(obs, dict(DEFAULT_PARAMS, dynamic_hiring=False))
     assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
 
 
@@ -258,6 +261,52 @@ def test_decide_passes_real_tile_counts_and_days_remaining_to_hires_per_day(monk
     assert captured.get("crop_tile_counts") == {"WHEAT": 1}
     season_length_days = DEFAULT_PARAMS.get("season_length_days", 30)
     assert captured.get("days_remaining") == season_length_days - 5
+
+
+def test_decide_labor_units_reflects_the_real_dynamic_hiring_forecast_not_the_static_fallback(monkeypatch):
+    # T8.29: labor_units used to be `1 + hires_per_day(params)` - a bare
+    # call with no runtime arguments, so both the reactive and workload-
+    # forecast paths fell straight through to the static fallback
+    # (hires_per_day defaults to 1, labor_units hardcoded at 2) no matter
+    # how large the farm's real workload was or what dynamic_hiring
+    # (shipped default True) would actually target. This test builds a
+    # farm whose real forecasted target clears the min_hires_per_day=2
+    # floor - 75 already-placed, already-fed/cared COW tiles, hand-
+    # verified via strategy._animal_actions_per_tile_day to forecast
+    # exactly 3 hires under the shipped workload_forecast_hiring_aware/
+    # scaling_only defaults (labor_units=4) - and checks plant_qty (the
+    # clearest labor_units-gated observable, via free_tiles=25/seeds=100/
+    # plant_budget=400, all non-binding) reflects that 4, not the old
+    # bug's fixed 2.
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    for y in range(10):
+        for x in range(10):
+            if y * 10 + x < 75:
+                tiles[y][x] = {
+                    "kind": "PASTURE", "animal": "COW", "placed_day": 0, "yield_units": 0,
+                    "consecutive_unfed": 0, "fed_today": True, "cared_today": False,
+                    "fertilizer_available": False, "pending_care_bonus": 0,
+                }
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    market_inventory["MELON"] = 1  # scarce -> highest price -> ranks first
+    obs["market"]["inventory"] = market_inventory
+    obs["private"]["seeds"] = {"MELON": 100}
+
+    captured = {}
+    original = decide_module.build_task_list
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "build_task_list", spy)
+    decide(obs, DEFAULT_PARAMS)
+
+    assert captured.get("plant_crop") == "MELON"
+    assert captured.get("plant_qty") == 4
 
 
 def test_investment_buys_keep_a_reserved_slot_and_are_emitted_after_the_sells():
@@ -1308,8 +1357,13 @@ def test_decide_batches_seed_purchase_into_one_order_when_labor_allows_more_than
     # separate orders - costs exactly one market slot regardless of how
     # many seeds are requested (verified: the real interpreter's
     # _parse_order reads order[2] as the full remaining count).
+    # T8.29: dynamic_hiring off (pin the static hires_per_day=3) so
+    # labor_units is exactly 4, deterministic - this test is about
+    # order-batching, not the dynamic hiring forecast.
     obs = _obs()
-    params = dict(DEFAULT_PARAMS, hires_per_day=3, seed_buffer_per_unit=2)  # labor_units=4, target=8
+    params = dict(
+        DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3, seed_buffer_per_unit=2,
+    )  # labor_units=4, target=8
     action = decide(obs, params)
     buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
     assert len(buy_seed_orders) == 1
@@ -1341,7 +1395,13 @@ def test_decide_plant_qty_stops_at_the_watering_capacity_cap(monkeypatch):
             "fertilized_until_day": -1,
         }
     obs["private"]["seeds"] = {crop: 10 for crop in CROPS}
-    params = dict(DEFAULT_PARAMS, hires_per_day=5, max_plants_per_unit=2, max_plant_tasks_per_turn=8)
+    # T8.29: dynamic_hiring off (pin the static hires_per_day=5) so
+    # labor_units is exactly 6, deterministic - this test is about
+    # plant_budget capping planting, not the dynamic hiring forecast.
+    params = dict(
+        DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=5,
+        max_plants_per_unit=2, max_plant_tasks_per_turn=8,
+    )
     # labor_units=6, plant_budget=max(0, 2*6 - 10)=2 - strictly below
     # labor_units(6)/seeds(10)/max_plant_tasks_per_turn(8), so it's the
     # only term that can be observed binding here.

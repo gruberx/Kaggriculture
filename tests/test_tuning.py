@@ -230,8 +230,18 @@ def test_two_candidate_agents_genuinely_use_their_own_distinct_params(tmp_path):
     # scenario where that hazard would surface if it existed.
     from kagg.policy.params import DEFAULT_PARAMS
 
-    many_hires = tuning.write_candidate_agent(dict(DEFAULT_PARAMS, hires_per_day=3), str(tmp_path))
-    no_hires = tuning.write_candidate_agent(dict(DEFAULT_PARAMS, hires_per_day=0), str(tmp_path))
+    # T8.29: dynamic_hiring off (pin the static hires_per_day) so the two
+    # candidates' hires_per_day override actually drives distinct
+    # labor_units/hiring behavior - dynamic_hiring's forecast (shipped
+    # default True) ignores the static value entirely, which would make
+    # both candidates behave identically and defeat this test's own
+    # point regardless of whether params isolation works.
+    many_hires = tuning.write_candidate_agent(
+        dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3), str(tmp_path)
+    )
+    no_hires = tuning.write_candidate_agent(
+        dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=0), str(tmp_path)
+    )
 
     result = harness.run_paired(many_hires, no_hires, seed=1, episode_steps=240)
 

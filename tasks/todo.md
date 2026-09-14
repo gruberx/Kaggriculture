@@ -1373,6 +1373,67 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       hardcoded. No Kaggle submission in this task (per the user's own chosen order) - the submission
       question returns now that this is settled.
 
+- [x] T8.29 — fix `labor_units`'s stale hiring signal, prompted by the user's own strategic question
+      (2026-09-14): "Как думаешь какие дальше шаги предпринять?" - farms almost always run with 1
+      farmer + 1 hand, starting cash never fully deploys (floor ~$500-1000, idle even once more comes
+      in), only one quadrant ever meaningfully develops, and animals are rare, while top-10 competitor
+      games start with 3-5 hands, both crops and animals from day 1, 3-4 quadrants and 6-8 hands
+      mid-game, and finish at $120k-140k vs our ~$30-45k. A live self-play trace confirmed the pattern
+      exactly (hand count pinned at 2 for all 30 days, farm plateaus at one quadrant most of the game,
+      money repeatedly drains to ~$500 and sits there, zero animals ever acquired) and root-caused it
+      to `decide.py`'s `labor_units = 1 + hires_per_day(params)` - a **bare call with no runtime
+      arguments**. Every real path inside `hires_per_day` (reactive `pending_task_count`, proactive
+      workload-forecast) needs at least one of `hour`/`animal_tile_counts`/`crop_tile_counts`/
+      `days_remaining`/`money`; with none given, both fell straight through to the static fallback
+      (default 1), so `labor_units` was **hardcoded at 2 every turn of every game**, completely
+      decoupled from `dynamic_hiring` (shipped default `True` since T8.16(d)) and from the farm's real
+      workload - a leftover from Stage B (T8.6), never updated when `dynamic_hiring` shipped. This
+      throttled `plant_budget`/`plant_qty`/`seed_target` - every cash-reinvestment throttle - to a
+      fictional 2-unit labor force regardless of real hand count, and retroactively explains **T8.28's
+      own rejection** of raising `min_hires_per_day` (extra hands had no extra planting capacity to
+      use, since this throttle never moved).
+      **Fix**: compute the forecast-aware `hires_per_day(...)` call once, early - right after the
+      existing six-purpose tile scan (`placed_animal_type_counts`/`n_plant_tiles`), before
+      `labor_units` needs it - using every argument genuinely available there:
+      `animal_tile_counts=placed_animal_type_counts`, `crop_tile_counts=_crop_tile_counts(me["tiles"])`,
+      `hour=current_hour`, `turns_per_day`, `money=me["money"]`, `days_remaining`. `pending_task_count`
+      is the one input not available this early (needs `tasks`, which needs `plant_qty`, which needs
+      `labor_units` - genuinely circular); harmless under the shipped default
+      (`workload_forecast_hiring_aware=True` never reads it), a narrow documented gap only for the
+      non-default reactive-only configuration. The existing late `target_hires` call (the actual
+      HIRE-queuing loop) is unchanged, now reusing the same `days_remaining` instead of recomputing it.
+      RED test added first (`test_decide_labor_units_reflects_the_real_dynamic_hiring_forecast_not_
+      the_static_fallback`: 75 already-placed COW tiles forecast 3 hires under the shipped defaults,
+      so `labor_units` should be 4, not the bug's fixed 2 - confirmed RED at 2 before the fix, GREEN
+      at 4 after). Fixing exposed 4 more tests that pinned `labor_units` via the *static*
+      `hires_per_day` param while leaving `dynamic_hiring` at its default-True (now overridden by the
+      real forecast) - all fixed by adding `dynamic_hiring=False` explicitly, the same pinning pattern
+      one test already used deliberately (`test_policy_decide.py` x3, `test_tuning.py` x1). Full suite
+      green (440/440), compileall/boundary clean.
+      **Measured** (`tools/measure_t829.py`): a pure code fix, not a new parameter, so measured as the
+      current working tree against `tuning.snapshot_agent_from_git_ref("HEAD", ...)` (a real git-archive
+      snapshot of the pre-fix checked-in code), both run with bit-identical `DEFAULT_PARAMS`. **Working
+      92% (46W/4L/0T), holdout 98% (49W/1L/0T)**, Wilson [0.895, 0.996] - `accept_candidate=True`, a
+      decisive, clearly-accepted win. Traced (`tools/trace_t829.py`, seed 900): confirms the mechanism
+      directly - `plant_qty` on day 1 jumps from 13 to 19 tiles (the previously-throttled `labor_units`
+      genuinely rising once the real forecast is used instead of the bug's fixed 2), the 2nd quadrant
+      opens a day earlier (day 14 vs 15). Two honest findings, not glossed over: on this one seed,
+      final money is *slightly lower* with the fix (36814 vs 42040) despite the 98% aggregate win -
+      single-seed variance fully consistent with a 49/50 result, not a sign the fix is wrong. And hand
+      count stays pinned at 2 on this seed even after the fix - not a remaining bug, but the real
+      forecast genuinely never clearing `min_hires_per_day=2` for a farm this size (matching T8.28's
+      own finding), which is exactly the natural **T8.30 follow-up**: re-sweep the hiring floor now
+      that planting capacity genuinely scales with it (it didn't before this fix, which is why T8.28's
+      sweep found no headroom - that finding needs revisiting, not re-trusting, now that the throttle
+      it measured against no longer exists). Zero animals acquired on either side of the trace -
+      confirms the separate, still out-of-scope animal-ranking root cause (`_top_investment_choice`
+      structurally favoring crops like MELON over COW even at full tile-count saturation, found but
+      deliberately not bundled into this task) remains untouched and is its own future task.
+      Golden episodes re-recorded (a real, mixed-but-net-positive move across all six tracked seeds,
+      e.g. starter/seed2: 44914 -> 46745 +4.1%; pass/seed1: 44707 -> 44462 -0.5% - consistent with the
+      measured aggregate win, not a regression). No Kaggle submission in this task - ask before any
+      further one, as always.
+
 Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
 (commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,
 commit `777e46a`) - most notably T8.16(d)'s `dynamic_hiring` (98% held-out) and T8.27's corrected
