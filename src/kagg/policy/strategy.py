@@ -174,10 +174,19 @@ def crop_revenue_per_tile_day(
     return total_revenue / tile_days
 
 
-def _animal_full_care_units(animal: str, days_remaining: int) -> int:
+def _animal_full_care_schedule(animal: str, days_remaining: int) -> list[tuple[int, int]]:
     """Exact day-by-day simulation of `CARE`'s `pending_care_bonus`
     mechanic under continuous feeding and care from day 0 through
-    `days_remaining`, returning total product units produced (T8.3q).
+    `days_remaining`, returning the per-production-day breakdown -
+    `[(day, units), ...]`, one entry per day product is actually
+    harvested, `day` an absolute day number - the same shape
+    `forecast_animal_schedule` returns for the non-care path, except a
+    single entry's `units` can be >1 (a banked day paying out in one
+    burst) instead of always 1 (T8.21, extracted from the total-only
+    `_animal_full_care_units` below so `animal_revenue_per_tile_day` can
+    walk real per-unit production days for the `consumption_horizon_
+    aware` combination that function's own docstring used to name as a
+    deliberate, unclosed gap).
 
     Mirrors `kaggriculture.py`'s `_daily_refresh_animals` precisely
     (confirmed against the official "Animal Care" docs too): a day both
@@ -200,7 +209,7 @@ def _animal_full_care_units(animal: str, days_remaining: int) -> int:
     a = ANIMALS[animal]
     yield_units = 0
     pending_care_bonus = 0
-    total_harvested = 0
+    schedule: list[tuple[int, int]] = []
     for day in range(days_remaining):
         next_day = day + 1
         days_since_first = next_day - a["first_yield_day"]
@@ -209,9 +218,18 @@ def _animal_full_care_units(animal: str, days_remaining: int) -> int:
             pending_care_bonus = 0
         pending_care_bonus += 1  # fed and cared every day in this ceiling scenario
         if yield_units > 0:
-            total_harvested += yield_units
+            schedule.append((next_day, yield_units))
             yield_units = 0
-    return total_harvested
+    return schedule
+
+
+def _animal_full_care_units(animal: str, days_remaining: int) -> int:
+    """Total product units produced under continuous care - see
+    `_animal_full_care_schedule` (above) for the mechanic itself. Pure
+    refactor (T8.21): bit-identical to the prior direct simulation, now
+    just the sum of that function's own per-day breakdown.
+    """
+    return sum(units for _, units in _animal_full_care_schedule(animal, days_remaining))
 
 
 def animal_revenue_per_tile_day(
@@ -324,28 +342,40 @@ def animal_revenue_per_tile_day(
     `gamelib.market.expected_daily_consumption` and reuses it here without
     re-deriving a horizon.
 
-    Deliberately a no-op when combined with `care_aware=True`: the exact
-    day-by-day `_animal_full_care_units` simulation returns only a total
-    harvested count, not a per-unit production day (banked units can pay
-    out in an unequal, path-dependent burst - see its own docstring), so
-    there is no real `schedule` to walk consumption against without
-    guessing one. Falls back to the flat `expected_consumption` path in
-    that case, exactly as `care_aware=False` already does - a named,
-    honest gap (T8.3q's own isolation discipline: measure a new
-    combination for real rather than assume it from an existing one),
-    not something this task attempts to close. Defaults to `False`
+    When combined with `care_aware=True` (T8.21; previously a documented
+    no-op falling back to the flat `expected_consumption` path, since the
+    old total-only `_animal_full_care_units` had no per-unit production
+    day to walk consumption against): walks `_animal_full_care_schedule`'s
+    real `[(day, units), ...]` breakdown instead - a single day's burst
+    (banked units paying out together) is expanded into that many
+    consecutive lockstep units, each still priced at its *own* production
+    day's consumption-drained level (`sell_at_inventory - consumption_rate
+    * day + k`, k the running unit index across the whole horizon, day the
+    burst's own day), not a flat one-interval offset. Same real growing
+    per-day shop draw the non-`care_aware` branch above already models,
+    now also available for the care-aware schedule instead of guessing one
+    from the other (T8.3q's own isolation discipline). Defaults to `False`
     (`consumption_rate` unused when off), reproducing the exact prior
     behavior for every caller that doesn't pass it.
     """
     a = ANIMALS[animal]
     if net_of_cost and days_remaining is not None:
         schedule = None
+        care_schedule = None
         if care_aware:
-            units = _animal_full_care_units(animal, days_remaining)
+            care_schedule = _animal_full_care_schedule(animal, days_remaining)
+            units = sum(u for _, u in care_schedule)
         else:
             schedule = forecast_animal_schedule(animal, placed_day=0, horizon_days=days_remaining)
             units = len(schedule)
-        if consumption_horizon_aware and schedule is not None:
+        if consumption_horizon_aware and care_schedule is not None:
+            total_revenue = 0.0
+            k = 0
+            for day, day_units in care_schedule:
+                for _ in range(day_units):
+                    total_revenue += price(a["product"], sell_at_inventory - consumption_rate * day + k)
+                    k += 1
+        elif consumption_horizon_aware and schedule is not None:
             total_revenue = sum(
                 price(a["product"], sell_at_inventory - consumption_rate * day + k)
                 for k, day in enumerate(schedule)

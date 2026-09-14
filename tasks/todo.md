@@ -1063,9 +1063,35 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       seeds/this opponent to pay for it - and `crop_self_impact_aware` (already on by default)
       already provides some real reactive protection, so a proactive basket may just be redundant
       with that. Stays off by default (`portfolio_basket_size=1`), kept available (tested).
-- [ ] T8.20 — lift the single-animal-type cap once labor genuinely supports a second. Investigated
+- [x] T8.21 — close the `animal_care_aware`/`animal_consumption_horizon_aware` no-op gap:
+      `_animal_full_care_units` split into `_animal_full_care_schedule` (new per-production-day
+      `[(day, units), ...]` breakdown, `_animal_full_care_units` now just its sum - pure refactor,
+      bit-identical) so `animal_revenue_per_tile_day` can walk real per-unit production days for the
+      combination instead of silently falling back to the flat `expected_consumption` offset.
+      RED+GREEN in `test_policy_strategy.py`, full suite green (407/407), compileall/boundary clean.
+      **Measured and NOT adopted as a new default** (`tools/measure_t821.py`, against the T8.16(d)
+      baseline - neither flag is on by default, so this changes zero shipped behavior regardless):
+      `animal_consumption_horizon_aware` alone reproduced T8.17's own 0/50, 0/50 exactly (sanity
+      check the refactor didn't leak into the untouched branch). The new `care_aware` +
+      `consumption_horizon_aware` combination: **36%/38% (working/holdout) - a real regression from
+      `animal_care_aware` alone's 48%/56% (T8.17)**, and all-three-combined fell from 44%/54% to
+      34%/38% the same way. Verified this isn't a sign-flip bug: the new walk genuinely raises
+      per-animal scores when a shop is drawing consumption (e.g. COW at consumption_rate=3:
+      $142->$254/tile-day) exactly as designed - the regression is real economics, not
+      miscomputation. The coherent explanation: `animal_consumption_horizon_aware` was *already* a
+      decisive standalone rejection (0/50) before this task - its flaw (extrapolating *today's*
+      shop-consumption rate as if it held for the animal's *entire* remaining-season horizon,
+      systematically overcrediting future units a shop may not even still be drawing on) was simply
+      invisible in `animal_care_aware`'s own measurements because the no-op meant the flawed model
+      never actually ran in that combination. Closing the gap didn't introduce a new problem - it
+      exposed T8.10's already-known one in a context that used to mask it. Kept available (tested,
+      both flags default `False`, so this combination only ever fires when a caller explicitly sets
+      both) - the real fix, if this is revisited, is `animal_consumption_horizon_aware`'s own
+      over-extrapolation (e.g. discounting the assumed rate for how much of the horizon the current
+      shop mix can actually be trusted to hold), not `care_aware`'s schedule.
+- [ ] T8.22 — lift the single-animal-type cap once labor genuinely supports a second. Investigated
       and confirmed against `kaggriculture.py` (no engine-level cap - see the plan file), not yet
-      built. Sequenced after T8.17 per the plan's own dependency reasoning.
+      built. Sequenced after T8.17/T8.21 per the plan's own dependency reasoning.
 
 ## Not planned yet (see plan.md)
 

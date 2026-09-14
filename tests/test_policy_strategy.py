@@ -763,23 +763,51 @@ def test_animal_revenue_per_tile_day_consumption_horizon_aware_defaults_to_false
     ) == pytest.approx(without)
 
 
-def test_animal_revenue_per_tile_day_consumption_horizon_aware_is_a_noop_with_care_aware():
-    # care_aware's day-by-day simulation (_animal_full_care_units) returns
-    # only a total unit count, not a per-unit production day - there is no
-    # `schedule` list to walk consumption against in that branch. Rather
-    # than silently guess a day for each unit, consumption_horizon_aware
-    # is a documented no-op when combined with care_aware (falls back to
-    # the flat expected_consumption path) - a real, named gap, not solved
-    # here (T8.3q's own isolation discipline: measure combinations
-    # separately, never guess one from the other).
-    without = animal_revenue_per_tile_day(
-        "GOOSE", MARKET_I0, days_remaining=6, net_of_cost=True, feed_price=2, care_aware=True,
+def test_animal_full_care_schedule_matches_total_units_and_hand_trace():
+    # T8.21: _animal_full_care_schedule is the new per-production-day
+    # breakdown (list[tuple[day, units]]) that _animal_full_care_units
+    # (still returning just the total) is refactored to sum - same
+    # GOOSE/6-day hand trace as
+    # test_animal_revenue_per_tile_day_care_aware_matches_exact_day_by_day_simulation:
+    # day4 pays out base 1 + banked 3 = 4 (capped at max_held=4), day5
+    # pays 1+1=2, day6 pays 1+1=2.
+    from kagg.policy.strategy import _animal_full_care_schedule, _animal_full_care_units
+
+    schedule = _animal_full_care_schedule("GOOSE", 6)
+    assert schedule == [(4, 4), (5, 2), (6, 2)]
+    assert _animal_full_care_units("GOOSE", 6) == sum(units for _, units in schedule)
+
+
+def test_animal_revenue_per_tile_day_consumption_horizon_aware_walks_the_real_care_schedule():
+    # T8.21: closes the gap the old "is_a_noop_with_care_aware" test named
+    # - _animal_full_care_schedule (above) gives a real per-production-day
+    # breakdown, so consumption_horizon_aware no longer needs to fall back
+    # to the flat expected_consumption offset when care_aware is also set.
+    # Each of the 8 real units (day4 x4, day5 x2, day6 x2, in production
+    # order) is priced at its own day's consumption-drained level, walked
+    # lockstep across the whole 8-unit run (k=0..7), not per-day.
+    from kagg.gamelib.market import price as _price
+
+    days_remaining = 6
+    rate = 3
+    per_day_units = [(4, 4), (5, 2), (6, 2)]
+    flat_units = [day for day, units in per_day_units for _ in range(units)]
+    expected = (
+        sum(_price("EGG", MARKET_I0 - rate * day + k) for k, day in enumerate(flat_units))
+        - 300
+        - 2 * days_remaining
+    ) / days_remaining
+    got = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=days_remaining, net_of_cost=True, feed_price=2, care_aware=True,
+        consumption_horizon_aware=True, consumption_rate=rate,
     )
-    with_flag = animal_revenue_per_tile_day(
-        "GOOSE", MARKET_I0, days_remaining=6, net_of_cost=True, feed_price=2, care_aware=True,
-        consumption_horizon_aware=True, consumption_rate=3,
+    assert got == pytest.approx(expected)
+    # And it must actually differ from the old flat-offset fallback -
+    # otherwise this combination still isn't doing anything new.
+    flat_fallback = animal_revenue_per_tile_day(
+        "GOOSE", MARKET_I0, days_remaining=days_remaining, net_of_cost=True, feed_price=2, care_aware=True,
     )
-    assert with_flag == pytest.approx(without)
+    assert got != pytest.approx(flat_fallback)
 
 
 def test_rank_portfolio_animal_consumption_horizon_aware_raises_cows_rank():
