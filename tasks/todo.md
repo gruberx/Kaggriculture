@@ -1463,6 +1463,28 @@ pipeline are this codebase's own choices, not game rules (see the full plan at
       kept as a record of the re-test. No seed-900 trace or golden-episode re-record needed (nothing
       changed). No Kaggle submission in this task - ask before any further one, as always.
 
+- [ ] T8.31 — let animals compete for investment, not just win-or-nothing against the single top crop
+      (the second of T8.29's own named follow-ups, same user request as T8.30 above). Confirmed
+      structurally this session via direct `score_portfolio` computation: at day 0 (fresh market),
+      MELON scores ~119/tile-day vs COW's ~23, and even saturating a single crop type to 25+ tiles
+      (self-impact) only demotes *that* crop - the ranking just rotates to the next fresh crop type
+      (STRAWBERRY ~30, CARROT ~21, WHEAT ~19), never forced to consider an animal, since
+      `_top_investment_choice` requires the top animal to beat the single best crop score and
+      self-impact decay is scoped per-crop, not farm-wide. Matches the user's own top-10 comparison:
+      our farms run 1 quadrant/0 animals while competitors run animals *and* crops from day 1.
+
+      **Stage 0** (cheap sanity check before building anything new, per this project's own established
+      discipline): re-swept `investment_commit_margin` (T8.14, only ever tested positive before) into
+      negative territory - -0.1, -0.2, -0.3, -0.5 - against the checked-in baseline
+      (`tools/measure_t831_stage0.py`). **Result: every single candidate produced literally zero
+      behavioral difference from the baseline across all 400 games measured (50 working + 50 holdout
+      x 4 candidates, all ties, 0W/0L on every block)** - stronger than the predicted "unlikely to be
+      sufficient": the gate never once flipped a single decision in a single game, even at the most
+      extreme margin tested. Confirms the score gap (MELON ~119 vs COW ~23, needing roughly -80% to
+      flip per this session's own direct computation) is far too wide for any margin in a plausible
+      range to matter - `investment_commit_margin` is not the lever. This is real, decisive evidence
+      that Stage 1's new-mechanism approach is necessary, not a wasted detour.
+
 Fresh Kaggle submission (2026-09-14, user-approved: "Да, сабмитить сейчас"): ref `56224998`
 (commit `da87ce2`), bundling every accepted change since the previous submission (ref `56214285`,
 commit `777e46a`) - most notably T8.16(d)'s `dynamic_hiring` (98% held-out) and T8.27's corrected
