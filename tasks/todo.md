@@ -1624,6 +1624,67 @@ workload-forecast hiring (92% held-out), plus the T8.25 WHEAT feed-restock fix. 
 `get_competition_submission` (team `Gruberx`, 159087 bytes). Score not yet checked - per this
 project's own established finding, a fresh submission's score is volatile for its first ~20 minutes.
 
+- [x] T8.33 — right-size the post-land-purchase cash reserve, the user's own follow-up question
+      (2026-09-15): "Зачем так много денег должно оставаться после покупки нового квадранта? ...
+      Нужно найти оптимальную сумму для баланса." Confirmed from source before measuring: realistic
+      burn is $100-900/day (hands $54/day flat, seeds ~$50-900/day, animals $300-500 once) against
+      mid-season balances of $20k-37k, land is last in `decide.py`'s spend tail so it can't outbid
+      seeds/animals within a turn, and `land_purchase_threshold_money` is the only active cash floor
+      (the purpose-built `seed_cash_reserve`/`hire_cash_reserve` both ship at 0, never swept). T7.4 and
+      T8.8 both swept low thresholds and both moved the ascent upward, but neither ever recorded a
+      per-value win rate, and both ran on code superseded by T8.29's labor fix and T8.31's
+      `always_pursue_one_animal` - this task's Stage 1 is the first isolated, recorded sweep of these
+      values on current code.
+
+      **Stage 1** (measurement only, no new code): `tools/measure_t833.py`. Axis A swept
+      `land_purchase_threshold_money` alone over `[0, 1000, 2000, 3000, 5000, 7500, 10000]`
+      (`land_buy_max_free_tile_fraction` left at shipped 0.1) on the 50 tuning seeds against the
+      checked-in baseline (15000). **Every single value produced the exact same result**: 12.0%
+      win rate, 6W/44L/0T, byte-identical across all seven thresholds - a flatness striking enough to
+      demand a direct trace before trusting it, per this project's own T8.3b discipline. Axis B (top
+      two thresholds x `land_buy_max_free_tile_fraction` ∈ {0.1, 0.2}) found the same shape: 20.0%
+      (10W/40L/0T) for threshold=0 at fraction=0.2, still a decisive loss.
+
+      **Traced the mechanism directly** (not just accepted the aggregate): a solo-vs-"pass" trace on
+      seed 900 (`tools/trace_t833.py`, following `trace_t832.py`'s pattern) showed *no* divergence at
+      all between threshold=0 and the 15000 baseline - money on that seed jumps past $20k by day 12,
+      so both thresholds clear trivially and the solo trace is misleading for this parameter. A scan of
+      20 tuning seeds confirmed every one was "same" in solo play. The real divergence only shows up in
+      *competitive* paired play (shared market with a real opponent, not "pass") - confirmed first by
+      ruling out a harness bug: baseline played against a literal copy of itself produced 20/20 ties
+      (perfect determinism, no confound), so the non-tie results genuinely come from the swept
+      parameter. A direct paired trace of threshold=0 vs. baseline on seed 100
+      (`tools/trace_paired.py`-style ad hoc script, both farms' state dumped from the *same* shared
+      episode) found the actual mechanism: threshold=0 opens its 2nd quadrant on day 15 while still
+      under-capitalized (~$13,470, well below the baseline's 15000 floor); the baseline instead waits
+      until day 23, once money has already grown past $16,000 on its own. Critically, **hand count
+      stays flat at 2 for both agents the entire 30-day season** - neither variant hires more labor to
+      work the new land. The early-buying agent ends the season with *less* final money ($35,905 vs.
+      $36,701) than the agent that waited: the second quadrant sits partially idle (planted-tile count
+      never gets meaningfully ahead of the 1-quadrant baseline) while the cash that bought it is no
+      longer compounding. **The 15000 threshold is not acting as a literal "cash needed for
+      consumables" floor** (consumable burn genuinely is $100-900/day, confirming the pre-measurement
+      analysis) - **it is acting as an indirect proxy for "production is established enough that
+      expansion won't outpace labor,"** and lowering it defeats that proxy without offering anything in
+      its place, since neither `should_buy_land` nor either candidate value gives the farm more hands
+      to work the extra land.
+
+      **Confirmation on the extended 200-seed holdout** (`range(900, 1100)`, per the T8.32 addendum's
+      own lesson about n=50 noise): threshold=0/fraction=0.2 scored 31.5% (63W/137L/0T), Wilson interval
+      `[0.255, 0.382]` cleanly excluding the even-odds baseline's `[0.431, 0.569]` - a *decisive*,
+      statistically real rejection, not noise and not ambiguous. `accept_candidate=False`.
+
+      **Not accepted; no parameter changed.** No golden-episode re-record (nothing shipped differs).
+      This is a real, informative null result in the user's own preferred direction, not a failure to
+      route around: the user's premise (burn is small relative to the reserve) is correct, but the
+      reserve's actual job in this codebase is a labor-readiness proxy, not a liquidity buffer - so
+      Stage 2 as originally scoped (a reserve sized to the *seed cost* of the land, i.e. still a pure
+      liquidity measure) would very likely fail the same way, since seed-affordability was never the
+      binding constraint here. Flagged to the user rather than built blind, since it changes what
+      Stage 2 should even attempt (a labor-aware gate, not a smaller/adaptive liquidity floor) - this
+      overlaps territory T8.30 already explored from the hiring-floor side and found losing. No Kaggle
+      submission in this task.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
