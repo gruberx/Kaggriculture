@@ -1733,6 +1733,62 @@ project's own established finding, a fresh submission's score is volatile for it
       defaults but the surviving winners of a real, repeated search. No golden-episode re-record
       (nothing shipped differs). No Kaggle submission in this task.
 
+- [x] T8.35 — daily development dashboard, reusable diagnostic infrastructure (user's own request,
+      2026-09-17, after seeing T8.34's day-0 hiring-burst finding: a concrete hypothesis about the
+      *shape* healthy development should have - hire, work, harvest, sell, reinvest, hire again - and a
+      request for the instrumentation to check where the real trajectory departs from it: crop/animal
+      loss, hand count, quadrant timing, cash flow, purchase affordability, and whether sale prices hit
+      the floor, all by day). None of this existed - every prior `trace_t83N.py` read five fields
+      (hands/planted-tiles/animal-tiles/money/quadrants) and nothing anywhere diffed consecutive steps
+      for loss events, since the engine has no event log at all (`info` is always `{}`).
+
+      Built `tools/daily_dashboard.py` as committed, reusable infrastructure (like `tools/harness.py`/
+      `tools/tuning.py`, unlike the disposable `trace_t83N.py` one-offs) with real RED-then-GREEN tests
+      (`tests/test_tools_daily_dashboard.py`, 20 tests, all passing on first implementation). Pure,
+      independently-tested detection functions reconstruct events from the real engine's own end-of-day
+      rules (`kaggle_environments/envs/kaggriculture/kaggriculture.py`, not `src/kagg/gamelib/` which
+      only mirrors constants): `classify_plant_transition` (drought death at `consecutive_unwatered>=2`
+      vs. lifespan decay, reusing this repo's own tested `kagg.gamelib.decay.decay_step` rather than
+      reimplementing it), `classify_animal_transition` (escape at `consecutive_unfed>=2`),
+      `is_price_floor_pinned` (price==1 AND inventory unchanged - the engine's own "sale only grows
+      inventory when price>1" rule, the precise signature of dumping into a dead floor), `order_fill`
+      (diffs `private["seeds"]`/`["shed"]`/`unlocked_quadrants`/`hires_today` against each submitted
+      order's requested quantity for an exact, engine-truth affordability signal), and
+      `land_gate_status` (delegates to the real `strategy.should_buy_land`, only adding the money-vs-
+      occupancy breakdown it doesn't itself report). Schema correction found while building this:
+      `obs["private"]["seeds"]` is a sibling of `farms`, not inside `farm[i]`, and must be read
+      per-player (`steps[t][i].observation["private"]`), unlike the shared `farms`/`market`/`town` keys
+      (always via index 0).
+
+      `pytest tests/ -q` (470 passed, no regressions), `compileall` clean. No `strategy.py`/`params.py`/
+      `policy.json` changes - read-only diagnostic tooling, no golden-episode re-record, no submission.
+
+      **Ran it** (the actual deliverable) on seed 900 solo (vs. `pass`), seed 100 solo, and seed 900
+      paired (checked-in baseline vs. itself, for real competitive market dynamics) - real findings, not
+      a hypothetical instrument:
+      - **Animal escapes do happen, but rarely**: one real escape found (seed 100, day 28, COW) out of
+        3 traces - not the dominant failure mode in these samples.
+      - **Crop deaths cluster almost entirely on the season's last 1-2 days** (day 28-29 in all three
+        traces, mostly STRAWBERRY, a mix of drought and decay causes) - reads as the agent simply
+        stopping maintenance once the season is ending (nothing left to gain from watering a crop that
+        won't be harvested again), not a mid-season problem.
+      - **Land-purchase timing is real and shifts a lot with competition**: quadrant 2 opened day 14-15
+        in both solo traces but day 22 in the paired trace - confirms T8.33's own finding that a real
+        competitor slows cash accumulation, now visible directly rather than inferred.
+      - **New finding, only visible in paired play**: on day 3 of the paired trace, ~20 consecutive
+        `BUY_PRODUCT` (WHEAT restock) orders came back `filled=0` - a sustained, nearly full-day feed-
+        supply crunch from market competition for WHEAT that never appeared in either solo-vs-"pass"
+        trace. Didn't cause an actual animal loss in this trace, but is exactly the kind of previously-
+        invisible risk the user asked this tool to surface - worth a closer look as a future task, not
+        chased further here.
+      - **No product hit the price floor in any of the 3 traces** - contrary to the user's suspicion
+        this might be a live problem, at least in these samples it wasn't; only 3 single-episode samples
+        though, not a swept claim.
+      - **Caveat, stated rather than hidden**: many `BUY_SEED requested=1 filled=0` events fire even at
+        day 12+ with $20k+ on hand - almost certainly the documented `order_fill` lower-bound artifact
+        (a same-turn PLANT consumes the seed before the buy is diffed), not real underfunding. Not fixed
+        in this task (diagnostic scope only); flagged so the event log isn't over-read at face value.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
