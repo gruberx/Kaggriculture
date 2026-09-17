@@ -1685,6 +1685,54 @@ project's own established finding, a fresh submission's score is volatile for it
       overlaps territory T8.30 already explored from the hiring-floor side and found losing. No Kaggle
       submission in this task.
 
+- [x] T8.34 — widen `workload_forecast_free_tile_weight`'s sweep to test whether hiring's pin-to-
+      floor problem can be fixed before any labor-aware land gate (T8.33's own follow-up; user's
+      choice, 2026-09-17: "давай 1 вариант" - fix hiring first). Before measuring anything, confirmed
+      empirically (not just from a docstring's claim) that hand count is pinned at `min_hires_per_day=2`
+      for the *entire* season under shipped defaults, on all 15 tuning seeds checked (`max_hands=2`
+      every time, solo play). Root cause pinned down analytically by calling `hires_per_day` directly
+      with representative tile counts: T8.32 Stage 2's own swept range for
+      `workload_forecast_free_tile_weight`, `[0.1, 0.25, 0.5, 1.0]`, **never crosses the point where the
+      forecast's raw target exceeds the floor** - the target only starts moving at weight~2 and needs
+      weight~5-10 to reach meaningful levels. This fully explains T8.32 Stage 2's "flat, no benefit"
+      result: the swept range was structurally incapable of ever changing `hires_per_day`'s output, so
+      of course every value performed identically to weight=0.
+
+      **Stage 1**: `tools/measure_t834.py` swept the *calibrated* range `[1, 2, 5, 10, 20]`, and for
+      each value both measured self-play win rate AND directly checked max hand count reached (10-seed
+      solo diagnostic) - checking the mechanism alongside the aggregate this time, not only after a
+      suspicious result (T8.33's own lesson). **The mechanism works exactly as predicted**: max hands
+      reached climbed 4 (weight=1) -> 7 (weight=2) -> 8/saturated (weight>=5) - the floor genuinely
+      breaks. **But win rate is a clean, decisive loss at every single weight, getting worse as hiring
+      increases**: weight=1 8% (4W/45L/1T), weight=2 26% (13W/37L/0T, the least-bad), weight=5/10/20 all
+      2% (1W/49L/0T) - a near-total wipeout once the boost saturates to `max_hires_per_day=8`.
+      `accept_candidate=False` at every value; no confirmation run needed (Stage 1 itself already
+      rejected outright).
+
+      **Traced the mechanism** (weight=2 vs. baseline, paired match, seed 100): `free_tiles` is highest
+      on **day 0**, before a single tile has been planted - exactly when there's no real backlog to
+      justify extra hands. The forecast fires an immediate day-0 hiring burst (4-8 hands, Fibonacci-
+      priced) that reverts to 2 hands again by day 1 once tiles get planted and `free_tiles` shrinks -
+      a one-time, structurally-mistimed cost, not a sustained productive increase. That single day's
+      overspend left the weight=2 variant with a persistently thinner cash cushion (~$300-700 behind
+      baseline) for the rest of the season; in this traced seed, that lag caused its planted-tile count
+      to fall just short of the `land_buy_max_free_tile_fraction=0.1` occupancy gate at the one moment
+      late in the season when the baseline crossed it, so the weight=2 farm never opened its 2nd
+      quadrant at all (final money $35,618 vs. baseline's $37,855, which did). `free_tiles` is a poor
+      hiring-demand signal precisely because it peaks when demand is lowest (nothing planted yet, no
+      maturing crops yet) - the mirror image of T8.33's own finding that spending ahead of established
+      need loses, not a new lesson but the same one from the hiring side instead of the land side.
+
+      **Not accepted; no parameter changed.** This closes the "fix hiring first" path the user chose:
+      a real attempt, correctly calibrated (confirmed via direct computation, not guessed), which
+      breaks the floor exactly as intended but loses decisively for a well-understood reason. Combined
+      with T8.33's own finding, both directions of the land+hiring co-optimization hypothesis (loosen
+      land waiting for hands to catch up, T8.33; loosen hiring waiting for land to justify it, T8.34)
+      have now been tried and rejected on current code - the codebase's current shipped values
+      (`land_purchase_threshold_money=15000`, hiring pinned near its floor) are not merely untested
+      defaults but the surviving winners of a real, repeated search. No golden-episode re-record
+      (nothing shipped differs). No Kaggle submission in this task.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
