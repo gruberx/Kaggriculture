@@ -1958,6 +1958,74 @@ project's own established finding, a fresh submission's score is volatile for it
       bookkeeping simplification, not an engine constraint) - remains explicitly out of scope here, its
       own future task.
 
+- [x] T8.39 — any free unit can FEED an animal / PICKUP its wheat (the T8.37/T8.38 follow-up, user's
+      own request, 2026-09-18: "нужны помощники в кормёжке... их учет чтобы они кормили животных, а не
+      просто удерживали зерно"). Confirmed directly against `kaggriculture.py`: `FEED`/`PICKUP`'s real
+      handlers never check which unit acts - `tasks._PINNED_UNIT_INDEX=0` is a pure policy-layer
+      bookkeeping choice, not an engine rule; it exists only because `decide()` historically modeled
+      `inventories[0]` alone.
+
+      **Part 1 (plumbing, gated where it had to be)**: `build_task_list`/`tasks` now thread the real
+      per-unit `inventories` list through the task layer. New `_units_holding` helper; `Task` gains an
+      additive `eligible_units` field; `assign_units` gains a third "restricted" resolution stage
+      (between pinned and unpinned) that matches a restricted task to the globally nearest *free and
+      eligible* unit, resolved before plain unpinned work. FEED/FERTILIZE bind to `eligible_units`
+      (any unit currently holding the item); PLACE binds to the specific unit that actually holds the
+      bought animal. FERTILIZE also picked up a real, previously-latent gap along the way - it had no
+      unit binding at all before this, harmless only because `use_fertilizer` defaults off.
+
+      New param `feed_pickup_unpinned` (default `False`) gates the actual behavior change: the
+      aggregate wheat PICKUP becomes assignable to any free unit, and the WHEAT-holding scan widens
+      from unit 0 alone to every unit. **That WHEAT scan specifically needed the gate, unlike
+      FERTILIZE/PLACE's unconditional multi-unit awareness - found while implementing this, not
+      anticipated in the plan**: making it unconditional moved two golden episodes' final money.
+      Traced to a real coupling: `HARVEST`'s own handler deposits a crop's yield into the *acting*
+      unit's own inventory, and WHEAT is both a crop and the feed item, so a hired hand harvesting a
+      WHEAT tile genuinely holds WHEAT today, invisible to `decide()` only because nothing before this
+      task ever looked past unit 0. Gating the scan behind `feed_pickup_unpinned` restored exact
+      bit-identity with the flag off (confirmed, not assumed: full suite green, both golden-episode
+      tests - money and the T8.38 escape guardrail - byte-identical). The animal PICKUP/PLACE pipeline
+      stays pinned to the farmer regardless of this flag, a deliberate scope limit named in the plan.
+
+      16 new tests (`tests/test_policy_tasks.py`, `tests/test_policy_decide.py`): the restricted
+      `assign_units` stage, FEED/PICKUP/FERTILIZE binding, the livelock guard generalized to N tiles
+      vs. M holders, and an end-to-end "busy farmer + free wheat-carrying hand" scenario. Committed
+      separately (Part 1) before any measurement, per this session's own discipline.
+
+      **Traced (`tools/trace_t839.py`, seeds 100/28, 105/29, 900) before measuring**: the mechanism
+      works exactly as designed - a free hand really does FEED (seed 100 day 28: `hand[1]: ['FEED']`),
+      never more than one wheat PICKUP per day (no livelock), and the flag *did* convert one of
+      T8.35/T8.37's own known escapes into a survival (seed 100: baseline's COW escaped day 28,
+      candidate's did not). Seed 105's previously-known escape no longer reproduces under today's
+      baseline at all (superseded by later fixes this session) - not this task's mechanism at work.
+
+      **But the traced money moved the wrong way**: seed 100, converting the escape into a survival
+      still finished *lower* ($43,712 candidate vs. $46,706 baseline) - saving the animal cost more in
+      diverted hand-turns and wheat than the animal's own last-two-days production was worth, the same
+      "insurance premium exceeds a rare/late/cheap escape" economics T8.37 already found for
+      `wheat_urgency_reserve`. Seed 105 (no escape either way) also finished lower for the candidate.
+
+      **Measured (`tools/measure_t839.py`) - decisive rejection, confirming the trace**: Stage A
+      (`feed_pickup_unpinned=True` alone, 50 tuning seeds) win rate 32.0% (16W/34L/0T), Wilson interval
+      `[0.208, 0.458]` - does not clear `accept_candidate`. No n=200 confirmation run (already rejected
+      outright), no Stage B joint test with `max_animals_per_type=2` (gated on Stage A winning, per the
+      plan).
+
+      **Not accepted; `feed_pickup_unpinned` stays `False`.** Part 1's plumbing ships regardless (a
+      real correctness fix and the named prerequisite for ever retrying `max_animals_per_type>1` - see
+      T8.25's own "labor-gating" note) - only the behavioral flag is rejected. Consistent with T8.37's
+      own finding: at a single animal, the cost of *always* paying labor/wheat to avoid a rare, often
+      late-season, often cheap escape outweighs the escape itself. The user's original hypothesis
+      ("past animal-unprofitability conclusions may be confounded by undetected starvation") is now
+      fully resolved across both halves: T8.37 found the wheat-price-cap escape path was real but its
+      fix still loses; T8.39 found the farmer-only-feeding constraint was real but lifting it still
+      loses too, for the same underlying reason - a single animal's escape risk is already cheap enough
+      that today's other defaults (T8.31's `always_pursue_one_animal`, T8.25's `wheat_urgency_reserve=
+      0`) have it about right. `max_animals_per_type` remains 1; unpinning the *animal* PICKUP itself
+      (the once-per-game step this task deliberately left pinned) remains a cheap, unbuilt follow-up if
+      `max_animals_per_type` is ever revisited with this labor-gating fix now in place. No golden-episode
+      re-record (nothing accepted). No Kaggle submission in this task.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
