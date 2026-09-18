@@ -1891,6 +1891,47 @@ project's own established finding, a fresh submission's score is volatile for it
       itself stands (a real, decisive loss, confirmed twice now under two different explanations) - only
       the *mechanism* is corrected here, not the result.
 
+- [x] T8.37 — resweep `wheat_urgency_reserve` against today's shipped baseline (user's own request,
+      2026-09-18, after T8.36's traced COW escape: past animal-unprofitability conclusions might be
+      confounded by undetected starvation, not real economics). Three research agents confirmed the
+      landscape first: raising `wheat_max_buy_price` and the `wheat_self_sufficiency_aware` "grow your
+      own feed" hedge are both already-tried, decisively-rejected or near-no-op dead ends (see this
+      session's plan file / T8.36's own entries); `wheat_urgency_reserve` was real, working, and traced
+      to save 5/5 animals at `max_animals_per_type=3` (T8.25), but shelved because at the shipped
+      `max_animals_per_type=1` "the single animal's buffer already survives without it." That premise
+      was measured before T8.27/T8.29/T8.31 - since T8.31 now guarantees an animal from day 1 of every
+      game (not rarely, as when T8.25 measured this), the premise looked stale enough to warrant a
+      resweep, not just re-reasoned about.
+
+      **Measured (`tools/measure_t837.py`) - the premise turns out to still hold; a real, decisive
+      rejection, confirming T8.25's original finding rather than overturning it**: `wheat_urgency_
+      reserve=0` (identical to baseline) ties 50/50 as expected (sanity check the harness is comparing
+      correctly); `2`, `3`, and `5` all produce the *exact same* result, 16.0% win rate (8W/39L/3T),
+      Wilson interval `[0.083, 0.285]` - a clean, decisive loss. `accept_candidate=False` at every value;
+      no n=200 confirmation run (already rejected outright), no Stage B joint test with
+      `max_animals_per_type=2` (gated on Stage A winning).
+
+      **Traced why** (seed 105, paired candidate `wheat_urgency_reserve=3` vs. the checked-in baseline,
+      same episode): the mechanism works exactly as designed - shed WHEAT stays comfortably stocked
+      (~10) all season, **zero escapes** for the candidate. But once WHEAT's price crosses $40 (day 15),
+      the override fires *every single day* for the rest of the season, buying at $40-53/unit instead of
+      the $25-30 it would have paid earlier - an unconditional "insurance premium" paid daily whether or
+      not an escape was actually imminent. The baseline, in the *same* episode, **did** lose its COW -
+      but on day 29, the literal last day of the season, when the loss costs almost nothing (a full
+      season of production already banked). Final money: candidate $32,846 vs. baseline $34,903 -
+      baseline wins even *with* an escape, because losing an animal on the last possible day is far
+      cheaper than paying full price-cap-defeating premiums for two weeks straight. Confirms the exact
+      economic logic T8.25 originally found: escapes are still a *rare*, often *late-season and low-cost*
+      event even under today's more animal-friendly defaults, while the override's cost is paid
+      unconditionally and often - T8.31 changed how often an animal is *held*, not how often it's
+      actually at real risk of a costly (early/mid-season) escape.
+
+      **Not accepted; no parameter changed.** My own plan's prediction ("plausible real win... precisely
+      because the premise that rejected it before... is what changed") was wrong, stated honestly rather
+      than reframed after the fact - a good-faith, traceable prediction that a real measurement corrected,
+      exactly the discipline this is for. `wheat_max_buy_price` stays 40, `wheat_urgency_reserve` stays 0.
+      No golden-episode re-record. No Kaggle submission in this task.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
