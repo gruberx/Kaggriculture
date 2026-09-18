@@ -133,6 +133,35 @@ def test_price_floor_not_pinned_when_price_above_floor():
     assert daily_dashboard.is_price_floor_pinned(prev_prices, cur_prices, prev_inv, cur_inv, "WOOL") is False
 
 
+# --- track_daily_min_price -------------------------------------------------
+
+
+def test_track_daily_min_price_records_the_cheapest_product():
+    day_min = {}
+    daily_dashboard.track_daily_min_price(day_min, day=0, prices={"WHEAT": 25, "CARROT": 35, "TOMATO": 18})
+    assert day_min[0] == [18, "TOMATO"]
+
+
+def test_track_daily_min_price_updates_on_a_lower_price_later_the_same_day():
+    day_min = {0: [18, "TOMATO"]}
+    daily_dashboard.track_daily_min_price(day_min, day=0, prices={"WHEAT": 25, "TOMATO": 12})
+    assert day_min[0] == [12, "TOMATO"]
+
+
+def test_track_daily_min_price_ignores_a_higher_price():
+    day_min = {0: [18, "TOMATO"]}
+    daily_dashboard.track_daily_min_price(day_min, day=0, prices={"WHEAT": 25, "TOMATO": 40})
+    assert day_min[0] == [18, "TOMATO"]
+
+
+def test_track_daily_min_price_keeps_each_day_independent():
+    day_min = {}
+    daily_dashboard.track_daily_min_price(day_min, day=0, prices={"WHEAT": 10})
+    daily_dashboard.track_daily_min_price(day_min, day=1, prices={"WHEAT": 25})
+    assert day_min[0] == [10, "WHEAT"]
+    assert day_min[1] == [25, "WHEAT"]
+
+
 # --- order_fill ------------------------------------------------------------
 
 

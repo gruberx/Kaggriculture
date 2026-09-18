@@ -1789,6 +1789,17 @@ project's own established finding, a fresh submission's score is volatile for it
         (a same-turn PLANT consumes the seed before the buy is diffed), not real underfunding. Not fixed
         in this task (diagnostic scope only); flagged so the event log isn't over-read at face value.
 
+      **Addendum - per-day minimum sale price** (user request after seeing the first table: "не хватает
+      минимальной цены продажи товара по дням"): added `track_daily_min_price` (4 new tests, 24/24
+      passing) - a pure accumulator run in a first pass over the *whole* episode before any headline row
+      prints, since a day's row prints at `hour==1` (1-2 turns into that day), before most of that day's
+      own price movement has happened. New `day_min_price` column shows the cheapest product and its
+      lowest price reached that day. Re-ran the seed 900 vs. `starter` trial: the daily minimum was
+      WHEAT for the first 14 days, **rising** from $25 to $35 (scarcity from active feed-buying, not a
+      crash), then CARROT flat at $35-36 for the rest of the season - no evidence of price-floor dumping
+      in this trace, consistent with the earlier "0 products at floor" finding, now shown as an actual
+      trend instead of a single floor/not-floor bit. `pytest tests/ -q`: 474 passed, `compileall` clean.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

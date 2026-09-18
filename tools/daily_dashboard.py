@@ -143,6 +143,21 @@ def is_price_floor_pinned(prev_prices, cur_prices, prev_inventory, cur_inventory
     return cur_inventory.get(product) == prev_inventory.get(product)
 
 
+def track_daily_min_price(day_min: dict, day: int, prices: dict) -> None:
+    """Update `day_min` (day -> [price, product]) in place with the
+    cheapest product/price seen so far this day, across every product in
+    `prices`. Call once per turn with that turn's obs["market"]["prices"]
+    - since a day's headline row is printed the moment `hour==1` (early
+    in the day), the caller must run this over the *whole* episode in a
+    first pass before printing any row, not incrementally alongside it,
+    or a day's minimum would be read back before most of that day's
+    turns - and their price movement - have even happened yet."""
+    for product, price in prices.items():
+        cur = day_min.get(day)
+        if cur is None or price < cur[0]:
+            day_min[day] = [price, product]
+
+
 def order_fill(order: list, prev_private: dict, cur_private: dict, prev_farm: dict, cur_farm: dict):
     """(op, requested, filled) for one submitted market order, by diffing
     the exact counter the real engine actually updates for that order
@@ -230,9 +245,19 @@ def run_dashboard(
     env.run([agent_path, opponent_path])
     steps = env.steps
 
+    # First pass: each day's minimum sale price, over the *whole* episode -
+    # must run before any headline row is printed, since a day's row is
+    # printed at hour==1 (1-2 turns into that day), long before most of
+    # that day's own price movement has happened yet (see
+    # track_daily_min_price's own docstring).
+    day_min_price: dict[int, list] = {}
+    for s in steps:
+        obs0 = s[0].observation
+        track_daily_min_price(day_min_price, obs0.get("day"), obs0["market"]["prices"])
+
     events = []  # list of (day, text)
     print(f"=== daily dashboard: seed {seed} ===")
-    print("  day | hands | quad | money    | plant | animal | seeds_held | wheat_shed | floor_prices")
+    print("  day | hands | quad | money    | plant | animal | seeds_held | wheat_shed | floor_prices | day_min_price")
 
     turns_per_day = 24
     for t in range(1, len(steps)):
@@ -288,10 +313,12 @@ def run_dashboard(
             wheat_shed = cur_private.get("shed", {}).get("WHEAT", 0)
             n_floor = sum(1 for p in PRODUCTS if cur_prices.get(p) == PRICE_FLOOR)
             floor_note = f"{n_floor} at floor" if n_floor else "-"
+            min_price, min_product = day_min_price.get(day, [None, None])
+            min_note = f"{min_product} ${min_price}" if min_price is not None else "-"
             print(
                 f"  {day:>3} | {len(cur_farm.get('hands', [])):>5} | {n_unlocked_extra + 1:>4} | "
                 f"{cur_farm['money']:>8.0f} | {counts['plant']:>5} | {counts['animal']:>6} | "
-                f"{seeds_held:>10} | {wheat_shed:>10} | {floor_note}"
+                f"{seeds_held:>10} | {wheat_shed:>10} | {floor_note:>12} | {min_note}"
             )
 
     print("\n=== events ===")
