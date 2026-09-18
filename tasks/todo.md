@@ -1800,6 +1800,27 @@ project's own established finding, a fresh submission's score is volatile for it
       in this trace, consistent with the earlier "0 products at floor" finding, now shown as an actual
       trend instead of a single floor/not-floor bit. `pytest tests/ -q`: 474 passed, `compileall` clean.
 
+      **Correction - a single global minimum was the wrong shape** (user's follow-up: "Это только цены
+      на покупку семян и зерна? Мне также интересна цена на продажу готовой продукции... В разные ячейки
+      покупка отдельно, продажа отдельно"): the single `day_min_price` figure was structurally dominated
+      by whichever of the 9 `PRODUCTS` simply has the lowest *base* price (WHEAT $25, CARROT $35), so it
+      could never surface MILK/MELON/WOOL/EGG's own price movement even when interesting - not a bug, a
+      wrong question. Replaced it with two separate accumulators, `day_buys`/`day_sells` (new
+      `record_daily_transaction`, 4 new tests, 29/29 passing), built the same first-pass way, populated
+      only from orders that actually filled that turn (`order_fill`, now also handling `SELL` - the
+      engine decrements `shed[item]` for a sale, the opposite direction from every `BUY_*`). Found and
+      fixed one real bug before shipping this to the user, not after: WHEAT plays two distinct roles
+      (a fixed seed cost via `BUY_SEED` and a genuinely market-priced feed restock via `BUY_PRODUCT`) -
+      both were recorded under the same `"WHEAT"` key, so a same-day seed purchase silently overwrote
+      that day's real feed-restock price (e.g. day 20 showed a misleading `WHEAT $10` - the fixed seed
+      cost - hiding the actual $41 restock price). Fixed by keying seed purchases as `"<crop> seed"`,
+      distinct from the market-priced product name. Re-ran the trial: WHEAT's feed-restock price rises
+      steadily $27->$41 through day 20 (real, sustained scarcity, matching the paired-play finding from
+      the original T8.35 entry above); sell prices show MILK appreciating steadily $186->$298, STRAWBERRY
+      $100->$235, MELON oscillating $210->$81 without ever approaching the floor, FERTILIZER drifting
+      $100->$98 - genuine per-product signal, none of it previously visible. `pytest tests/ -q`: 479
+      passed, `compileall` clean.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

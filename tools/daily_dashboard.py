@@ -70,7 +70,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tuning  # noqa: E402
 from kaggle_environments import make  # noqa: E402
 from kagg.gamelib import decay  # noqa: E402
-from kagg.gamelib.constants import ANIMALS, PRICE_FLOOR, PRODUCTS  # noqa: E402
+from kagg.gamelib.constants import ANIMALS, CROPS, PRICE_FLOOR, PRODUCTS  # noqa: E402
 from kagg.gamelib.farm import land_price  # noqa: E402
 from kagg.policy import strategy  # noqa: E402
 from kagg.policy.params import DEFAULT_PARAMS  # noqa: E402
@@ -188,6 +188,13 @@ def order_fill(order: list, prev_private: dict, cur_private: dict, prev_farm: di
         item, qty = order[1], int(order[2])
         filled = cur_private["shed"].get(item, 0) - prev_private["shed"].get(item, 0)
         return op, qty, max(0, filled)
+    if op == "SELL":
+        # _commit_unit's SELL branch decrements shed[item] by one per
+        # unit sold (kaggriculture.py:652-661) - the opposite direction
+        # from every BUY_* above, so "filled" is a decrease, not a rise.
+        item, qty = order[1], int(order[2])
+        filled = prev_private["shed"].get(item, 0) - cur_private["shed"].get(item, 0)
+        return op, qty, max(0, filled)
     if op == "BUY_LAND":
         filled = len(cur_farm.get("unlocked_quadrants", [])) - len(prev_farm.get("unlocked_quadrants", []))
         return op, 1, max(0, filled)
@@ -195,6 +202,19 @@ def order_fill(order: list, prev_private: dict, cur_private: dict, prev_farm: di
         filled = cur_farm.get("hires_today", 0) - prev_farm.get("hires_today", 0)
         return op, 1, max(0, filled)
     return op, 0, 0
+
+
+def record_daily_transaction(day_prices: dict, day: int, product: str, price) -> None:
+    """Records/overwrites `product`'s price for `day` in `day_prices`
+    (day -> {product: price}), keeping the most recent observation - a
+    "closing price" summary per product per day, not every tick. Same
+    accumulator shape used for both buy-side and sell-side prices (two
+    separate `day_prices` dicts, built by the caller) - per the user's
+    own request, purchases and sales must never be mixed into one
+    number, since a single "cheapest product today" figure is dominated
+    by whichever of the 9 PRODUCTS simply has the lowest base price
+    (WHEAT/CARROT), not by what's actually being traded that day."""
+    day_prices.setdefault(day, {})[product] = price
 
 
 def land_gate_status(
@@ -245,21 +265,55 @@ def run_dashboard(
     env.run([agent_path, opponent_path])
     steps = env.steps
 
-    # First pass: each day's minimum sale price, over the *whole* episode -
-    # must run before any headline row is printed, since a day's row is
-    # printed at hour==1 (1-2 turns into that day), long before most of
-    # that day's own price movement has happened yet (see
+    # First pass over the *whole* episode: each day's minimum market price
+    # (any of the 9 PRODUCTS, regardless of whether it's traded) plus what
+    # was actually bought and actually sold that day, each at the price it
+    # transacted at. Must run before any headline row is printed, since a
+    # day's row is printed at hour==1 (1-2 turns into that day), long
+    # before most of that day's own trading has happened yet (see
     # track_daily_min_price's own docstring).
+    #
+    # Buy and sell prices are tracked as two separate dicts (never merged
+    # into one "cheapest today" figure) - per the user's own correction,
+    # a single global minimum is dominated by whichever PRODUCT simply has
+    # the lowest base price (WHEAT/CARROT) and says nothing about what a
+    # farm is actually paying to buy or earning to sell that day - milk
+    # and melon's own prices need their own visibility, not to be shadowed
+    # by wheat's.
     day_min_price: dict[int, list] = {}
-    for s in steps:
-        obs0 = s[0].observation
-        track_daily_min_price(day_min_price, obs0.get("day"), obs0["market"]["prices"])
+    day_buys: dict[int, dict] = {}
+    day_sells: dict[int, dict] = {}
+    for t in range(1, len(steps)):
+        prev_obs0, cur_obs0 = steps[t - 1][0].observation, steps[t][0].observation
+        day = cur_obs0.get("day")
+        track_daily_min_price(day_min_price, day, cur_obs0["market"]["prices"])
+        prev_prices = prev_obs0["market"]["prices"]
+        prev_private, cur_private = steps[t - 1][0].observation["private"], steps[t][0].observation["private"]
+        prev_farm, cur_farm = prev_obs0["farms"][0], cur_obs0["farms"][0]
+        for order in steps[t][0].action.get("market", []) if steps[t][0].action else []:
+            op, _requested, filled = order_fill(order, prev_private, cur_private, prev_farm, cur_farm)
+            if filled <= 0:
+                continue  # only record prices for transactions that actually happened
+            if op == "BUY_SEED":
+                # A crop's seed cost (CROPS[crop]["seed"]) is a fixed
+                # constant, never subject to the market price model - and
+                # WHEAT in particular plays a second, genuinely
+                # market-priced role below (BUY_PRODUCT, feed restock), so
+                # "<crop> seed" keeps the two from colliding under one key
+                # and silently overwriting each other.
+                record_daily_transaction(day_buys, day, f"{order[1]} seed", CROPS[order[1]]["seed"])
+            elif op == "BUY_PRODUCT":
+                record_daily_transaction(day_buys, day, order[1], prev_prices.get(order[1]))
+            elif op == "SELL":
+                record_daily_transaction(day_sells, day, order[1], prev_prices.get(order[1]))
 
     events = []  # list of (day, text)
     print(f"=== daily dashboard: seed {seed} ===")
-    print("  day | hands | quad | money    | plant | animal | seeds_held | wheat_shed | floor_prices | day_min_price")
+    print(
+        "  day | hands | quad | money    | plant | animal | seeds_held | wheat_shed | floor_prices | "
+        "buy_prices | sell_prices"
+    )
 
-    turns_per_day = 24
     for t in range(1, len(steps)):
         prev_obs0 = steps[t - 1][0].observation
         cur_obs0 = steps[t][0].observation
@@ -313,12 +367,14 @@ def run_dashboard(
             wheat_shed = cur_private.get("shed", {}).get("WHEAT", 0)
             n_floor = sum(1 for p in PRODUCTS if cur_prices.get(p) == PRICE_FLOOR)
             floor_note = f"{n_floor} at floor" if n_floor else "-"
-            min_price, min_product = day_min_price.get(day, [None, None])
-            min_note = f"{min_product} ${min_price}" if min_price is not None else "-"
+            buys = day_buys.get(day, {})
+            sells = day_sells.get(day, {})
+            buy_note = "; ".join(f"{p} ${v}" for p, v in buys.items()) or "-"
+            sell_note = "; ".join(f"{p} ${v}" for p, v in sells.items()) or "-"
             print(
                 f"  {day:>3} | {len(cur_farm.get('hands', [])):>5} | {n_unlocked_extra + 1:>4} | "
                 f"{cur_farm['money']:>8.0f} | {counts['plant']:>5} | {counts['animal']:>6} | "
-                f"{seeds_held:>10} | {wheat_shed:>10} | {floor_note:>12} | {min_note}"
+                f"{seeds_held:>10} | {wheat_shed:>10} | {floor_note:>12} | {buy_note} | {sell_note}"
             )
 
     print("\n=== events ===")

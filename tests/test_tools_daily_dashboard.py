@@ -201,6 +201,49 @@ def test_order_fill_hire_uses_hires_today():
     assert (op, requested, filled) == ("HIRE", 1, 0)
 
 
+def test_order_fill_sell_uses_shed_decrease():
+    # _commit_unit's SELL branch decrements private["shed"][item] by one
+    # per unit sold (kaggriculture.py:652-661) - the opposite direction
+    # from a BUY, which is why SELL needs its own branch rather than
+    # reusing BUY_PRODUCT's.
+    prev_private = {"seeds": {}, "shed": {"MILK": 20}}
+    cur_private = {"seeds": {}, "shed": {"MILK": 15}}  # 5 of 8 sold
+    op, requested, filled = daily_dashboard.order_fill(
+        ["SELL", "MILK", 8], prev_private, cur_private, prev_farm={}, cur_farm={}
+    )
+    assert (op, requested, filled) == ("SELL", 8, 5)
+
+
+# --- record_daily_transaction -----------------------------------------
+
+
+def test_record_daily_transaction_adds_a_new_product():
+    day_prices = {}
+    daily_dashboard.record_daily_transaction(day_prices, day=3, product="MILK", price=160)
+    assert day_prices[3] == {"MILK": 160}
+
+
+def test_record_daily_transaction_keeps_multiple_products_the_same_day():
+    day_prices = {}
+    daily_dashboard.record_daily_transaction(day_prices, day=3, product="MILK", price=160)
+    daily_dashboard.record_daily_transaction(day_prices, day=3, product="MELON", price=250)
+    assert day_prices[3] == {"MILK": 160, "MELON": 250}
+
+
+def test_record_daily_transaction_overwrites_with_the_latest_price():
+    day_prices = {3: {"MILK": 160}}
+    daily_dashboard.record_daily_transaction(day_prices, day=3, product="MILK", price=142)
+    assert day_prices[3] == {"MILK": 142}
+
+
+def test_record_daily_transaction_keeps_days_independent():
+    day_prices = {}
+    daily_dashboard.record_daily_transaction(day_prices, day=1, product="WHEAT", price=25)
+    daily_dashboard.record_daily_transaction(day_prices, day=2, product="WHEAT", price=30)
+    assert day_prices[1] == {"WHEAT": 25}
+    assert day_prices[2] == {"WHEAT": 30}
+
+
 # --- land_gate_status ------------------------------------------------------
 
 
