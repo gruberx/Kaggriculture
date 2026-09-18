@@ -1867,6 +1867,30 @@ project's own established finding, a fresh submission's score is volatile for it
       `hire_cash_reserve`). No golden-episode re-record (nothing shipped differs). `pytest tests/ -q`:
       483 passed, `compileall` clean. No Kaggle submission in this task.
 
+      **Correction to this entry's own "traced why" above** (found immediately after, while answering the
+      user's own follow-up question about how much WHEAT one character can carry): `PICKUP`/`FEED`/
+      `PLACE` are unconditionally pinned to the farmer alone (`tasks._PINNED_UNIT_INDEX=0`, T8.4's own
+      fix - "a hired hand can never silently pick up wheat... or feed"), so there was never a *second*
+      unit that could have needed its own separate wheat access - that explanation doesn't hold and
+      should not have stood without first checking it. Re-traced the same seed 100 COW-escape properly:
+      the real cause is that `wheat_price` sat at **$42-45 for the entire window** (days 18-25), already
+      above `wheat_max_buy_price=40` - `buy_wheat_order`'s hard price ceiling, not the wheat-on-hand
+      check, is what actually blocked every restock attempt in this window, for *both* variants equally.
+      What differed is the *buffer built up before* hitting that wall: comparing total WHEAT (shed +
+      carried) at each day's start, days 5-16, baseline restocks aggressively enough to hold a ~19-unit
+      plateau, while the candidate's "skip the buy once the total already clears the threshold" logic
+      lets it hover much lower (~5-14, oscillating with the flat `wheat_restock_qty=10`, never
+      accumulating the same cushion). Baseline enters the day-17+ price-locked window with 9 units of
+      runway (9 more days before a miss); the candidate enters it with roughly half that, and runs out
+      first - the COW's second consecutive miss (day 24) and escape (day 25) is a direct consequence of
+      the *thinner buffer*, not of any unit being denied access to wheat it structurally couldn't reach.
+      Restated plainly: the "wasteful-looking" frequent restocking the user first noticed is accidentally
+      building insurance against a hard, unconditional price ceiling that has no override by default
+      (`wheat_urgency_reserve=0` - see `market.buy_wheat_order`'s own docstring for the already-built,
+      currently-unswept escape valve this points to for a real future attempt). The measured rejection
+      itself stands (a real, decisive loss, confirmed twice now under two different explanations) - only
+      the *mechanism* is corrected here, not the result.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
