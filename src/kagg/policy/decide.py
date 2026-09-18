@@ -338,6 +338,33 @@ _DEFAULT_CROP_NET_OF_SEED_COST = True
 # standing.
 _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED = True
 
+# T8.36 (user's own observed defect, spotted directly from
+# tools/daily_dashboard.py's buy/sell price columns: the agent buying
+# and selling WHEAT the same day). Traced turn-by-turn (seed 900 vs
+# starter): tasks._WHEAT_PICKUP_BATCH (10, matching _WHEAT_FEED_RESERVE
+# above by design) pulls the *whole* reserve out of the shed into the
+# farmer's own inventory the instant any animal needs feeding that day -
+# almost all of it goes unused (only 1 unit/animal/day is actually
+# consumed via FEED) and safely returns to the shed at end-of-day
+# (kaggriculture.py's own _drop_inventories_to_shed), so nothing is lost
+# there. But buy_wheat_order's restock check only ever looks at the
+# *shed* count at decision time - which PICKUP has already drained,
+# often to near zero, well before end-of-day returns it - so it re-buys
+# a fresh batch of WHEAT nearly every single day even with several spare
+# units already secured in a unit's own inventory, unseen by the check.
+# Confirmed directly: with 1 animal and shed WHEAT restocked to 10 each
+# morning, PICKUP took the full 10 immediately, leaving the shed too low
+# for buy_wheat_order to recognize the farm was already provisioned for
+# the day - triggering another BUY_PRODUCT that same or the next turn.
+#
+# When set, `wheat_on_hand` (passed to market.buy_wheat_order) sums the
+# shed *and* every unit's own carried inventory, not the shed alone - so
+# WHEAT that's merely "out for delivery" to an animal this turn no
+# longer looks like a shortage. Defaults to False: every existing caller
+# keeps today's shed-only behavior unchanged until this is measured and
+# accepted (SPEC-policy.md: never raised on reasoning alone).
+_DEFAULT_WHEAT_RESTOCK_COUNTS_CARRIED_INVENTORY = False
+
 # T8.3l, found while tracing the wheat ping-pong above: sell_orders was
 # subtracting wheat_reserve even during liquidate (T8.3d), stranding the
 # feed reserve (~10 WHEAT) unsold once an animal had been placed - dead
@@ -1656,8 +1683,17 @@ def decide(obs: dict, params: dict) -> dict:
     ):
         tail.append(["BUY_LAND"])
 
+    # T8.36: wheat_on_hand for the restock check, optionally widened
+    # beyond the shed alone - see _DEFAULT_WHEAT_RESTOCK_COUNTS_CARRIED_
+    # INVENTORY's own comment for why the shed-only count is misleading
+    # the moment a PICKUP has carried some of it off for feeding.
+    wheat_on_hand = shed.get("WHEAT", 0)
+    if params.get(
+        "wheat_restock_counts_carried_inventory", _DEFAULT_WHEAT_RESTOCK_COUNTS_CARRIED_INVENTORY
+    ):
+        wheat_on_hand += sum(inv.get("WHEAT", 0) for inv in private.get("inventories", []))
     wheat_order = buy_wheat_order(
-        shed.get("WHEAT", 0), obs["market"]["prices"].get("WHEAT", 0), params, feed_needed=feed_needed
+        wheat_on_hand, obs["market"]["prices"].get("WHEAT", 0), params, feed_needed=feed_needed
     )
     if wheat_order is not None:
         tail.append(wheat_order)

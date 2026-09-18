@@ -27,6 +27,7 @@
   "crop_shop_demand_aware": true,
   "crop_net_of_seed_cost": true,
   "wheat_buy_only_when_feed_needed": true,
+  "wheat_restock_counts_carried_inventory": false,
   "liquidate_wheat_reserve": true,
   "rank_season_aware": false,
   "animal_net_of_cost": true,

@@ -1254,6 +1254,69 @@ def test_decide_buys_wheat_once_an_animal_is_placed():
     ]
 
 
+def test_decide_wheat_restock_ignores_carried_inventory_by_default():
+    # T8.36 (user's own observed defect, spotted directly in
+    # tools/daily_dashboard.py's buy/sell columns): tasks._WHEAT_PICKUP_
+    # BATCH (10) grabs the whole reserve out of the shed into the
+    # farmer's own inventory the moment any is needed for feeding - most
+    # of that batch is unused that day and safely returns to the shed at
+    # end-of-day (kaggriculture.py's own _drop_inventories_to_shed), but
+    # buy_wheat_order's restock check only ever looks at the *shed*
+    # count, blind to WHEAT already secured in a unit's inventory - so it
+    # re-buys every single day even with 9 spare units already in hand.
+    # Bit-identical to today's shipped (buggy) behavior with the flag
+    # unset - this pins the bug down with a real regression test before
+    # fixing it below, not just describing it in prose.
+    obs = _obs()
+    obs["farms"][0]["tiles"][2][4] = _placed_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 0
+    obs["private"]["inventories"] = [{"WHEAT": 9}]  # plenty on hand, just not in the shed
+    action = decide(obs, DEFAULT_PARAMS)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == [
+        ["BUY_PRODUCT", "WHEAT", 10]
+    ]
+
+
+def test_decide_wheat_restock_counts_carried_inventory_when_enabled():
+    # Same fixture as the "by default" test above, flag turned on: total
+    # wheat on hand (0 shed + 9 carried) clears wheat_restock_threshold
+    # (5), so there is nothing to restock - the actual fix.
+    obs = _obs()
+    obs["farms"][0]["tiles"][2][4] = _placed_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 0
+    obs["private"]["inventories"] = [{"WHEAT": 9}]
+    params = dict(DEFAULT_PARAMS, wheat_restock_counts_carried_inventory=True)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
+
+
+def test_decide_wheat_restock_counts_carried_inventory_still_buys_below_threshold():
+    # The flag adds carried inventory to the total, it doesn't disable
+    # the restock check entirely: 0 shed + 2 carried is still below
+    # wheat_restock_threshold (5), so a restock still fires.
+    obs = _obs()
+    obs["farms"][0]["tiles"][2][4] = _placed_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 0
+    obs["private"]["inventories"] = [{"WHEAT": 2}]
+    params = dict(DEFAULT_PARAMS, wheat_restock_counts_carried_inventory=True)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == [
+        ["BUY_PRODUCT", "WHEAT", 10]
+    ]
+
+
+def test_decide_wheat_restock_counts_carried_inventory_sums_every_unit():
+    # private["inventories"] is [farmer, hand1, hand2, ...] - every
+    # entry must count, not just index 0.
+    obs = _obs()
+    obs["farms"][0]["tiles"][2][4] = _placed_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 0
+    obs["private"]["inventories"] = [{"WHEAT": 3}, {"WHEAT": 4}]
+    params = dict(DEFAULT_PARAMS, wheat_restock_counts_carried_inventory=True)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
+
+
 def test_decide_defaults_wheat_buy_only_when_feed_needed_to_true_when_unset():
     # Mirrors test_decide_defaults_crop_net_of_seed_cost_to_true_when_unset's
     # pattern: a params dict missing the key entirely must behave like the

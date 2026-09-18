@@ -309,6 +309,11 @@ DEFAULT_PARAMS = {
     # kagg.policy.decide's _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED
     # comment for the full story.
     "wheat_buy_only_when_feed_needed": True,
+    # T8.36: still off (False) until measured and accepted - see
+    # kagg.policy.decide's _DEFAULT_WHEAT_RESTOCK_COUNTS_CARRIED_INVENTORY
+    # comment for the traced defect this targets (a daily buy/sell churn
+    # spotted directly in tools/daily_dashboard.py's price columns).
+    "wheat_restock_counts_carried_inventory": False,
     # T8.3l, found while tracing the same defect: sell_orders was also
     # keeping wheat_reserve off the table during end-of-season
     # liquidation (T8.3d), stranding ~10 WHEAT unsold once an animal had

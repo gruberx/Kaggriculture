@@ -1821,6 +1821,52 @@ project's own established finding, a fresh submission's score is volatile for it
       $100->$98 - genuine per-product signal, none of it previously visible. `pytest tests/ -q`: 479
       passed, `compileall` clean.
 
+- [x] T8.36 — investigate the daily WHEAT buy/sell pattern T8.35's new columns surfaced (user's own
+      observation, 2026-09-18: "агент покупает пшеницу и потом её же и продаёт... возможно резерв на
+      удержание пшеницы должен зависеть от количества животных"). Both the user's original hypothesis
+      and my own follow-up attempt turned out wrong, in an honest and now precisely traced way - this is
+      a real, informative rejection, not a failure to route around.
+
+      **Investigation**: traced turn-by-turn (`check_t836_escapes.py`-style ad hoc script, seed 900 vs
+      `starter`) rather than trusting the daily table. Found the actual mechanism: `tasks._WHEAT_PICKUP_
+      BATCH=10` (matching `_WHEAT_FEED_RESERVE=10` by design - see `decide.py`'s own comment on
+      `wheat_reserve`) pulls the *whole* reserve out of the shed into the farmer's own inventory the
+      moment any animal needs feeding, even though only 1 unit/animal/day is actually consumed via FEED.
+      The user's original hypothesis (reserve should scale with animal count) doesn't hold - a flat
+      reserve of 10 is already generous for 1-3 animals; the real gap is that `market.buy_wheat_order`'s
+      restock check only ever looks at the *shed* count, blind to WHEAT already secured in a unit's
+      carried inventory (which safely returns to the shed at end-of-day via the real engine's own
+      `_drop_inventories_to_shed` - nothing is lost there), so it re-buys a fresh batch nearly every day
+      even with spare units already in hand.
+
+      **The fix attempted** (my own hypothesis, also wrong in the end): new parameter
+      `wheat_restock_counts_carried_inventory` (default `False`, bit-identical) - when set, sums shed +
+      every unit's carried inventory for the restock decision instead of the shed alone. TDD: 4 new tests
+      in `tests/test_policy_decide.py` (483 total passing), wired in `decide.py`
+      (`_DEFAULT_WHEAT_RESTOCK_COUNTS_CARRIED_INVENTORY`), synced to `params.py`/`policy.json`.
+
+      **Measured (`tools/measure_t836.py`) - a decisive loss, not the predicted win**: 38.0% win rate
+      (19W/31L/0T) on the working block, Wilson interval `[0.259, 0.518]` - `accept_candidate=False`,
+      stopped before the n=200 confirmation per this project's own convention (no point confirming a
+      result that already lost outright). **Traced why** (seed 100, paired candidate vs. the checked-in
+      baseline, same episode): the candidate lost a COW to starvation on day 25
+      (`ANIMAL ESCAPED COW at (4,4)`) that the baseline, in the *identical* episode, never lost -
+      `candidate final=34949` vs. `baseline final=35724`. Root cause: WHEAT carried in one unit's own
+      inventory (e.g. the farmer's, after a PICKUP for feeding one animal) is not shareable with a
+      *different* unit's own FEED task without a fresh shed PICKUP - summing all units' carried
+      inventory into one "total wheat on hand" figure made the restock check think the farm was well-
+      stocked when a second animal's own feeding hand actually had nothing to draw from, since the shed
+      itself sat empty. **The daily buy/sell pattern that looked wasteful is not actually wasteful**: per
+      `market.py`'s own docstring, a buy/sell round trip against a stable market nets ~$0 (verified
+      numerically there already), and keeping the shed topped up is exactly what lets a *second* unit's
+      independent PICKUP succeed mid-day - the same protection `wheat_reserve` was built for in T6.4/
+      T8.3l, just showing up one layer further down than either hypothesis in this task expected.
+
+      **Not accepted; parameter stays at its bit-identical `False` default** (kept as named, tested,
+      documented-but-unaccepted infrastructure - same convention as `wheat_urgency_reserve`/
+      `hire_cash_reserve`). No golden-episode re-record (nothing shipped differs). `pytest tests/ -q`:
+      483 passed, `compileall` clean. No Kaggle submission in this task.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
