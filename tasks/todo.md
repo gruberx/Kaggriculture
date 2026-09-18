@@ -2026,6 +2026,115 @@ project's own established finding, a fresh submission's score is volatile for it
       `max_animals_per_type` is ever revisited with this labor-gating fix now in place. No golden-episode
       re-record (nothing accepted). No Kaggle submission in this task.
 
+- [x] T8.40 — real statistical study of top-leaderboard games (tooling + findings). User's own request,
+      2026-09-18: after watching top-10 leaderboard replays, observed top players hiring many workers
+      and holding many animals from day 1, expanding aggressively through ~day 10, then banking profit
+      - the opposite of what our own self-play-only numbers (`hires_per_day=1`, `max_animals_per_type=1`,
+      both measured only in 1-2-quadrant self-play against `pass`/`starter`) would predict is optimal.
+      Explicit goal: gather real evidence instead of "непродуктивно ход[ить] по кругу" tuning against
+      weak opponents. Pure research/data-gathering - **no `src/kagg/` changes in this task**.
+
+      **Data path**: Kaggle staff publish `kaggle/kaggriculture-episodes-index` (a manifest pointing at
+      one child dataset per day, `kaggle/kaggriculture-episodes-<date>`, ~650 top-rated episodes/day as
+      full replay JSON, ~33MB each) - `mcp__kaggle-mcp__get_episode_replay` does not work in this
+      environment (unusable stub), this dataset is the real path in. New `tools/top_replay_stats.py`
+      (33 tests, `tests/test_tools_top_replay_stats.py`) parses real replay JSON (or live `env.steps` -
+      `kaggle_environments.utils.Struct` is a `dict` subclass, so the same functions run unmodified on
+      either) into a compact daily-granularity `episode_record`: per-type animal/plant counts, hands
+      (day max, not a single undercounting hour-0 sample), money open/close/min/max, cash flow by
+      category (hire/land/seed/animal/wheat-restock/other cost vs. sell revenue, reconciled exactly
+      against the money delta), WHEAT/seed stock buffer, per-op action tallies with pass-fraction
+      (labor saturation), wheat flow (feed actions vs. bought/sold, the honest substitute for the
+      undecidable feed-vs-sale WHEAT split), quadrant-unlock days, shop-unlock timeline, market prices,
+      and animal-escape/plant-death events (reusing `daily_dashboard.classify_animal_transition`/
+      `classify_plant_transition` directly, not reimplemented). Records are saved durably to
+      `data/top_replay_records/` (outside `diskguard.EVICTABLE`, unlike the raw replays in
+      `data/episodes/`) so this can be revisited without re-fetching - confirmed by a `--load-records`-
+      only rerun reproducing the exact same summary from the saved extract alone.
+
+      **Verified against the one real episode already on disk before any fetch**: every reference
+      number in the plan (day 0/12/27 hands/money/animals/plants/quadrants/shop counts, the shop-unlock
+      day list, both players' quadrant-unlock days, and team-0's whole-episode market-op totals) matched
+      the tool's output exactly.
+
+      **Fetch**: targeted the leaderboard's top 5 (Majkel1337, SpaTaro, DSM, THIRD FARM CLUB, ymg_aq) x
+      3 episodes. Real complication, not anticipated in the plan: DSM and THIRD FARM CLUB's *entire*
+      episode history is dated today (2026-09-18, both climbed the leaderboard same-day) - today's
+      dataset isn't published yet (confirmed: `get_dataset_info` on `kaggriculture-episodes-2026-09-18`
+      returns permission-denied, i.e. doesn't exist), so **zero** of their episodes were fetchable this
+      session; substituted the next-ranked teams with older history (Sida Zuo, Orbital Terraformer).
+      Second complication: even for available dates, a real fraction of individual episode files 404'd
+      ("Dataset not found") on both first attempt and retry - not a clean per-date pattern (5/8 attempts
+      on the same day succeeded, others on the same day failed) - so several picks were replaced with
+      the next-best-scored candidate from the same team. Final real yield: **11 episodes, 22
+      team-seasons**, all 2026-09-15/16/17, across Majkel1337 (3), SpaTaro (2), Sida Zuo (3), Orbital
+      Terraformer (3) - short of the ~15 planned, reported honestly rather than padded.
+
+      **Real bug found and fixed before trusting the "ours" comparison cohort**: `self_play_records`
+      initially defaulted the opponent to `"pass"` - since `episode_record` tags cohort once per whole
+      episode (both teams), the do-nothing `pass` bot's near-zero stats were silently folded into the
+      "ours" cohort alongside our real agent, dragging every median toward zero (`hands_max` medians
+      read ~0 across the whole game). Fixed by defaulting to a mirror match (`agent_main.py` vs itself)
+      - the standard meaning of "self-play" - which is also what makes a same-cohort tag correct in the
+      first place. 20 self-play seeds (40 team-seasons) re-run after the fix.
+
+      **Findings (top cohort, n=22 team-seasons, vs. our own self-play, n=40 team-seasons, medians
+      [q1-q3] unless noted)**:
+      - **Hands**: top day 0 `4 [4-5]` growing to `10 [10-10]` by day 29. Ours: flat `2 [2-2]` for
+        *all 30 days* - `hires_per_day=1` (farmer + one hire) is never revisited after day 0.
+      - **Animals held**: top day 0 `5 [4-5]` (COW/SHEEP/GOOSE mixed) growing to `15 [13-18]` by day 29.
+        Ours: flat at `1` the whole game (`max_animals_per_type=1`, one COW) - by day 29 sometimes `0`
+        (an uncompensated escape).
+      - **Season-end money (day 29 close)**: top `$151,829 [$144,454-$163,059]` vs. ours
+        `$35,257 [$33,512-$35,744]` - **top players end the season with ~4.3x our own money**, not a
+        marginal gap.
+      - **Quadrant expansion**: top unlocks NE at median day 6 (22/22 reach it) and SW at median day 9
+        (22/22) - both quadrants, reliably, inside the first third of the season. Ours reaches NE at
+        median day **22** (4x slower) and **never once unlocks SW in 40 team-seasons (0/40)** - directly
+        confirms the user's "our 1-2-quadrant self-play isn't representative" concern with a real number,
+        not an impression. SE is rare even for top players (1/22, day 18) - a third quadrant is a
+        late-season stretch goal, not a default expectation, for anyone.
+      - **Cash flow**: top's day-29 net cash flow is `+$10,212 [+$6,250 to +$13,619]`/day vs. ours
+        `+$2,951 [+$2,771 to +$3,048]`/day - top's late-game profit engine runs ~3.5x ours. Early game
+        (day 0) both cohorts run a deliberate deficit (`top -$2,667`, `ours -$1,982`) - upfront
+        investment, not a mistake, on both sides.
+      - **Escape/death rate, normalized (not just raw counts - top players holding far more animals/
+        plants makes raw counts misleading on their own)**: escapes per 1000 animal-days: top `10.96`
+        vs. ours `12.09` - **comparable**, not meaningfully different; top's 108 vs. our 14 raw escapes
+        reflects exposure (5-19x more animals held), not carelessness. Plant deaths per 1000 plant-days:
+        top `14.52` vs. ours **`23.6`** - our own watering/care policy is actually *less* efficient per
+        plant than top players', despite tending far fewer plants. Neither finding was expected going
+        in; both argue against "more animals/plants = proportionally more loss" as a reason to stay
+        small.
+      - **WHEAT stock buffer**: top carries a thin `1 [1-2]` day-0 buffer (matches this project's own
+        `wheat_urgency_reserve=0`/T8.25 finding), ours carries a much larger `10` (a one-time initial
+        purchase, never drawn down as deliberately) - both trend toward 0 by late game either way.
+      - **Shop-unlock schedule (n=11 episodes, not n=1)**: the *day* sequence is **byte-identical across
+        all 11 real episodes** - exactly `[3, 6, 9, 12, 15, 18, 21, 24]`, matching
+        `configuration["townShopUnlockInterval"]=3` exactly - confirms the exogenous-timing hypothesis
+        decisively (not assumed from one sample). The *shop identity* at each slot is **not** invariant
+        (11/11 episodes have distinct name sequences) - a random draw each episode, uncorrelated with
+        either player's actions. Refines, doesn't overturn, the plan's own hypothesis: timing is fixed,
+        identity is exogenous-random, neither is player-influenced.
+
+      **Read together**: the user's original observation holds up under real data, decisively. Top
+      players' edge isn't explained by lower loss rates (escape rate is a wash, death rate is actually
+      worse for us) - it's explained by scale: more hands, more animals, faster land, sustained
+      reinvestment through day ~11, then a cash-flow engine several times the size of ours. This is now
+      the evidence base for retrying previously-rejected mechanisms at a scale this data suggests was
+      never actually tested: `max_animals_per_type`/hiring-target (rejected at T8.22/T8.25/T8.27/T8.39
+      only ever under `hires_per_day=1`-scale labor), `wheat_urgency_reserve`/`wheat_restock_threshold`
+      against the real observed thin buffer, and `use_fertilizer`/`animal_care_aware` (both off by
+      default; not confirmed whether top players use FERTILIZE/CARE at meaningfully higher rates than
+      us - not measured this task, a natural next `action_counts`-based follow-up).
+
+      Full suite green (533 passed) before and after, `compileall`/`boundary_check.py` clean. Committed:
+      `tools/top_replay_stats.py`, `tests/test_tools_top_replay_stats.py`, this entry - no `src/kagg/`
+      changes, so one commit. `data/top_replay_records/` and `data/episodes/` are outside the git root
+      (nothing to add there). **No tactical/parameter changes in this task** - a deliberate scope limit,
+      per the plan; retrying any of the named mechanisms is separate, later, measured work. No Kaggle
+      submission.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
