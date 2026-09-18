@@ -698,6 +698,23 @@ _DEFAULT_ALWAYS_PURSUE_ONE_ANIMAL = False
 # is arguably just a latent bug.
 _DEFAULT_PARALLEL_ANIMAL_ACQUISITION = False
 
+# T8.39: the user's own concern - the farmer is the *only* unit allowed
+# to FEED an animal or PICKUP its wheat (tasks._PINNED_UNIT_INDEX), so a
+# busy farmer leaves a needy animal unfed even with a free hand standing
+# right next to it. Verified directly against kaggriculture.py: the real
+# FEED/PICKUP handlers never check which unit acts - the pin exists
+# purely because decide() historically modeled only inventories[0]. When
+# on: the WHEAT-holding scan (tasks.build_task_list's own docstring) and
+# the aggregate wheat PICKUP both widen from "unit 0 only" to "any unit"
+# - a single mechanism, not two independently-gated ones (see that
+# docstring for why the WHEAT scan specifically needs gating at all,
+# unlike FERTILIZE/PLACE's own always-on multi-unit awareness). The
+# *animal* PICKUP/PLACE pipeline stays pinned to the farmer regardless -
+# a deliberate scope limit, not covered by this flag (see tasks.
+# _new_investment_tasks's own docstring). Default False, bit-identical to
+# every pre-T8.39 caller - not yet measured in self-play.
+_DEFAULT_FEED_PICKUP_UNPINNED = False
+
 # T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
 # `plant_qty` scale with the real labor force (1 + hires_per_day) instead
 # of a hardcoded "one PLANT task per turn" baked in since Phase 3.
@@ -1491,12 +1508,21 @@ def decide(obs: dict, params: dict) -> dict:
     parallel_animal_acquisition = params.get(
         "parallel_animal_acquisition", _DEFAULT_PARALLEL_ANIMAL_ACQUISITION
     )
+    feed_pickup_unpinned = params.get("feed_pickup_unpinned", _DEFAULT_FEED_PICKUP_UNPINNED)
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
         me["tiles"], unit_positions,
         plant_crop=plant_crop, desired_animal=acquisition_animal,
         shed=shed, farmer_inventory=farmer_inventory,
+        # T8.39: the real per-unit list (private["inventories"] - index 0
+        # the farmer, later indices hands) rather than farmer_inventory
+        # alone, so FEED/FERTILIZE can bind to whichever unit actually
+        # holds the item once feed_pickup_unpinned lets a hand carry
+        # WHEAT too - see build_task_list's own docstring. Bit-identical
+        # today: only unit 0 can ever hold WHEAT/FERTILIZER while the
+        # wheat PICKUP stays pinned (feed_pickup_unpinned off).
+        inventories=private.get("inventories"),
         current_day=current_day,
         anchor=params.get("investment_anchor", _DEFAULT_INVESTMENT_ANCHOR),
         use_fertilizer=use_fertilizer,
@@ -1504,6 +1530,7 @@ def decide(obs: dict, params: dict) -> dict:
         care_aware=care_aware,
         water_bonus_window_aware=water_bonus_window_aware,
         parallel_animal_acquisition=parallel_animal_acquisition,
+        feed_pickup_unpinned=feed_pickup_unpinned,
     )
     assignment = assign_units(tasks, unit_positions)
 

@@ -452,6 +452,16 @@ DEFAULT_PARAMS = {
     # kagg.policy.decide._DEFAULT_PARALLEL_ANIMAL_ACQUISITION for the
     # mechanism and kagg.policy.tasks._new_investment_tasks for the fix.
     "parallel_animal_acquisition": False,
+    # T8.39, the user's own concern: only the farmer can FEED an animal
+    # or PICKUP its wheat (tasks._PINNED_UNIT_INDEX), so a busy farmer
+    # leaves a needy animal unfed even with a free hand standing right
+    # next to it, even though the real FEED/PICKUP handlers never check
+    # which unit acts. Off by default reproduces the exact prior
+    # farmer-only pipeline; see kagg.policy.decide._DEFAULT_FEED_PICKUP_
+    # UNPINNED for the mechanism and kagg.policy.tasks.build_task_list's
+    # own docstring for why the WHEAT scan specifically needs this gate
+    # (a real found coupling with HARVEST, not just a style choice).
+    "feed_pickup_unpinned": False,
     # T8.19, the user's own observation: committing every new tile to a
     # single top-ranked product invites a double price-crash risk (our
     # own volume plus a plausible independent opponent bet on the same

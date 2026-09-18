@@ -76,18 +76,52 @@ PRIORITY_MAINTENANCE = 4
 # by import - this module has no dependency on kagg.policy.params.
 _WHEAT_PICKUP_BATCH = 10
 
-# T8.4: decide() models only inventories[0] (`_farmer_inventory`'s own
-# convention, documented there) - correct by construction only because
-# every task the real interpreter resolves against the *acting unit's
-# own* inventory (kaggriculture.py's PICKUP/FEED/PLACE handlers, verified
-# directly) is pinned here to this exact unit index, so a hired hand can
-# never silently pick up wheat/an animal, feed, or place one into an
-# inventory slot decide() never looks at again. WATER/HARVEST/DIG/
+# T8.4, narrowed by T8.39: every task the real interpreter resolves
+# against the *acting unit's own* inventory (kaggriculture.py's
+# PICKUP/FEED/PLACE handlers, verified directly) must bind to a unit that
+# actually holds the relevant item - never handed to a nearer unit whose
+# own inventory the real interpreter wouldn't resolve it against. T8.39
+# found this doesn't require a single hardcoded unit: `_units_holding`
+# (below) reads the real per-unit `inventories` list, so FEED/FERTILIZE
+# bind to `eligible_units` (any unit currently holding WHEAT/FERTILIZER -
+# possibly more than one) and PLACE binds to whichever unit actually
+# holds the bought animal (`animal_units[0]` in `_new_investment_tasks`).
+# This constant remains the pin for the two ops that still have a genuine
+# single-unit-only pipeline: the aggregate wheat PICKUP (unpinnable only
+# when `feed_pickup_unpinned` is on - see `build_task_list`'s own
+# docstring) and the animal PICKUP, deliberately left pinned even under
+# that flag (T8.39's plan: a once-per-game two-turn pipeline, not worth a
+# second uncontrolled variable in that measurement). WATER/HARVEST/DIG/
 # COLLECT_FERTILIZER/CARE/PLANT (consumes the shared private["seeds"],
 # not any unit's inventory)/BUILD_COOP/BUILD_PASTURE are deliberately
 # left unpinned - a hand doing one of those in parallel is free
 # throughput at no correctness cost.
 _PINNED_UNIT_INDEX = 0
+
+
+def _units_holding(inventories: list[dict], item: str, n_units: int) -> tuple[int, ...]:
+    """Every unit index (ascending, deterministic) among the first
+    `n_units` units currently holding at least one unit of `item`.
+
+    T8.39: `inventories` mirrors kaggriculture.py's own `private
+    ["inventories"]` list exactly - index 0 is always the farmer, later
+    indices are hands, and the real interpreter only ever appends an
+    entry the first time a given unit acts in a day (`_get_inventory`),
+    so it can be shorter than the number of units actually on the farm
+    this turn. A unit with no entry yet holds nothing, not an error - out
+    of range is treated the same as an empty inventory, never raises.
+    Callers pass `n_units` (not `len(inventories)`) so a unit beyond the
+    inventories list still gets a definite "holds nothing" answer instead
+    of being silently excluded from consideration entirely.
+
+    Farmer-only backward-compat is exact: with a single-entry inventories
+    list holding the item, this returns `(0,)` - today's shipped
+    `_PINNED_UNIT_INDEX` value, by construction rather than convention.
+    """
+    return tuple(
+        i for i in range(n_units)
+        if i < len(inventories) and inventories[i].get(item, 0) > 0
+    )
 
 
 @dataclass(frozen=True)
@@ -101,14 +135,24 @@ class Task:
     animal: str | None = None  # only set for PLACE tasks
     item: str | None = None  # only set for PICKUP tasks
     qty: int = 1  # only meaningful for PICKUP tasks
-    # T8.4: pins this task to a specific unit index (always 0, the
-    # farmer, in practice today) rather than letting assign_units pick
-    # whichever unit is nearest. Trailing field (with a default), so
-    # every existing positional Task(...) construction in this module
-    # and its tests keeps working unchanged. See
-    # `_UNIT_BOUND_INVENTORY_OPS`/assign_units's own docstring for why
+    # T8.4: pins this task to one exact unit index rather than letting
+    # assign_units pick whichever unit is nearest - for a task that must
+    # resolve against a *specific* unit's own inventory and no other (the
+    # aggregate wheat PICKUP, still pinned unless `feed_pickup_unpinned`;
+    # the animal PICKUP, always pinned - see `_PINNED_UNIT_INDEX`'s own
+    # docstring). Trailing field (with a default), so every existing
+    # positional Task(...) construction in this module and its tests
+    # keeps working unchanged. See assign_units's own docstring for why
     # this exists at all and which ops need it.
     unit_index: int | None = None
+    # T8.39: assigns this task to whichever *one* of these unit indices
+    # assign_units's own nearest-free-unit rule picks - for a task that
+    # can be resolved by any unit currently holding the relevant item
+    # (FEED/FERTILIZE), unlike `unit_index`'s single fixed target. `None`
+    # (the default) means "no such restriction" - every existing
+    # positional Task(...) construction keeps working unchanged, and
+    # assign_units's unpinned stage is untouched for these tasks.
+    eligible_units: tuple[int, ...] | None = None
 
 
 def _closest_pos(candidates: list[tuple[int, int]], unit_positions) -> tuple[int, int] | None:
@@ -215,6 +259,7 @@ def build_task_list(
     desired_animal: str | None = None,
     shed: dict | None = None,
     farmer_inventory: dict | None = None,
+    inventories: list[dict] | None = None,
     current_day: int = 0,
     anchor: str = _ANCHOR_SHED,
     use_fertilizer: bool = True,
@@ -222,6 +267,7 @@ def build_task_list(
     plant_qty: int = 1,
     water_bonus_window_aware: bool = False,
     parallel_animal_acquisition: bool = False,
+    feed_pickup_unpinned: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -252,18 +298,58 @@ def build_task_list(
     structure (BUILD_COOP/BUILD_PASTURE) proactively on the nearest empty
     tile if none exists yet (tasks/plan.md T6.2's design decision: this
     does not wait on already owning the animal - it runs in parallel with
-    the BUY_ANIMAL order); PICKUPs a bought animal from the shed into the
-    farmer's own inventory once a matching structure exists (T6.4's real
+    the BUY_ANIMAL order); PICKUPs a bought animal from the shed into a
+    unit's own inventory once a matching structure exists (T6.4's real
     finding - see `_new_investment_tasks`'s docstring for why this step
     exists at all); then PLACEs it once actually held. `shed` and
-    `farmer_inventory` are both needed because they mean different
-    things: `shed` is what's been bought (BUY_ANIMAL delivers there, not
-    to any unit's inventory), `farmer_inventory` is what the farmer is
-    actually carrying (what PLACE - and FEED/FERTILIZE, below - really
-    consume from). Simplification, not an oversight: this whole pipeline is
-    modeled as the *farmer's* (not any hand's) inventory - correct while
-    `hires_per_day` defaults to 0; revisit once hiring is tuned to a
-    nonzero value, since a hand could end up carrying the animal instead.
+    `inventories`/`farmer_inventory` are both needed because they mean
+    different things: `shed` is what's been bought (BUY_ANIMAL delivers
+    there, not to any unit's inventory), `inventories` is what each unit
+    is actually carrying (what PLACE - and FEED/FERTILIZE, below - really
+    consume from, resolved against the *acting unit's own* slot, not the
+    shed).
+
+    `inventories` (T8.39) is the real per-unit list (index 0 the farmer,
+    later indices hands - mirrors kaggriculture.py's own `private
+    ["inventories"]` exactly, see `_units_holding`'s own docstring).
+    `farmer_inventory` remains as a convenience alias for the common
+    single-unit case: when `inventories` is omitted, it's built as
+    `[farmer_inventory]`, so every caller that only ever tracked unit 0
+    (every test predating T8.39) keeps working with zero changes.
+    `animal_units`/PLACE and `fertilizer_units`/FERTILIZE (below) always
+    scan the *full* `inventories` list regardless of `feed_pickup_
+    unpinned` - genuinely bit-identical either way, since nothing but the
+    dedicated (still-pinned) animal PICKUP can ever put an animal in any
+    unit's inventory, and FERTILIZE stays fully inert whenever `use_
+    fertilizer` is off (today's shipped default) no matter who holds
+    FERTILIZER.
+
+    WHEAT is different, and gated on `feed_pickup_unpinned` for a real
+    reason, not a style choice: found while implementing T8.39, not
+    anticipated in the plan - `HARVEST`'s real handler deposits a crop's
+    yield into the *acting unit's own* inventory (`_inv_add(inv, tile[
+    "crop"], units)`), and WHEAT is both a crop and the feed item, so a
+    hired hand harvesting a WHEAT tile genuinely ends up holding WHEAT
+    today, invisible to decide() only because nothing before T8.39 ever
+    looked past unit 0's inventory. Scanning every unit for WHEAT
+    unconditionally would therefore be a real behavior change disguised
+    as plumbing (confirmed directly: two golden episodes' final money
+    moved when this was first tried unconditionally) - so it's gated
+    behind the same flag as the aggregate PICKUP's own pin: `feed_pickup_
+    unpinned=False` (the default) restricts the WHEAT scan to unit 0
+    alone (`_units_holding([farmer_inventory], "WHEAT", 1)`), bit-
+    identical to every pre-T8.39 caller; `=True` scans every unit,
+    letting a hand feed from wheat it just harvested *or* was handed via
+    an unpinned PICKUP, both at once - a single mechanism, not two.
+
+    The *animal* PICKUP/PLACE step is still modeled as pinned to unit 0
+    specifically for the PICKUP itself (`_PINNED_UNIT_INDEX`; PLACE binds
+    to `animal_units[0]`, which that pin makes always 0 today - see
+    `_new_investment_tasks`'s own docstring) - a real, deliberate scope
+    limit (T8.39's plan), not a leftover simplification: unpinning that
+    once-per-game two-turn pipeline too would add a second uncontrolled
+    variable to any self-play measurement of this task's actual
+    mechanism, the wheat FEED/PICKUP pipeline below.
 
     At most one new-investment task (`PLANT`/`BUILD_COOP`/
     `BUILD_PASTURE`/`PICKUP`/`PLACE`) is ever produced per call - one
@@ -308,13 +394,42 @@ def build_task_list(
     own docstring for the mechanism. Defaults to `False`, reproducing the
     exact prior serial (BUILD -> PICKUP -> PLACE) pipeline for every
     caller that doesn't pass it.
+
+    `feed_pickup_unpinned` (T8.39) - see the `inventories`/WHEAT
+    paragraph above for the mechanism (widens the WHEAT scan to every
+    unit) and `_PINNED_UNIT_INDEX`'s own docstring for the other half (the
+    aggregate PICKUP itself becomes assignable to any free unit, not just
+    the farmer). Defaults to `False`, bit-identical to every pre-T8.39
+    caller.
     """
     shed = shed or {}
     farmer_inventory = farmer_inventory or {}
+    inventories = list(inventories) if inventories is not None else [farmer_inventory]
+    # T8.39: not len(inventories) alone (a unit that hasn't acted yet
+    # today has no entry at all - see _units_holding's own docstring) and
+    # not len(unit_positions) alone (every pre-T8.39 caller in this
+    # module's own test suite passes farmer_inventory/inventories without
+    # ever passing unit_positions, and must still see unit 0 considered).
+    # The max of both is the true "how many unit indices are meaningful
+    # this turn" - always at least 1, since inventories itself always has
+    # at least the single-element [farmer_inventory] fallback above.
+    n_units = max(len(unit_positions), len(inventories))
     tasks: list[Task] = []
     empty_tiles: list[tuple[int, int]] = []
     matching_structure_tiles: list[tuple[int, int]] = []
     desired_structure = ANIMALS[desired_animal]["structure"] if desired_animal is not None else None
+    # T8.39: gated, not unconditional plumbing like fertilizer_units just
+    # below - see this function's own docstring (the `inventories`/WHEAT
+    # paragraph) for the real coupling that makes this necessary
+    # (HARVEST deposits a crop's yield into the *acting* unit's own
+    # inventory, and WHEAT is both a crop and the feed item).
+    wheat_units = (
+        _units_holding(inventories, "WHEAT", n_units)
+        if feed_pickup_unpinned
+        else _units_holding([farmer_inventory], "WHEAT", 1)
+    )
+    fertilizer_units = _units_holding(inventories, "FERTILIZER", n_units)
+    feed_needed_tiles = 0
     wheat_pickup_priority: int | None = None
 
     for y, row in enumerate(tiles):
@@ -331,40 +446,46 @@ def build_task_list(
             elif kind == "PLANT":
                 tasks.extend(
                     _plant_tile_tasks(
-                        pos, tile, current_day, farmer_inventory, use_fertilizer, water_bonus_window_aware
+                        pos, tile, current_day, fertilizer_units, use_fertilizer, water_bonus_window_aware
                     )
                 )
             elif "animal" in tile:
-                animal_tasks, needs_wheat_priority = _animal_tile_tasks(pos, tile, farmer_inventory, care_aware)
+                animal_tasks, feed_priority = _animal_tile_tasks(pos, tile, wheat_units, care_aware)
                 tasks.extend(animal_tasks)
-                if needs_wheat_priority is not None:
+                if feed_priority is not None:
+                    feed_needed_tiles += 1
                     wheat_pickup_priority = (
-                        needs_wheat_priority
+                        feed_priority
                         if wheat_pickup_priority is None
-                        else min(wheat_pickup_priority, needs_wheat_priority)
+                        else min(wheat_pickup_priority, feed_priority)
                     )
             elif kind == desired_structure:
                 matching_structure_tiles.append(pos)
             # An empty COOP/PASTURE not matching desired_structure has
             # nothing to do.
 
-    if wheat_pickup_priority is not None and shed.get("WHEAT", 0) > 0:
-        # unit_positions[:1] (the farmer only), not every unit: this
-        # PICKUP is pinned to the farmer regardless of which unit is
-        # nearest (T8.4 pins the task itself; here, picking the shed tile
-        # nearest to a *hand* instead would make the target flip as hands
-        # move, which is exactly the kind of unit-position dependence
-        # T8.2's stability argument needs this module to avoid).
+    # T8.39: generalizes "any tile lacks wheat" (the pre-T8.39 condition,
+    # equivalent to this one whenever there's at most one animal tile and
+    # at most one wheat-holding unit - today's shipped
+    # max_animals_per_type=1) to N animal tiles vs. M units already
+    # holding wheat - a PICKUP is only needed for the shortfall.
+    if feed_needed_tiles > len(wheat_units) and shed.get("WHEAT", 0) > 0:
+        # unit_positions[:1] (the farmer only), not every unit, for the
+        # *position* chosen - independent of which unit ends up assigned
+        # to execute it (T8.2's stability argument needs a task's target
+        # position to never depend on a *moving* unit; see this
+        # function's own docstring above).
         pos = _closest_pos(shed_access_tiles(len(tiles)), unit_positions[:1])
         qty = min(shed["WHEAT"], _WHEAT_PICKUP_BATCH)
+        pickup_unit_index = None if feed_pickup_unpinned else _PINNED_UNIT_INDEX
         tasks.append(
-            Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty, unit_index=_PINNED_UNIT_INDEX)
+            Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty, unit_index=pickup_unit_index)
         )
 
     tasks.extend(
         _new_investment_tasks(
             empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
-            plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor, plant_qty,
+            plant_crop, desired_animal, desired_structure, shed, inventories, n_units, anchor, plant_qty,
             parallel_animal_acquisition,
         )
     )
@@ -381,7 +502,7 @@ def build_task_list(
 
 def _new_investment_tasks(
     empty_tiles, matching_structure_tiles, unit_positions, board_size,
-    plant_crop, desired_animal, desired_structure, shed, farmer_inventory, anchor=_ANCHOR_SHED,
+    plant_crop, desired_animal, desired_structure, shed, inventories, n_units, anchor=_ANCHOR_SHED,
     plant_qty: int = 1,
     parallel_animal_acquisition: bool = False,
 ) -> list[Task]:
@@ -426,12 +547,21 @@ def _new_investment_tasks(
     rather than reimplementing it.
     """
     if desired_animal is not None:
-        animal_in_hand = farmer_inventory.get(desired_animal, 0) > 0
+        # T8.39: animal_units generalizes the old `farmer_inventory.get(
+        # desired_animal, 0) > 0` check to every unit - in practice this
+        # can only ever be `()` or `(0,)` today, since the animal PICKUP
+        # just below is deliberately still pinned to `_PINNED_UNIT_INDEX`
+        # (see this module's own docstring for why that scope limit is
+        # deliberate), but PLACE binds to whichever unit the animal
+        # actually came from (`animal_units[0]`) rather than hardcoding
+        # unit 0, so this stays correct if that pin is ever lifted later.
+        animal_units = _units_holding(inventories, desired_animal, n_units)
+        animal_in_hand = bool(animal_units)
         animal_in_shed = shed.get(desired_animal, 0) > 0
         if not parallel_animal_acquisition:
             if animal_in_hand and matching_structure_tiles:
                 pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
-                return [Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX)]
+                return [Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=animal_units[0])]
             if not matching_structure_tiles and empty_tiles:
                 pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
                 build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
@@ -445,7 +575,7 @@ def _new_investment_tasks(
         animal_tasks: list[Task] = []
         if animal_in_hand and matching_structure_tiles:
             pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
-            animal_tasks.append(Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=_PINNED_UNIT_INDEX))
+            animal_tasks.append(Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=animal_units[0]))
         if not matching_structure_tiles and empty_tiles:
             pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
             build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
@@ -472,7 +602,7 @@ def _plant_tile_tasks(
     pos: tuple[int, int],
     tile: dict,
     current_day: int,
-    farmer_inventory: dict,
+    fertilizer_units: tuple[int, ...],
     use_fertilizer: bool = True,
     water_bonus_window_aware: bool = False,
 ) -> list[Task]:
@@ -530,7 +660,7 @@ def _plant_tile_tasks(
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     if (
         use_fertilizer
-        and farmer_inventory.get("FERTILIZER", 0) > 0
+        and fertilizer_units
         and tile.get("fertilized_until_day", -1) < current_day
     ):
         # T8.3e: the user's own observed defect - FERTILIZER was only
@@ -560,7 +690,17 @@ def _plant_tile_tasks(
         # already-productive tile is a worse trade than either. At
         # MAINTENANCE it only fires once nothing more pressing is queued,
         # same tier as DIG/COLLECT_FERTILIZER.
-        tasks.append(Task(PRIORITY_MAINTENANCE, pos, "FERTILIZE"))
+        #
+        # T8.39: bound to `fertilizer_units` (every unit currently holding
+        # FERTILIZER), not pinned to a single hardcoded index - a real,
+        # previously-latent gap found while auditing this module for
+        # T8.39, not merely a style change: this task had *no* unit
+        # binding at all before (`use_fertilizer` defaults `False`, so it
+        # was inert in every shipped episode - see `_PINNED_UNIT_INDEX`'s
+        # own docstring for the ops this module does bind, which never
+        # included FERTILIZE despite it also resolving against the acting
+        # unit's own inventory).
+        tasks.append(Task(PRIORITY_MAINTENANCE, pos, "FERTILIZE", eligible_units=fertilizer_units))
     return tasks
 
 
@@ -595,15 +735,22 @@ def _is_actually_harvestable(tile: dict, current_day: int) -> bool:
 
 
 def _animal_tile_tasks(
-    pos: tuple[int, int], tile: dict, farmer_inventory: dict, care_aware: bool = False
+    pos: tuple[int, int], tile: dict, wheat_units: tuple[int, ...], care_aware: bool = False
 ) -> tuple[list[Task], int | None]:
-    """Returns (tasks, wheat_pickup_priority) - the second element is
-    `None` unless this tile needs feeding and the farmer isn't currently
-    carrying any WHEAT to do it with (T6.4's finding, same root cause as
+    """Returns (tasks, feed_priority) - the second element is `None`
+    unless this tile still needs feeding today (fed_today is False),
+    regardless of whether `wheat_units` is currently empty. The caller
+    (`build_task_list`) counts how many tiles return a non-`None`
+    feed_priority and compares that count against `len(wheat_units)` to
+    decide whether a wheat PICKUP is still needed for the shortfall - see
+    its own comment at that call site. This function itself only decides,
+    per tile, whether a FEED task can be proposed right now: only when
+    `wheat_units` is non-empty (T6.4's finding, same root cause as
     PLACE's: FEED's real handler consumes from the acting unit's own
-    inventory, not the shed - see `_new_investment_tasks`'s docstring).
-    The caller aggregates this across all animal tiles into at most one
-    PICKUP task, at the most urgent priority found.
+    inventory, not the shed - see `_new_investment_tasks`'s docstring), in
+    which case it's bound to every such unit via `eligible_units` (T8.39 -
+    any of them can resolve it; `assign_units`'s restricted stage picks
+    which).
 
     `care_aware` (T8.3q, the user's own observation): `CARE` banks a
     yield bonus (`pending_care_bonus`) on any day both fed and cared for,
@@ -621,21 +768,20 @@ def _animal_tile_tasks(
     genuinely spent on this, mirroring `use_fertilizer`'s own convention.
     """
     tasks = []
-    wheat_pickup_priority = None
+    feed_priority = None
     if not tile.get("fed_today", False):
         urgent = tile.get("consecutive_unfed", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
-        if farmer_inventory.get("WHEAT", 0) > 0:
-            tasks.append(Task(priority, pos, "FEED", unit_index=_PINNED_UNIT_INDEX))
-        else:
-            wheat_pickup_priority = priority
+        feed_priority = priority
+        if wheat_units:
+            tasks.append(Task(priority, pos, "FEED", eligible_units=wheat_units))
     if tile.get("yield_units", 0) > 0:
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     if tile.get("fertilizer_available", False):
         tasks.append(Task(PRIORITY_MAINTENANCE, pos, "COLLECT_FERTILIZER"))
     if care_aware and not tile.get("cared_today", False):
         tasks.append(Task(PRIORITY_MAINTENANCE, pos, "CARE"))
-    return tasks, wheat_pickup_priority
+    return tasks, feed_priority
 
 
 def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> list[Task | None]:
@@ -663,24 +809,42 @@ def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> li
     never enter it) - re-running this function after each single-tile
     move reproduces the same assignment for any unit still en route.
 
-    T8.4: within each tier, a task with `unit_index` set (wheat/animal
-    `PICKUP`, `FEED`, `PLACE` - see `_PINNED_UNIT_INDEX`'s own docstring
-    for why exactly these ops) is resolved *before* the distance-based
-    matching below, and only ever against that exact unit - never handed
-    to a nearer hand instead. Deliberate, accepted consequence: if the
-    pinned unit is already claimed by a higher-priority pinned task this
-    same tier, the task is simply dropped for this turn (not serviced by
-    anyone) rather than assigned to a unit whose own inventory the real
-    interpreter wouldn't resolve it against - a silent no-op, not a
-    silent wrong-inventory bug. Ties among same-tier pinned tasks break
-    on `pos`, matching the unpinned matching's own tie-break convention.
-    This preserves T8.2's stability argument for the unpinned remainder
-    unchanged (it's the identical algorithm over a - possibly smaller -
-    free-unit set; pinning never depends on unit position, so it
-    introduces no new position-dependence of its own). At `len(unit_
-    positions) == 1` (today's shipped `hires_per_day=0`), pinning changes
-    nothing observable - the one unit is always either the pinned target
-    or not needed at all.
+    T8.4: within each tier, a task with `unit_index` set (the wheat
+    PICKUP when not `feed_pickup_unpinned`, the animal PICKUP - see
+    `_PINNED_UNIT_INDEX`'s own docstring for why exactly these two) is
+    resolved *before* the distance-based matching below, and only ever
+    against that exact unit - never handed to a nearer hand instead.
+    Deliberate, accepted consequence: if the pinned unit is already
+    claimed by a higher-priority pinned task this same tier, the task is
+    simply dropped for this turn (not serviced by anyone) rather than
+    assigned to a unit whose own inventory the real interpreter wouldn't
+    resolve it against - a silent no-op, not a silent wrong-inventory
+    bug. Ties among same-tier pinned tasks break on `pos`, matching the
+    unpinned matching's own tie-break convention. This preserves T8.2's
+    stability argument for the unpinned remainder unchanged (it's the
+    identical algorithm over a - possibly smaller - free-unit set;
+    pinning never depends on unit position, so it introduces no new
+    position-dependence of its own). At `len(unit_positions) == 1`
+    (today's shipped `hires_per_day=0`), pinning changes nothing
+    observable - the one unit is always either the pinned target or not
+    needed at all.
+
+    T8.39: between pinned and unpinned, a third "restricted" stage
+    resolves every task with `eligible_units` set (FEED/FERTILIZE - any
+    unit currently holding the relevant item can do it, not just one
+    fixed index) against the globally nearest (unit, task) pair *within
+    that task's own `eligible_units ∩ free_units`* - the same greedy-
+    global-nearest rule the unpinned stage below uses, just pre-filtered
+    to eligible candidates. Resolved before plain unpinned tasks
+    (most-constrained-first, the same precedent as pinned-before-
+    unpinned) so an unpinned WATER/HARVEST/PLANT can't steal the one unit
+    a same-tier FEED actually needs. A restricted task with no eligible
+    free unit left is dropped for this tier, exactly like an unservable
+    pinned task above - never handed to an ineligible unit. Negative
+    control: a task with `eligible_units=None` (every Task constructed
+    before T8.39, and PLACE/animal-PICKUP/wheat-PICKUP-when-pinned today)
+    never enters this stage at all, so this is bit-identical whenever no
+    task in play declares `eligible_units`.
 
     Still "at most one task per unit, one unit per task" (SPEC-policy.md)
     and a bounded greedy assignment, not a search problem - at up to 100
@@ -697,11 +861,26 @@ def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> li
             break
         tier = [t for t in tasks if t.priority == priority]
         pinned = sorted((t for t in tier if t.unit_index is not None), key=lambda t: t.pos)
-        unpinned = [t for t in tier if t.unit_index is None]
+        restricted = sorted(
+            (t for t in tier if t.unit_index is None and t.eligible_units is not None), key=lambda t: t.pos
+        )
+        unpinned = [t for t in tier if t.unit_index is None and t.eligible_units is None]
         for t in pinned:
             if t.unit_index in free_units:
                 assignment[t.unit_index] = t
                 free_units.discard(t.unit_index)
+        while free_units and restricted:
+            candidates = [
+                ((tile_distance(unit_positions[u], t.pos), t.pos, u), t_idx, u)
+                for t_idx, t in enumerate(restricted)
+                for u in free_units
+                if u in t.eligible_units
+            ]
+            if not candidates:
+                break
+            _, t_idx, u_idx = min(candidates)
+            assignment[u_idx] = restricted.pop(t_idx)
+            free_units.discard(u_idx)
         while free_units and unpinned:
             _, t_idx, u_idx = min(
                 ((tile_distance(unit_positions[u], t.pos), t.pos, u), t_idx, u)

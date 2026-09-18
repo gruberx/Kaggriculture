@@ -848,12 +848,17 @@ def test_build_task_list_pins_wheat_pickup_to_unit_0():
     assert pickup.unit_index == 0
 
 
-def test_build_task_list_pins_feed_to_unit_0():
+def test_build_task_list_binds_feed_to_the_unit_holding_wheat():
+    # T8.39: FEED is no longer hard-pinned to unit_index=0 - it's bound
+    # via eligible_units to whichever unit(s) actually hold WHEAT, which
+    # today (farmer_inventory only, no inventories list given) reduces to
+    # exactly the old pin: (0,).
     tiles = _empty_tiles()
     tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)
     tasks = build_task_list(tiles, farmer_inventory={"WHEAT": 5})
     feed = next(t for t in tasks if t.op == "FEED")
-    assert feed.unit_index == 0
+    assert feed.unit_index is None
+    assert feed.eligible_units == (0,)
 
 
 def test_build_task_list_pins_place_to_unit_0():
@@ -885,6 +890,168 @@ def test_build_task_list_does_not_pin_water_harvest_dig_plant_or_build():
     assert {"WATER", "DIG", "PLANT"} <= ops_seen
     for t in tasks:
         assert t.unit_index is None, f"{t.op} should not be pinned"
+
+
+# --- assign_units: the restricted stage (T8.39) ------------------------
+
+
+def test_assign_units_restricted_task_beats_a_farther_unpinned_task_for_its_only_eligible_unit():
+    feed = Task(priority=PRIORITY_ROUTINE_CARE, pos=(9, 9), op="FEED", eligible_units=(0,))
+    water = Task(priority=PRIORITY_ROUTINE_CARE, pos=(0, 0), op="WATER")  # sits right on unit 0
+    assignment = assign_units([feed, water], [(0, 0)])
+    # unit 0 is the only unit eligible for FEED, so it must take FEED even
+    # though WATER is right under its feet - restricted resolves before
+    # plain unpinned in the same tier (most-constrained-first).
+    assert assignment == [feed]
+
+
+def test_assign_units_restricted_stage_sends_two_feeds_to_two_distinct_holders():
+    feed_a = Task(priority=PRIORITY_ROUTINE_CARE, pos=(0, 5), op="FEED", eligible_units=(0, 1))
+    feed_b = Task(priority=PRIORITY_ROUTINE_CARE, pos=(9, 5), op="FEED", eligible_units=(0, 1))
+    unit0 = (0, 0)  # closer to feed_a
+    unit1 = (9, 0)  # closer to feed_b
+    assignment = assign_units([feed_a, feed_b], [unit0, unit1])
+    assert assignment == [feed_a, feed_b]
+
+
+def test_assign_units_drops_a_restricted_task_when_no_eligible_unit_is_free():
+    # unit 0 is claimed by a higher-priority pinned task first - FEED's
+    # only eligible unit is no longer free, so it's simply dropped this
+    # turn, never handed to unit 1 (whose own inventory the real
+    # interpreter wouldn't resolve it against).
+    urgent_pinned = Task(priority=PRIORITY_PREVENT_LOSS, pos=(0, 0), op="PICKUP", item="WHEAT", unit_index=0)
+    feed = Task(priority=PRIORITY_PREVENT_LOSS, pos=(9, 9), op="FEED", eligible_units=(0,))
+    assignment = assign_units([urgent_pinned, feed], [(0, 0), (9, 9)])
+    assert assignment == [urgent_pinned, None]
+
+
+def test_assign_units_bit_identical_when_no_task_declares_eligible_units():
+    # Negative control: with eligible_units unused throughout, the new
+    # restricted stage never has anything to resolve - same outcome as
+    # test_assign_units_serves_the_nearest_task_within_a_tier.
+    near = Task(priority=PRIORITY_HARVEST, pos=(1, 0), op="HARVEST")
+    far = Task(priority=PRIORITY_HARVEST, pos=(9, 9), op="HARVEST")
+    assignment = assign_units([far, near], [(0, 0)])
+    assert assignment == [near]
+
+
+# --- build_task_list: FEED/PICKUP multi-unit awareness (T8.39) ---------
+
+
+def test_build_task_list_lets_a_hand_feed_with_its_own_wheat_when_unpinned():
+    tiles = _empty_tiles()
+    tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0), (5, 5)],
+        inventories=[{}, {"WHEAT": 3}],
+        feed_pickup_unpinned=True,
+    )
+    feed = next(t for t in tasks if t.op == "FEED")
+    assert feed.unit_index is None
+    assert feed.eligible_units == (1,)
+
+
+def test_build_task_list_ignores_a_hand_holding_wheat_when_not_unpinned():
+    # feed_pickup_unpinned defaults False: only unit 0's own inventory is
+    # ever consulted for WHEAT - a hand holding it is treated exactly
+    # like nobody holding it, so a PICKUP is proposed instead of a FEED
+    # (this is the real coupling documented in build_task_list's own
+    # docstring: HARVEST can put WHEAT in a hand's inventory too, so this
+    # can't be unconditional plumbing).
+    tiles = _empty_tiles()
+    tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0), (5, 5)],
+        inventories=[{}, {"WHEAT": 3}],
+        shed={"WHEAT": 5},
+    )
+    assert [t for t in tasks if t.op == "FEED"] == []
+    pickup = [t for t in tasks if t.op == "PICKUP" and t.item == "WHEAT"]
+    assert len(pickup) == 1
+    assert pickup[0].unit_index == 0
+
+
+def test_build_task_list_multiple_wheat_holders_give_ascending_eligible_units():
+    tiles = _empty_tiles()
+    tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0), (1, 1), (2, 2)],
+        inventories=[{}, {"WHEAT": 2}, {"WHEAT": 1}],
+        feed_pickup_unpinned=True,
+    )
+    feed = next(t for t in tasks if t.op == "FEED")
+    assert feed.eligible_units == (1, 2)
+
+
+def test_build_task_list_unpins_wheat_pickup_when_flag_is_on():
+    tiles = _empty_tiles()
+    tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(tiles, shed={"WHEAT": 5}, feed_pickup_unpinned=True)
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "WHEAT")
+    assert pickup.unit_index is None
+
+
+def test_build_task_list_does_not_repropose_wheat_pickup_when_a_hand_already_holds_enough():
+    # Livelock guard (T6.4/T8.4's original finding, now generalized): a
+    # hand already carrying wheat must not trigger a fresh PICKUP -
+    # feed_needed_tiles (1) does not exceed len(wheat_units) (1).
+    tiles = _empty_tiles()
+    tiles[5][5] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0), (5, 5)],
+        inventories=[{}, {"WHEAT": 3}],
+        shed={"WHEAT": 5},
+        feed_pickup_unpinned=True,
+    )
+    assert [t for t in tasks if t.op == "PICKUP" and t.item == "WHEAT"] == []
+    feed = next(t for t in tasks if t.op == "FEED")
+    assert feed.eligible_units == (1,)
+
+
+def test_build_task_list_pickup_count_reflects_the_holder_shortfall():
+    # Two animal tiles need feeding, only one unit holds wheat: N vs M -
+    # still exactly one aggregate PICKUP task (batched, same as always),
+    # but it IS required (2 needy tiles > 1 holder). Not reachable at
+    # today's shipped max_animals_per_type=1, but the generalized
+    # condition must still get this right.
+    tiles = _empty_tiles()
+    tiles[3][3] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tiles[6][6] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)],
+        farmer_inventory={"WHEAT": 3}, shed={"WHEAT": 5},
+    )
+    pickups = [t for t in tasks if t.op == "PICKUP" and t.item == "WHEAT"]
+    assert len(pickups) == 1
+    feeds = [t for t in tasks if t.op == "FEED"]
+    assert len(feeds) == 2  # both tiles propose FEED bound to the same holder
+
+
+def test_build_task_list_wheat_pickup_position_stays_farmer_anchored_when_unpinned():
+    tiles = _empty_tiles()
+    tiles[9][9] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0), (9, 9)],
+        shed={"WHEAT": 5}, feed_pickup_unpinned=True,
+    )
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "WHEAT")
+    # Anchored to unit_positions[:1] (the farmer) regardless of which unit
+    # is nearest the shed or eventually executes it (T8.2's stability
+    # argument - see build_task_list's own comment at this call site).
+    assert pickup.pos in shed_access_tiles(10)
+
+
+def test_build_task_list_binds_fertilize_to_the_unit_holding_fertilizer():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(watered_today=True)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0), (2, 2)],
+        inventories=[{}, {"FERTILIZER": 1}],
+        use_fertilizer=True,
+    )
+    fert = next(t for t in tasks if t.op == "FERTILIZE")
+    assert fert.unit_index is None
+    assert fert.eligible_units == (1,)
 
 
 def _step_toward(pos: tuple[int, int], target: tuple[int, int]) -> tuple[int, int]:

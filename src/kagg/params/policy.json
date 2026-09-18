@@ -38,6 +38,7 @@
   "always_pursue_one_animal": true,
   "water_bonus_window_aware": false,
   "parallel_animal_acquisition": false,
+  "feed_pickup_unpinned": false,
   "portfolio_basket_size": 1,
   "max_animals_per_type": 1,
   "wheat_self_sufficiency_aware": false,

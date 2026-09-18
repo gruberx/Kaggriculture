@@ -1317,6 +1317,77 @@ def test_decide_wheat_restock_counts_carried_inventory_sums_every_unit():
     assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == []
 
 
+def _hungry_cow_tile() -> dict:
+    return {
+        "kind": "PASTURE", "animal": "COW", "placed_day": 0, "yield_units": 0,
+        "consecutive_unfed": 1, "fed_today": False, "cared_today": False,
+        "fertilizer_available": False, "pending_care_bonus": 0,
+    }
+
+
+def test_decide_lets_a_free_hand_feed_when_the_farmer_is_busy():
+    # T8.39's actual end-to-end requirement: a busy farmer (its own
+    # urgent WATER, right under its feet) plus a free hand already
+    # holding WHEAT (say, from an earlier HARVEST of a WHEAT tile - see
+    # build_task_list's own docstring) plus a needy animal -> the hand
+    # feeds, not the farmer, and the farmer keeps watering rather than
+    # detouring.
+    obs = _obs()
+    obs["farms"][0]["farmer"] = [0, 0]
+    obs["farms"][0]["tiles"][0][0] = {
+        "kind": "PLANT", "crop": "WHEAT", "planted_day": 0,
+        "watered_today": False, "consecutive_unwatered": 1,
+        "yield_units": 0, "max_lifespan_step": 120, "fertilized_until_day": -1,
+    }
+    obs["farms"][0]["hands"] = [[9, 9]]
+    obs["farms"][0]["tiles"][9][9] = _hungry_cow_tile()
+    obs["private"]["inventories"] = [{}, {"WHEAT": 3}]  # only the hand holds wheat
+    params = dict(DEFAULT_PARAMS, feed_pickup_unpinned=True)
+    action = decide(obs, params)
+    assert action["farmer"][0] == "WATER"
+    assert action["hands"] == [["FEED"]]
+
+
+def test_decide_does_not_repeat_a_wheat_pickup_a_hand_already_completed():
+    # Livelock guard at the integration layer (T6.4/T8.4's original
+    # finding, generalized by T8.39): a hand already carrying enough
+    # WHEAT must never trigger a fresh PICKUP order from anyone, even
+    # with plenty more sitting in the shed.
+    obs = _obs()
+    obs["farms"][0]["farmer"] = [4, 4]
+    obs["farms"][0]["hands"] = [[9, 9]]
+    obs["farms"][0]["tiles"][9][9] = _hungry_cow_tile()
+    obs["private"]["inventories"] = [{}, {"WHEAT": 3}]
+    obs["private"]["shed"]["WHEAT"] = 5
+    params = dict(DEFAULT_PARAMS, feed_pickup_unpinned=True)
+    action = decide(obs, params)
+    all_actions = [action["farmer"]] + action["hands"]
+    assert not any(a[0] == "PICKUP" and a[1] == "WHEAT" for a in all_actions)
+    assert action["hands"] == [["FEED"]]
+
+
+def test_decide_feed_pickup_stays_pinned_to_the_farmer_by_default():
+    obs = _obs()
+    obs["farms"][0]["farmer"] = [4, 4]  # a real shed-access tile
+    obs["farms"][0]["hands"] = [[9, 9]]
+    obs["farms"][0]["tiles"][9][9] = _hungry_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 5
+    action = decide(obs, DEFAULT_PARAMS)  # feed_pickup_unpinned unset -> False
+    assert action["farmer"][0] == "PICKUP"
+    assert action["hands"] == [["PASS"]]
+
+
+def test_decide_lets_the_nearer_hand_take_the_wheat_pickup_when_unpinned():
+    obs = _obs()
+    obs["farms"][0]["farmer"] = [0, 0]  # far from every shed-access tile
+    obs["farms"][0]["hands"] = [[4, 4]]  # standing on one
+    obs["farms"][0]["tiles"][9][9] = _hungry_cow_tile()
+    obs["private"]["shed"]["WHEAT"] = 5
+    params = dict(DEFAULT_PARAMS, feed_pickup_unpinned=True)
+    action = decide(obs, params)
+    assert action["hands"] == [["PICKUP", "WHEAT", 5]]
+
+
 def test_decide_defaults_wheat_buy_only_when_feed_needed_to_true_when_unset():
     # Mirrors test_decide_defaults_crop_net_of_seed_cost_to_true_when_unset's
     # pattern: a params dict missing the key entirely must behave like the
