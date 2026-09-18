@@ -272,6 +272,7 @@ import sys
 from kaggle_environments import make
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "tools"))
+import daily_dashboard  # noqa: E402
 import tuning  # noqa: E402
 
 AGENT_MAIN_PATH = os.path.join(
@@ -411,6 +412,58 @@ def test_beats_starter_and_random_across_additional_seeds():
             assert our_result.status == "DONE", (opponent, seed)
             assert opponent_result.status == "DONE", (opponent, seed)
             assert our_result.reward > opponent_result.reward, (opponent, seed)
+
+
+def test_no_animal_escapes_across_the_golden_seeds():
+    """T8.37/T8.38 (the user's own concern, 2026-09-18): past conclusions
+    about animal husbandry could be silently confounded by undetected
+    starvation/escapes, and until this test no golden-episode check ever
+    looked - `test_golden_episodes_reproduce_recorded_final_money` only
+    compares final money, which an animal that escapes late (T8.37's own
+    finding: a last-day escape costs almost nothing) would not visibly
+    flag at all.
+
+    Reuses `daily_dashboard.classify_animal_transition` (already unit-
+    tested in tests/test_tools_daily_dashboard.py - no new detection
+    logic here) against the exact same six canonical (opponent, seed)
+    pairs `_GOLDEN` already records money for, diffing every consecutive
+    step pair for the whole episode rather than only the final one.
+
+    Confirmed currently true, not assumed: under today's shipped
+    defaults (`always_pursue_one_animal=True` since T8.31 - an animal is
+    acquired in every one of these six episodes, `test_at_least_one_
+    animal_reaches_production...` below covers the pipeline itself),
+    zero escapes occur on any of the six. This is a real invariant
+    worth protecting, not a tautology - T8.35's own dashboard run found
+    a real escape on a *different* seed (100, day 28), and T8.37's own
+    measurement found one on seed 105 (self-play, day 29) - animal
+    escapes are a real, if seed-dependent, outcome in this game, not
+    something that structurally cannot happen. Like `_GOLDEN` itself,
+    a future change that causes a real escape on one of these seeds
+    should fail this test and require a deliberate look, not update
+    silently to a new "golden" escape count - unlike the money table,
+    this one has no legitimate reason to ever need updating, since a
+    farm having its animal escape is never a improvement to accept.
+    """
+    escapes = []
+    for opponent, seed in _GOLDEN:
+        env = make(
+            "kaggriculture",
+            configuration={"episodeSteps": 720, "seed": seed},
+            debug=False,
+        )
+        env.run([AGENT_MAIN_PATH, opponent])
+        steps = env.steps
+        for t in range(1, len(steps)):
+            prev_tiles = steps[t - 1][0].observation["farms"][0]["tiles"]
+            cur_tiles = steps[t][0].observation["farms"][0]["tiles"]
+            for y, row in enumerate(prev_tiles):
+                for x, prev_tile in enumerate(row):
+                    cause = daily_dashboard.classify_animal_transition(prev_tile, cur_tiles[y][x])
+                    if cause == "escaped":
+                        day = steps[t][0].observation.get("day")
+                        escapes.append((opponent, seed, day, prev_tile.get("animal")))
+    assert escapes == []
 
 
 def test_at_least_one_animal_reaches_production_in_a_representative_episode(tmp_path):

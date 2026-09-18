@@ -1932,6 +1932,32 @@ project's own established finding, a fresh submission's score is volatile for it
       exactly the discipline this is for. `wheat_max_buy_price` stays 40, `wheat_urgency_reserve` stays 0.
       No golden-episode re-record. No Kaggle submission in this task.
 
+- [x] T8.38 — permanent animal-escape regression guardrail (Stage 2 of the same task as T8.37).
+      Confirmed directly (research agent, this session): no `measure_t8*.py` script and no
+      golden-episode test anywhere had ever checked for an escape - the one animal-pipeline test
+      (`test_at_least_one_animal_reaches_production_in_a_representative_episode`) only asserts a
+      product appeared once, ever, so an animal that produces once and escapes on day 12 would still
+      pass it silently.
+
+      New `test_no_animal_escapes_across_the_golden_seeds` in `tests/test_agent_golden_episodes.py`,
+      reusing `daily_dashboard.classify_animal_transition` (already unit-tested, zero new detection
+      logic) against the exact same six `(opponent, seed)` pairs `_GOLDEN` already records money for -
+      diffs every consecutive step pair across the *whole* episode, not just the final one. Checked
+      first, not assumed: all six golden episodes currently have **zero** escapes under shipped
+      defaults (confirmed by direct run before writing the assertion) - a real, currently-true
+      invariant, not a test that starts red. Unlike `_GOLDEN`'s own money table (which legitimately
+      gets re-recorded when an accepted change moves it), this test is designed to *never* need
+      re-recording - a farm's animal escaping is never something to accept as a "new golden number."
+
+      `pytest tests/ -q`: 484 passed, `compileall` clean. No shipped code changes - this is test
+      infrastructure only. No Kaggle submission in this task.
+
+      Closes out the cheap, high-confidence half of the T8.37/T8.38 plan. The larger, separate
+      follow-up named in that plan - unpinning `FEED`/`PICKUP` so more than the farmer alone can feed
+      animals (the user's own "помощники в кормёжке" request, confirmed feasible: it's a policy-layer
+      bookkeeping simplification, not an engine constraint) - remains explicitly out of scope here, its
+      own future task.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
