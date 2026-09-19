@@ -2436,3 +2436,192 @@ def test_decide_computes_zero_wheat_feed_demand_when_flag_is_off(monkeypatch):
     params = dict(DEFAULT_PARAMS, wheat_self_sufficiency_aware=False)
     decide(obs, params)
     assert captured.get("wheat_feed_units_needed") == 0
+
+
+# --- bulk seed/animal purchase, plant_while_animal_pending (T8.45) ------
+
+
+def _fresh_melon_obs():
+    obs = _obs()
+    obs["market"]["inventory"]["MELON"] = 1  # scarce -> highest price -> ranks first
+    return obs
+
+
+def _orders(action, op):
+    return [o for o in action["market"] if o[0] == op]
+
+
+def test_bulk_purchase_params_default_off():
+    for key in ("bulk_seed_purchase", "bulk_animal_purchase", "plant_while_animal_pending"):
+        assert DEFAULT_PARAMS[key] is False
+    assert DEFAULT_PARAMS["bulk_seed_buffer_fraction"] == 0.10
+    assert DEFAULT_PARAMS["bulk_animal_buffer_fraction"] == 0.0
+
+
+def test_bulk_seed_purchase_buys_for_every_planned_tile_plus_ten_percent():
+    obs = _fresh_melon_obs()
+    params = dict(DEFAULT_PARAMS, bulk_seed_purchase=True, always_pursue_one_animal=False)
+    orders = _orders(decide(obs, params), "BUY_SEED")
+    # 25 free tiles, no animal reserved -> ceil(25 * 1.1) = 28 seeds.
+    assert len(orders) == 1 and orders[0][2] == 28
+
+
+def test_bulk_seed_purchase_reserves_a_tile_for_the_planned_animal():
+    obs = _fresh_melon_obs()
+    tiles = obs["farms"][0]["tiles"]
+    for y in range(10):  # a real start: only the NW quadrant (25 tiles) unlocked
+        for x in range(10):
+            if y >= 5 or x >= 5:
+                tiles[y][x] = "LOCKED"
+    params = dict(DEFAULT_PARAMS, bulk_seed_purchase=True)  # always_pursue_one_animal on
+    orders = _orders(decide(obs, params), "BUY_SEED")
+    assert orders[0][2] == 27  # ceil(24 * 1.1): 25 free - 1 for the animal's structure
+
+
+def test_bulk_seed_purchase_subtracts_seeds_already_on_hand():
+    obs = _fresh_melon_obs()
+    obs["private"]["seeds"] = {"MELON": 20}
+    params = dict(DEFAULT_PARAMS, bulk_seed_purchase=True, always_pursue_one_animal=False)
+    orders = _orders(decide(obs, params), "BUY_SEED")
+    assert orders[0][2] == 8  # 28 - 20
+
+
+def test_bulk_seed_purchase_buys_nothing_when_holdings_cover_it():
+    obs = _fresh_melon_obs()
+    obs["private"]["seeds"] = {"MELON": 40}
+    params = dict(DEFAULT_PARAMS, bulk_seed_purchase=True, always_pursue_one_animal=False)
+    assert _orders(decide(obs, params), "BUY_SEED") == []
+
+
+def test_bulk_seed_purchase_respects_the_buffer_fraction_param():
+    obs = _fresh_melon_obs()
+    params = dict(
+        DEFAULT_PARAMS, bulk_seed_purchase=True, bulk_seed_buffer_fraction=0.0,
+        always_pursue_one_animal=False,
+    )
+    assert _orders(decide(obs, params), "BUY_SEED")[0][2] == 25
+
+
+def test_bulk_seed_purchase_is_capped_by_max_new_tiles():
+    obs = _fresh_melon_obs()
+    params = dict(
+        DEFAULT_PARAMS, bulk_seed_purchase=True, bulk_purchase_max_new_tiles=10,
+        always_pursue_one_animal=False,
+    )
+    assert _orders(decide(obs, params), "BUY_SEED")[0][2] == 11  # ceil(10 * 1.1)
+
+
+def test_bulk_seed_purchase_is_limited_by_money():
+    obs = _fresh_melon_obs()
+    obs["farms"][0]["money"] = 400
+    params = dict(DEFAULT_PARAMS, bulk_seed_purchase=True, always_pursue_one_animal=False)
+    assert _orders(decide(obs, params), "BUY_SEED")[0][2] == 5  # 400 // 80
+
+
+def test_bulk_seed_purchase_reserves_the_animal_cost_out_of_the_seed_budget():
+    obs = _fresh_melon_obs()
+    obs["farms"][0]["money"] = 1000
+    params = dict(DEFAULT_PARAMS, bulk_seed_purchase=True, bulk_animal_purchase=True)
+    action = decide(obs, params)
+    animal_orders = _orders(action, "BUY_ANIMAL")
+    assert len(animal_orders) == 1
+    animal_cost = ANIMALS[animal_orders[0][1]]["cost"] * animal_orders[0][2]
+    seed_spend = sum(o[2] * CROPS[o[1]]["seed"] for o in _orders(action, "BUY_SEED"))
+    assert seed_spend + animal_cost <= 1000  # the seed order can't starve the animal
+
+
+def test_bulk_seed_purchase_off_keeps_the_legacy_labor_units_sizing():
+    obs = _fresh_melon_obs()
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False)
+    qty = _orders(decide(obs, params), "BUY_SEED")[0][2]
+    assert qty == 9  # 1 farmer + 8 shipped hires, seed_buffer_per_unit=1
+
+
+def test_bulk_animal_purchase_scales_with_a_raised_target_count():
+    obs = _fresh_melon_obs()
+    params = dict(
+        DEFAULT_PARAMS, bulk_animal_purchase=True, always_pursue_animal_target_count=3,
+        max_animals_per_type=5,
+    )
+    orders = _orders(decide(obs, params), "BUY_ANIMAL")
+    assert len(orders) == 1 and orders[0][2] == 3
+
+
+def test_bulk_animal_purchase_subtracts_animals_already_waiting_in_the_shed():
+    obs = _fresh_melon_obs()
+    obs["private"]["shed"]["COW"] = 2
+    params = dict(
+        DEFAULT_PARAMS, bulk_animal_purchase=True, always_pursue_animal_target_count=4,
+        max_animals_per_type=5,
+    )
+    orders = _orders(decide(obs, params), "BUY_ANIMAL")
+    assert orders == [["BUY_ANIMAL", "COW", 2]]  # stuck COW: 4 wanted - 2 waiting
+
+
+def test_bulk_animal_purchase_never_exceeds_max_animals_per_type():
+    obs = _fresh_melon_obs()
+    params = dict(
+        DEFAULT_PARAMS, bulk_animal_purchase=True, always_pursue_animal_target_count=5,
+        max_animals_per_type=2,
+    )
+    orders = _orders(decide(obs, params), "BUY_ANIMAL")
+    assert sum(o[2] for o in orders) <= 2
+
+
+def test_bulk_animal_purchase_at_the_default_target_matches_the_legacy_single_buy():
+    obs = _fresh_melon_obs()
+    legacy = _orders(decide(_fresh_melon_obs(), dict(DEFAULT_PARAMS)), "BUY_ANIMAL")
+    bulk = _orders(decide(obs, dict(DEFAULT_PARAMS, bulk_animal_purchase=True)), "BUY_ANIMAL")
+    assert legacy == bulk and legacy and legacy[0][2] == 1
+
+
+def test_plant_while_animal_pending_lets_planting_continue_with_an_animal_in_the_shed(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    def run(flag):
+        obs = _fresh_melon_obs()
+        obs["private"]["shed"]["COW"] = 1  # bought, not yet placed -> stuck_animal
+        obs["private"]["seeds"] = {"MELON": 10}
+        captured = {}
+        original = decide_module.build_task_list
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(decide_module, "build_task_list", spy)
+        decide(obs, dict(DEFAULT_PARAMS, plant_while_animal_pending=flag))
+        return captured
+
+    assert run(False).get("plant_crop") is None  # legacy: the animal blocks planting
+    assert run(True).get("plant_crop") == "MELON"
+
+
+def test_plant_while_animal_pending_lets_seed_buying_continue_too():
+    def qty(flag):
+        obs = _fresh_melon_obs()
+        obs["private"]["shed"]["COW"] = 1
+        params = dict(DEFAULT_PARAMS, plant_while_animal_pending=flag, bulk_seed_purchase=True)
+        return _orders(decide(obs, params), "BUY_SEED")
+
+    assert qty(False) == []
+    assert qty(True) != []
+
+
+def test_plant_while_animal_pending_reaches_build_task_list_as_plant_alongside_animal(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    def run(flag):
+        captured = {}
+        original = decide_module.build_task_list
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(decide_module, "build_task_list", spy)
+        decide(_fresh_melon_obs(), dict(DEFAULT_PARAMS, plant_while_animal_pending=flag))
+        return captured.get("plant_alongside_animal")
+
+    assert run(False) is False
+    assert run(True) is True

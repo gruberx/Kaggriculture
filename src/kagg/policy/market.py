@@ -38,6 +38,8 @@ Standard library only - ships inside the submission bundle.
 
 from __future__ import annotations
 
+import math
+
 from kagg.gamelib.constants import CROPS, MARKET_I0, PRODUCTS
 from kagg.gamelib.market import price
 
@@ -284,3 +286,57 @@ def market_orders(
         if wheat_order is not None:
             orders.append(wheat_order)
     return orders
+
+
+def bulk_purchase_plan(
+    types: list[str],
+    held: dict[str, int],
+    unit_costs: dict[str, int],
+    target_total: int,
+    budget: float,
+    buffer_fraction: float = 0.0,
+    round_up: bool = True,
+) -> dict[str, int]:
+    """T8.45 (the user's own request): how many units of each of `types`
+    to buy *this turn* so that the farm ends up holding enough of them, in
+    total, to cover `target_total` planned units (tiles to plant, animals
+    to place) plus an optional safety buffer - one shared rule for seeds
+    and animals instead of two separate hand-tuned formulas.
+
+    `target_units = target_total * (1 + buffer_fraction)`, rounded up when
+    `round_up` (seeds - a 10% margin on 24 tiles must give 27, not 26) or
+    down otherwise (animals - a buffer that can't fill a whole unit buys
+    nothing extra). What is already on hand (`held`, summed over only the
+    given `types` - a seed or animal of some *other* type can't fill this
+    plan's need) is subtracted, so a turn that already holds enough buys
+    nothing and nothing is ever double-bought across turns.
+
+    The remaining need is spread over `types` by "water-filling": each
+    unit goes to the type currently holding the fewest (ties broken by
+    `types` order, i.e. rank order for a crop basket), so several crop
+    types together add up to the one total instead of each being topped
+    up to the full target on its own. `budget` is the money available;
+    a type whose unit cost exceeds what's left is skipped and the unit
+    goes to the next-lowest affordable type, stopping only when nothing
+    is affordable. Returns `{type: qty}` for types with `qty > 0` only,
+    in `types` order - one market order per entry, so the T8.5 slot
+    arithmetic is unchanged by quantity.
+    """
+    if not types or target_total <= 0:
+        return {}
+    raw = target_total * (1 + buffer_fraction)
+    target_units = math.ceil(raw - 1e-9) if round_up else math.floor(raw + 1e-9)
+    level = {t: held.get(t, 0) for t in types}
+    need = max(0, target_units - sum(level.values()))
+    plan: dict[str, int] = {}
+    remaining_budget = budget
+    order = {t: i for i, t in enumerate(types)}
+    for _ in range(need):
+        affordable = [t for t in types if unit_costs[t] <= remaining_budget]
+        if not affordable:
+            break
+        t = min(affordable, key=lambda x: (level[x], order[x]))
+        plan[t] = plan.get(t, 0) + 1
+        level[t] += 1
+        remaining_budget -= unit_costs[t]
+    return {t: plan[t] for t in types if t in plan}

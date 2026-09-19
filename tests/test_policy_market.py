@@ -326,3 +326,87 @@ def test_sell_orders_ignores_the_wheat_reserve_when_liquidating():
     shed["WHEAT"] = 10
     orders = sell_orders(shed, _BASE_MARKET_INVENTORY, wheat_reserve=10, liquidate=True)
     assert orders == [["SELL", "WHEAT", 10]]
+
+
+# --- bulk_purchase_plan (T8.45) -----------------------------------------
+
+
+def test_bulk_purchase_plan_covers_target_plus_rounded_up_buffer():
+    from kagg.policy.market import bulk_purchase_plan
+
+    # 24 tiles + 10% = 26.4 -> 27 seeds, nothing on hand.
+    plan = bulk_purchase_plan(["MELON"], {}, {"MELON": 80}, 24, 10_000, buffer_fraction=0.10)
+    assert plan == {"MELON": 27}
+
+
+def test_bulk_purchase_plan_subtracts_seeds_already_held():
+    from kagg.policy.market import bulk_purchase_plan
+
+    plan = bulk_purchase_plan(["MELON"], {"MELON": 20}, {"MELON": 80}, 24, 10_000, 0.10)
+    assert plan == {"MELON": 7}  # 27 - 20
+
+
+def test_bulk_purchase_plan_buys_nothing_when_holdings_already_cover_it():
+    from kagg.policy.market import bulk_purchase_plan
+
+    assert bulk_purchase_plan(["MELON"], {"MELON": 27}, {"MELON": 80}, 24, 10_000, 0.10) == {}
+    assert bulk_purchase_plan(["MELON"], {"MELON": 99}, {"MELON": 80}, 24, 10_000, 0.10) == {}
+
+
+def test_bulk_purchase_plan_ignores_held_units_of_types_outside_the_plan():
+    from kagg.policy.market import bulk_purchase_plan
+
+    plan = bulk_purchase_plan(["MELON"], {"WHEAT": 50}, {"MELON": 80}, 10, 10_000, 0.0)
+    assert plan == {"MELON": 10}
+
+
+def test_bulk_purchase_plan_spreads_one_total_across_several_types():
+    from kagg.policy.market import bulk_purchase_plan
+
+    plan = bulk_purchase_plan(
+        ["MELON", "CARROT"], {}, {"MELON": 80, "CARROT": 20}, 10, 10_000, buffer_fraction=0.0
+    )
+    assert sum(plan.values()) == 10
+    assert plan == {"MELON": 5, "CARROT": 5}
+
+
+def test_bulk_purchase_plan_water_fills_around_uneven_holdings():
+    from kagg.policy.market import bulk_purchase_plan
+
+    # 10 total wanted, 6 CARROT already held -> 4 more, all to MELON first
+    # (lowest holdings), ending balanced-ish rather than 5/5 on top.
+    plan = bulk_purchase_plan(
+        ["MELON", "CARROT"], {"CARROT": 6}, {"MELON": 80, "CARROT": 20}, 10, 10_000, 0.0
+    )
+    assert plan == {"MELON": 4}
+
+
+def test_bulk_purchase_plan_is_limited_by_budget():
+    from kagg.policy.market import bulk_purchase_plan
+
+    plan = bulk_purchase_plan(["MELON"], {}, {"MELON": 80}, 24, 400, 0.10)
+    assert plan == {"MELON": 5}  # floor(400 / 80)
+
+
+def test_bulk_purchase_plan_skips_an_unaffordable_type_for_an_affordable_one():
+    from kagg.policy.market import bulk_purchase_plan
+
+    plan = bulk_purchase_plan(
+        ["MELON", "CARROT"], {}, {"MELON": 80, "CARROT": 20}, 10, 70, buffer_fraction=0.0
+    )
+    assert plan == {"CARROT": 3}  # MELON never affordable; 70 // 20 = 3
+
+
+def test_bulk_purchase_plan_rounds_down_when_asked_and_buffer_cannot_fill_a_unit():
+    from kagg.policy.market import bulk_purchase_plan
+
+    # animals: 3 planned + 10% = 3.3 -> floor 3 (no extra), but 10 + 10% = 11.
+    assert bulk_purchase_plan(["COW"], {}, {"COW": 400}, 3, 10_000, 0.10, round_up=False) == {"COW": 3}
+    assert bulk_purchase_plan(["COW"], {}, {"COW": 400}, 10, 10_000, 0.10, round_up=False) == {"COW": 11}
+
+
+def test_bulk_purchase_plan_empty_inputs():
+    from kagg.policy.market import bulk_purchase_plan
+
+    assert bulk_purchase_plan([], {}, {}, 5, 100) == {}
+    assert bulk_purchase_plan(["MELON"], {}, {"MELON": 80}, 0, 100) == {}

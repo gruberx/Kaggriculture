@@ -37,7 +37,7 @@ from kagg.gamelib.constants import ANIMALS, CROPS
 from kagg.gamelib.farm import shed_distance
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
-from kagg.policy.market import buy_wheat_order, sell_orders
+from kagg.policy.market import buy_wheat_order, bulk_purchase_plan, sell_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, score_portfolio, should_buy_land
 from kagg.policy.tasks import (
     action_for_unit,
@@ -895,6 +895,35 @@ _DEFAULT_MAX_PLANT_TASKS_PER_TURN = 8
 _DEFAULT_SEED_BUFFER_PER_UNIT = 1
 _DEFAULT_SEED_CASH_RESERVE = 0
 
+# T8.45 (the user's own request, after a per-hour trace of day 0 showed
+# only 21 of 24 planned tiles got planted despite 33 idle unit-turns): the
+# T8.6 seed formula above (`labor_units * seed_buffer_per_unit`, ~5 seeds
+# at a time) restocks a handful per turn, so by the end of a big planting
+# day the farm runs out of physical seeds while hands stand idle - the
+# hiring forecast (T8.44) and the seed purchase were two independent
+# mechanisms and the second never knew the first's ambition. `bulk_seed_
+# purchase` (default False, bit-identical) sizes the purchase from the
+# real number of tiles about to be planted instead: `ceil(tiles *
+# (1 + bulk_seed_buffer_fraction))` in total across *all* basket crops,
+# minus every basket seed already on hand (see `market.bulk_purchase_
+# plan`). `bulk_animal_purchase` does the same for animals (target = the
+# planned-animal count already computed for the day-plan forecast,
+# minus animals already bought and waiting in the shed/inventory;
+# `bulk_animal_buffer_fraction` rounds *down*, so a buffer that can't fill
+# a whole animal buys nothing extra). `bulk_purchase_max_new_tiles` caps
+# how many tiles a single plan covers (one quadrant). `plant_while_
+# animal_pending` (default False) lifts the old rule that a bought-but-
+# unplaced animal (`stuck_animal`) blocks *all* crop planting and seed
+# buying until it is placed - the traced cause of the day-0 morning
+# stall (4 hands PASSing for hours 2-3 while one farmer built/picked up/
+# placed a single animal).
+_DEFAULT_BULK_SEED_PURCHASE = False
+_DEFAULT_BULK_SEED_BUFFER_FRACTION = 0.10
+_DEFAULT_BULK_ANIMAL_PURCHASE = False
+_DEFAULT_BULK_ANIMAL_BUFFER_FRACTION = 0.0
+_DEFAULT_BULK_PURCHASE_MAX_NEW_TILES = 25
+_DEFAULT_PLANT_WHILE_ANIMAL_PENDING = False
+
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
 # and the `_ANCHOR_*` constants there for the full story. Default kept at
@@ -1559,9 +1588,16 @@ def decide(obs: dict, params: dict) -> dict:
                     # replant_aware is off - bit-identical -1 total).
                     maintenance_actions_today += 1 + weed_replant_actions
     has_empty_tile = free_tiles > 0
+    # T8.45: see _DEFAULT_PLANT_WHILE_ANIMAL_PENDING's comment - when on,
+    # a bought-but-unplaced animal no longer blocks crop planting/seed
+    # buying (the animal pipeline itself is unchanged).
+    animal_blocks_planting = stuck_animal is not None and not params.get(
+        "plant_while_animal_pending", _DEFAULT_PLANT_WHILE_ANIMAL_PENDING
+    )
     if stuck_animal is not None:
         acquisition_animal = stuck_animal
-        plant_crop = None  # finish the paid-for animal before starting a new crop too
+        if animal_blocks_planting:
+            plant_crop = None  # finish the paid-for animal before starting a new crop too
     elif (
         desired_animal is not None
         and placed_animal_type_counts.get(desired_animal, 0)
@@ -1670,7 +1706,7 @@ def decide(obs: dict, params: dict) -> dict:
     # paid-for animal before starting a new crop too") - forecasting new
     # planting while mid-acquisition would be wrong for the identical
     # reason.
-    plant_crop_intent = fallback_crop if stuck_animal is None else None
+    plant_crop_intent = fallback_crop if not animal_blocks_planting else None
 
     # T8.44 second fix (2026-09-19, the user's own explicit request): a
     # real count instead of a hardcoded 0/1 boolean cast - `decide()`
@@ -1826,7 +1862,7 @@ def decide(obs: dict, params: dict) -> dict:
     # that - a nulled plant_crop with len(fallback_crops)>1 falls through
     # to the `if basket_seq` check below and resets to None/0 the same
     # way).
-    if len(fallback_crops) > 1 and stuck_animal is None:
+    if len(fallback_crops) > 1 and not animal_blocks_planting:
         total_cap = min(free_tiles, labor_units, plant_budget, max_plant_tasks_per_turn)
         remaining = {c: seeds.get(c, 0) for c in fallback_crops}
         basket_seq: list[str] = []
@@ -1872,6 +1908,9 @@ def decide(obs: dict, params: dict) -> dict:
         animal_pickup_unpinned=animal_pickup_unpinned,
         prioritize_animal_setup=prioritize_animal_setup,
         defer_one_time_harvest_to_max_yield=defer_one_time_harvest_to_max_yield,
+        plant_alongside_animal=params.get(
+            "plant_while_animal_pending", _DEFAULT_PLANT_WHILE_ANIMAL_PENDING
+        ),
     )
     assignment = assign_units(tasks, unit_positions)
 
@@ -2033,33 +2072,109 @@ def decide(obs: dict, params: dict) -> dict:
     # shipped defaults) seed_target=1, so `needed` is nonzero under
     # exactly the same condition the old `not have_seed` gate checked
     # (seeds_held==0) and buys exactly 1 - bit-identical.
-    if stuck_animal is None and fallback_crops and has_empty_tile:
-        # T8.19: loops over the full basket instead of a single crop -
-        # at portfolio_basket_size=1 (fallback_crops has at most one
-        # entry) this is exactly one iteration, bit-identical to the
-        # pre-T8.19 single-crop computation. `spendable` is tracked
-        # cumulatively across the loop (not recomputed from me["money"]
-        # each time) since the real interpreter settles same-turn orders
-        # in queue order, each against the money earlier orders in the
-        # same turn already spent (T8.5's own comment above) - computing
-        # every basket crop's affordability against the same untouched
-        # `me["money"]` would let a later BUY_SEED order overcommit.
-        seed_buffer_per_unit = params.get("seed_buffer_per_unit", _DEFAULT_SEED_BUFFER_PER_UNIT)
-        seed_target = labor_units * seed_buffer_per_unit
-        seed_cash_reserve = params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
-        spendable = max(0, me["money"] - seed_cash_reserve)  # max(0, ...) before // - avoids
-        for crop in fallback_crops:  # negative-floor-division surprises
-            seed_cost = CROPS[crop]["seed"]
-            seeds_held = seeds.get(crop, 0)
-            needed = max(0, seed_target - seeds_held)
-            if needed <= 0:
-                continue
-            affordable = int(spendable // seed_cost)
-            buy_qty = min(needed, affordable)
-            if buy_qty > 0:
-                tail.append(["BUY_SEED", crop, buy_qty])
-                spendable -= buy_qty * seed_cost
+    # T8.45: the bulk plans are computed up front (animal first) so the
+    # animal's cost is reserved out of the seed budget - `tail` settles in
+    # list order against real money, and a big seed order placed ahead of
+    # BUY_ANIMAL could otherwise starve it. Both are off by default (the
+    # legacy branches below are unchanged, bit-identical).
+    bulk_seed_purchase = params.get("bulk_seed_purchase", _DEFAULT_BULK_SEED_PURCHASE)
+    bulk_animal_purchase = params.get("bulk_animal_purchase", _DEFAULT_BULK_ANIMAL_PURCHASE)
+    bulk_animal_qty = 0
+    bulk_animal_cost = 0
     if (
+        bulk_animal_purchase
+        and acquisition_animal is not None
+        and (has_empty_tile or ANIMALS[acquisition_animal]["structure"] in empty_structure_kinds)
+    ):
+        animal_unit_cost = ANIMALS[acquisition_animal]["cost"]
+        animal_held = shed.get(acquisition_animal, 0) + sum(
+            inv.get(acquisition_animal, 0) for inv in (private.get("inventories") or [])
+        )
+        animal_plan = bulk_purchase_plan(
+            [acquisition_animal],
+            {acquisition_animal: animal_held},
+            {acquisition_animal: animal_unit_cost},
+            planned_new_animals,
+            me["money"],
+            buffer_fraction=params.get(
+                "bulk_animal_buffer_fraction", _DEFAULT_BULK_ANIMAL_BUFFER_FRACTION
+            ),
+            round_up=False,
+        )
+        shed_capacity = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
+        # Never buy past max_animals_per_type (placed + already waiting in
+        # the shed/inventory count against it) - the legacy one-at-a-time
+        # path could not exceed it, and stuck_animal would happily place
+        # every extra unit bought here regardless of the cap.
+        type_room = max(
+            0,
+            params.get("max_animals_per_type", _DEFAULT_MAX_ANIMALS_PER_TYPE)
+            - placed_animal_type_counts.get(acquisition_animal, 0)
+            - animal_held,
+        )
+        bulk_animal_qty = min(
+            animal_plan.get(acquisition_animal, 0), shed_room(shed, shed_capacity), type_room
+        )
+        bulk_animal_cost = bulk_animal_qty * animal_unit_cost
+
+    if not animal_blocks_planting and fallback_crops and has_empty_tile:
+        if bulk_seed_purchase:
+            # Tiles about to be planted: every free tile not reserved for
+            # a planned animal's structure (the same land accounting the
+            # day-plan forecast uses), capped at one quadrant. All basket
+            # crops together add up to this one total.
+            tiles_to_plant = min(
+                max(0, free_tiles - animals_needing_new_tiles),
+                params.get("bulk_purchase_max_new_tiles", _DEFAULT_BULK_PURCHASE_MAX_NEW_TILES),
+            )
+            seed_budget = max(
+                0,
+                me["money"] - params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
+                - bulk_animal_cost,
+            )
+            seed_plan = bulk_purchase_plan(
+                list(fallback_crops),
+                {c: seeds.get(c, 0) for c in fallback_crops},
+                {c: CROPS[c]["seed"] for c in fallback_crops},
+                tiles_to_plant,
+                seed_budget,
+                buffer_fraction=params.get(
+                    "bulk_seed_buffer_fraction", _DEFAULT_BULK_SEED_BUFFER_FRACTION
+                ),
+                round_up=True,
+            )
+            for crop, qty in seed_plan.items():
+                tail.append(["BUY_SEED", crop, qty])
+        else:
+            # T8.19: loops over the full basket instead of a single crop -
+            # at portfolio_basket_size=1 (fallback_crops has at most one
+            # entry) this is exactly one iteration, bit-identical to the
+            # pre-T8.19 single-crop computation. `spendable` is tracked
+            # cumulatively across the loop (not recomputed from me["money"]
+            # each time) since the real interpreter settles same-turn orders
+            # in queue order, each against the money earlier orders in the
+            # same turn already spent (T8.5's own comment above) - computing
+            # every basket crop's affordability against the same untouched
+            # `me["money"]` would let a later BUY_SEED order overcommit.
+            seed_buffer_per_unit = params.get("seed_buffer_per_unit", _DEFAULT_SEED_BUFFER_PER_UNIT)
+            seed_target = labor_units * seed_buffer_per_unit
+            seed_cash_reserve = params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
+            spendable = max(0, me["money"] - seed_cash_reserve)  # max(0, ...) before // - avoids
+            for crop in fallback_crops:  # negative-floor-division surprises
+                seed_cost = CROPS[crop]["seed"]
+                seeds_held = seeds.get(crop, 0)
+                needed = max(0, seed_target - seeds_held)
+                if needed <= 0:
+                    continue
+                affordable = int(spendable // seed_cost)
+                buy_qty = min(needed, affordable)
+                if buy_qty > 0:
+                    tail.append(["BUY_SEED", crop, buy_qty])
+                    spendable -= buy_qty * seed_cost
+    if bulk_animal_purchase:
+        if bulk_animal_qty > 0:
+            tail.append(["BUY_ANIMAL", acquisition_animal, bulk_animal_qty])
+    elif (
         acquisition_animal is not None
         and not have_animal_anywhere
         and (has_empty_tile or ANIMALS[acquisition_animal]["structure"] in empty_structure_kinds)

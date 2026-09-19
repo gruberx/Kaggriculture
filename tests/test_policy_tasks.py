@@ -1403,3 +1403,46 @@ def test_animal_tile_day_actions_skips_care_when_already_cared_today():
 def test_animal_tile_day_actions_all_four_terms_at_once():
     tile = _animal_tile(yield_units=1, fertilizer_available=True, cared_today=False)
     assert animal_tile_day_actions(tile, care_aware=True) == 4
+
+
+# --- plant_alongside_animal (T8.45) -------------------------------------
+
+
+def _pending_animal_kwargs():
+    return dict(
+        unit_positions=[(0, 0)], desired_animal="COW", plant_crop="MELON", plant_qty=3,
+        shed={"COW": 1}, farmer_inventory={},
+    )
+
+
+def test_build_task_list_animal_pipeline_suppresses_planting_by_default():
+    tasks = build_task_list(_empty_tiles(), **_pending_animal_kwargs())
+    assert not any(t.op == "PLANT" for t in tasks)
+    assert any(t.op == "BUILD_PASTURE" for t in tasks)
+
+
+def test_build_task_list_plant_alongside_animal_emits_plant_tasks_too():
+    tasks = build_task_list(_empty_tiles(), plant_alongside_animal=True, **_pending_animal_kwargs())
+    assert sum(1 for t in tasks if t.op == "PLANT") == 3
+    assert any(t.op == "BUILD_PASTURE" for t in tasks)
+
+
+def test_build_task_list_plant_alongside_animal_never_plants_on_the_tile_being_built():
+    tasks = build_task_list(_empty_tiles(), plant_alongside_animal=True, **_pending_animal_kwargs())
+    build = next(t for t in tasks if t.op == "BUILD_PASTURE")
+    assert build.pos not in {t.pos for t in tasks if t.op == "PLANT"}
+
+
+def test_build_task_list_plant_alongside_animal_without_a_crop_changes_nothing():
+    kwargs = _pending_animal_kwargs()
+    kwargs["plant_crop"] = None
+    with_flag = build_task_list(_empty_tiles(), plant_alongside_animal=True, **kwargs)
+    without = build_task_list(_empty_tiles(), **kwargs)
+    assert [(t.op, t.pos) for t in with_flag] == [(t.op, t.pos) for t in without]
+
+
+def test_build_task_list_plant_alongside_animal_is_inert_without_an_animal():
+    kwargs = dict(unit_positions=[(0, 0)], plant_crop="MELON", plant_qty=3)
+    assert [(t.op, t.pos) for t in build_task_list(_empty_tiles(), plant_alongside_animal=True, **kwargs)] == [
+        (t.op, t.pos) for t in build_task_list(_empty_tiles(), **kwargs)
+    ]

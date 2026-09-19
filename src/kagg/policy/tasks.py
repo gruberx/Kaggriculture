@@ -291,6 +291,7 @@ def build_task_list(
     animal_pickup_unpinned: bool = False,
     prioritize_animal_setup: bool = False,
     defer_one_time_harvest_to_max_yield: bool = False,
+    plant_alongside_animal: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -523,15 +524,34 @@ def build_task_list(
             Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty, unit_index=pickup_unit_index)
         )
 
-    tasks.extend(
-        _new_investment_tasks(
-            empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
-            plant_crop, desired_animal, desired_structure, shed, inventories, n_units, anchor, plant_qty,
-            parallel_animal_acquisition,
-            animal_pickup_unpinned,
-            prioritize_animal_setup,
-        )
+    investment_tasks = _new_investment_tasks(
+        empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
+        plant_crop, desired_animal, desired_structure, shed, inventories, n_units, anchor, plant_qty,
+        parallel_animal_acquisition,
+        animal_pickup_unpinned,
+        prioritize_animal_setup,
     )
+    tasks.extend(investment_tasks)
+    if plant_alongside_animal and desired_animal is not None and plant_crop is not None:
+        # T8.45: `_new_investment_tasks` returns *only* the animal pipeline's
+        # tasks whenever `desired_animal` is set (an early return - the
+        # PLANT branch below it is never reached), so every free hand
+        # stood idle for the whole BUILD/PICKUP/PLACE sequence (traced:
+        # 4 hands PASSing in hours 2-3 of day 0 while one farmer set up a
+        # single animal). Ask for the PLANT tasks separately, on the empty
+        # tiles the animal's own BUILD did not just claim (both pick the
+        # tile nearest a unit - the same tile would collide).
+        build_positions = {t.pos for t in investment_tasks if t.op in ("BUILD_COOP", "BUILD_PASTURE")}
+        tasks.extend(
+            _new_investment_tasks(
+                [pos for pos in empty_tiles if pos not in build_positions],
+                matching_structure_tiles, unit_positions, len(tiles),
+                plant_crop, None, None, shed, inventories, n_units, anchor, plant_qty,
+                parallel_animal_acquisition,
+                animal_pickup_unpinned,
+                prioritize_animal_setup,
+            )
+        )
 
     # (priority, pos): deterministic and unit-position-independent (T8.2,
     # tasks/plan.md) - proximity-based servicing now lives entirely in

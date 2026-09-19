@@ -682,6 +682,16 @@ DEFAULT_PARAMS = {
     "max_plant_tasks_per_turn": 8,
     "seed_buffer_per_unit": 1,
     "seed_cash_reserve": 0,
+    # T8.45 (the user's own request, after a per-hour day-0 trace showed 21
+    # of 24 planned tiles planted despite 33 idle unit-turns): see
+    # kagg.policy.decide._DEFAULT_BULK_SEED_PURCHASE's own comment. All
+    # default off/bit-identical - measured in tools/measure_t845.py.
+    "bulk_seed_purchase": False,
+    "bulk_seed_buffer_fraction": 0.10,
+    "bulk_animal_purchase": False,
+    "bulk_animal_buffer_fraction": 0.0,
+    "bulk_purchase_max_new_tiles": 25,
+    "plant_while_animal_pending": False,
 }
 
 
