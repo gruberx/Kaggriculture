@@ -290,6 +290,59 @@ def test_build_task_list_harvests_an_ongoing_crop_as_soon_as_it_has_yield():
     assert [t for t in tasks if t.op == "HARVEST"] == [Task(priority=PRIORITY_HARVEST, pos=(4, 4), op="HARVEST")]
 
 
+def test_build_task_list_defer_one_time_harvest_to_max_yield_off_by_default_still_harvests_at_first_yield_day():
+    # Bit-identical to every pre-T8.43 caller when the flag isn't passed
+    # at all - same fixture/assertion as test_build_task_list_flags_
+    # harvest_ready_tiles above, just spelled out explicitly here.
+    tiles = _empty_tiles()
+    tiles[4][4] = _plant_tile(yield_units=3, watered_today=True, planted_day=0)  # WHEAT
+    tasks = build_task_list(tiles, current_day=2)  # first_yield_day=2, max_yield_day=4
+    assert tasks == [Task(priority=PRIORITY_HARVEST, pos=(4, 4), op="HARVEST")]
+
+
+def test_build_task_list_defers_wheat_harvest_to_max_yield_day_when_flag_is_on():
+    # T8.43, the user's own observation: strategy._crop_yield_and_tile_
+    # days already assumes a one-time crop's full watering_bonus_window
+    # gets watered before harvest. WHEAT's window is ages {2,3,4} and
+    # first_yield_day=2, so harvesting the instant it's legal (age 2)
+    # forfeits every bonus day. With the flag on, harvest should not fire
+    # yet at age 2 (first_yield_day reached, max_yield_day=4 not yet).
+    tiles = _empty_tiles()
+    tiles[4][4] = _plant_tile(yield_units=1, watered_today=True, planted_day=0)  # WHEAT
+    tasks = build_task_list(tiles, current_day=2, defer_one_time_harvest_to_max_yield=True)
+    assert [t for t in tasks if t.op == "HARVEST"] == []
+
+
+def test_build_task_list_harvests_wheat_once_max_yield_day_is_reached_when_flag_is_on():
+    tiles = _empty_tiles()
+    tiles[4][4] = _plant_tile(yield_units=4, watered_today=True, planted_day=0)  # WHEAT
+    tasks = build_task_list(tiles, current_day=4, defer_one_time_harvest_to_max_yield=True)  # max_yield_day=4
+    assert [t for t in tasks if t.op == "HARVEST"] == [Task(priority=PRIORITY_HARVEST, pos=(4, 4), op="HARVEST")]
+
+
+def test_build_task_list_harvests_early_once_yield_is_already_capped_when_flag_is_on():
+    # No reason to keep waiting once yield_units already hit the crop's
+    # own max_yield (e.g. a fertilizer-doubled bonus reaching the cap
+    # before max_yield_day) - covers that case explicitly, not just the
+    # age-based one.
+    tiles = _empty_tiles()
+    tiles[4][4] = _plant_tile(yield_units=6, watered_today=True, planted_day=0)  # WHEAT, max_yield=6
+    tasks = build_task_list(tiles, current_day=3, defer_one_time_harvest_to_max_yield=True)  # age 3 < max_yield_day 4
+    assert [t for t in tasks if t.op == "HARVEST"] == [Task(priority=PRIORITY_HARVEST, pos=(4, 4), op="HARVEST")]
+
+
+def test_build_task_list_defer_one_time_harvest_to_max_yield_does_not_affect_ongoing_crops():
+    # Ongoing crops (TOMATO/STRAWBERRY) have no bonus-window concept the
+    # way one-time crops do (see _is_actually_harvestable's own
+    # docstring) - the flag must not delay them at all.
+    tiles = _empty_tiles()
+    tile = _plant_tile(yield_units=1, watered_today=True, planted_day=0)
+    tile["crop"] = "TOMATO"
+    tiles[4][4] = tile
+    tasks = build_task_list(tiles, current_day=1, defer_one_time_harvest_to_max_yield=True)  # first_yield_day=8
+    assert [t for t in tasks if t.op == "HARVEST"] == [Task(priority=PRIORITY_HARVEST, pos=(4, 4), op="HARVEST")]
+
+
 def test_build_task_list_flags_weeds_as_maintenance():
     tiles = _empty_tiles()
     tiles[5][5] = {"kind": "WEED"}

@@ -290,6 +290,7 @@ def build_task_list(
     feed_pickup_unpinned: bool = False,
     animal_pickup_unpinned: bool = False,
     prioritize_animal_setup: bool = False,
+    defer_one_time_harvest_to_max_yield: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -428,6 +429,13 @@ def build_task_list(
     straight through to `_new_investment_tasks`, see its own docstring
     for both mechanisms. Both default to `False`, bit-identical to every
     pre-T8.41 caller.
+
+    `defer_one_time_harvest_to_max_yield` (T8.43) - passed straight
+    through to `_plant_tile_tasks`/`_is_actually_harvestable`, see the
+    latter's own docstring for the mechanism (waits for the crop's
+    `watering_bonus_window` to close before proposing HARVEST, instead of
+    firing the instant it's legally harvestable). Defaults to `False`,
+    bit-identical to every pre-T8.43 caller.
     """
     shed = shed or {}
     farmer_inventory = farmer_inventory or {}
@@ -473,7 +481,13 @@ def build_task_list(
             elif kind == "PLANT":
                 tasks.extend(
                     _plant_tile_tasks(
-                        pos, tile, current_day, fertilizer_units, use_fertilizer, water_bonus_window_aware
+                        pos,
+                        tile,
+                        current_day,
+                        fertilizer_units,
+                        use_fertilizer,
+                        water_bonus_window_aware,
+                        defer_one_time_harvest_to_max_yield,
                     )
                 )
             elif "animal" in tile:
@@ -657,6 +671,7 @@ def _plant_tile_tasks(
     fertilizer_units: tuple[int, ...],
     use_fertilizer: bool = True,
     water_bonus_window_aware: bool = False,
+    defer_one_time_harvest_to_max_yield: bool = False,
 ) -> list[Task]:
     tasks = []
     if not tile.get("watered_today", False):
@@ -708,7 +723,9 @@ def _plant_tile_tasks(
                 if age not in watering_bonus_window(tile["crop"]):
                     priority = PRIORITY_LOW_VALUE_CARE
         tasks.append(Task(priority, pos, "WATER"))
-    if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(tile, current_day):
+    if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
+        tile, current_day, defer_one_time_harvest_to_max_yield
+    ):
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     if (
         use_fertilizer
@@ -756,7 +773,9 @@ def _plant_tile_tasks(
     return tasks
 
 
-def _is_actually_harvestable(tile: dict, current_day: int) -> bool:
+def _is_actually_harvestable(
+    tile: dict, current_day: int, defer_to_max_yield: bool = False
+) -> bool:
     """True if a PLANT tile with `yield_units > 0` can really be
     HARVESTed right now, not just banked toward a future harvest.
 
@@ -779,11 +798,64 @@ def _is_actually_harvestable(tile: dict, current_day: int) -> bool:
     yield_units *after* first_yield_day (kaggriculture.py's HARVEST
     handler even warns if this invariant is ever violated), so
     yield_units > 0 already implies harvestable for them.
+
+    `defer_to_max_yield` (T8.43, the user's own observation): a second,
+    independent gap from the one above - once a one-time crop *is*
+    legally harvestable, this function has always said so immediately,
+    but `strategy._crop_yield_and_tile_days` (the ranking layer that
+    decided this crop was worth planting in the first place) already
+    scores it assuming the *full* `watering_bonus_window` gets watered
+    before harvest (`growth.forecast_one_time_yield`, called with
+    `watered_days=set(watering_bonus_window(crop))`). Harvesting the
+    moment `first_yield_day` is reached forfeits that assumed bonus
+    yield entirely for any crop whose window starts at or after
+    `first_yield_day` (WHEAT: window ages {2,3,4}, first_yield_day=2;
+    CARROT: window ages {2,3}, first_yield_day=2 - zero bonus days ever
+    realized).
+
+    Deliberately scoped to crops whose window *starts* at or after
+    first_yield_day (`min(watering_bonus_window(crop)) >=
+    first_yield_day`) - WHEAT/CARROT, not MELON. First measured
+    unscoped (every one-time crop, MELON included) and decisively
+    rejected (40% win rate, 20W/30L/0T, n=50, tools/measure_t843.py) -
+    traced (tools/trace_t843_stage1.py) to a real cost this docstring's
+    first draft got wrong: MELON's window (ages 6-12) does *precede*
+    first_yield_day=10 for *most* of its span, but not all of it - ages
+    10-12 are inside both the window and past eligibility, so deferring
+    unscoped delayed MELON's own harvest (this project's dominant crop,
+    by far its highest tile-turnover volume) by up to 2 real days per
+    cycle, a real throughput cost the ranking layer's per-harvest yield
+    math doesn't account for. Scoping to `min(window) >= first_yield_
+    day` cleanly selects exactly the crops with zero pre-banked bonus
+    (WHEAT/CARROT) and leaves MELON's own harvest timing untouched -
+    generalizes from the actual mechanism rather than a hardcoded crop
+    list. When `True` and in scope, harvest additionally waits for
+    `current_day - planted_day >= max_yield_day` (the real bonus
+    window's own end, `growth.watering_bonus_window`'s own definition)
+    *or* `yield_units` already at `max_yield` (already capped - no
+    reason to keep waiting, covers the fertilizer-doubled case reaching
+    the cap early). Still
+    gated by `first_yield_day` first regardless (never proposes a
+    harvest the real handler would reject as too early). Defaults to
+    `False`, bit-identical to every pre-T8.43 caller.
     """
     cd = CROPS[tile["crop"]]
     if cd["ongoing"]:
         return True
-    return current_day - tile["planted_day"] >= cd["first_yield_day"]
+    age = current_day - tile["planted_day"]
+    if age < cd["first_yield_day"]:
+        return False
+    if not defer_to_max_yield:
+        return True
+    if min(watering_bonus_window(tile["crop"])) < cd["first_yield_day"]:
+        # The bonus window already starts before first eligibility (e.g.
+        # MELON: ages 6-12 vs first_yield_day=10) - most of the bonus is
+        # already banked by the time harvest is even legal, so deferring
+        # further only costs tile-turnover throughput for comparatively
+        # little extra yield (measured directly, see this function's own
+        # docstring). Harvest immediately, same as the flag being off.
+        return True
+    return age >= cd["max_yield_day"] or tile.get("yield_units", 0) >= cd["max_yield"]
 
 
 def _animal_tile_tasks(

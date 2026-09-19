@@ -445,6 +445,20 @@ DEFAULT_PARAMS = {
     # opening one day later - see kagg.policy.decide's own comment for
     # the mechanism.
     "always_pursue_one_animal": True,
+    # T8.43, the user's own observation, confirmed as a real mechanism
+    # gap: always_pursue_one_animal's own gate was a one-shot trigger -
+    # it permanently disables itself the instant *any* animal exists
+    # anywhere, of any type, which is the actual reason max_animals_per_
+    # type has never once bound in any measurement this project has run
+    # (T8.41 traced animals_total stuck at exactly 1 regardless of the
+    # cap's value). Generalizes "at least one, ever" to a count: the
+    # mechanism keeps firing until this many placed animals exist,
+    # excluding types already at max_animals_per_type's own cap from the
+    # ranking (so it diversifies across types rather than re-buying the
+    # same one). Default 1, bit-identical to every pre-T8.43 caller; see
+    # kagg.policy.decide._DEFAULT_ALWAYS_PURSUE_ANIMAL_TARGET_COUNT for
+    # the mechanism.
+    "always_pursue_animal_target_count": 1,
     # T8.11, the user's own observation, traced to a real bottleneck: the
     # real WATER handler only adds yield for a one-time crop on ages
     # inside its bonus window - every other day's watering is pure
@@ -497,6 +511,17 @@ DEFAULT_PARAMS = {
     # mechanism and kagg.policy.tasks.PRIORITY_ANIMAL_SETUP for why it
     # still yields to PREVENT_LOSS.
     "prioritize_animal_setup": False,
+    # T8.43, the user's own observation, confirmed as a real ranking/
+    # task-layer inconsistency: strategy._crop_yield_and_tile_days
+    # already scores a one-time crop assuming its full watering_bonus_
+    # window is watered before harvest, but tasks._is_actually_
+    # harvestable has always proposed HARVEST the instant it's legally
+    # harvestable, forfeiting that assumed bonus yield entirely for
+    # WHEAT/CARROT (zero bonus days ever realized). Off by default
+    # reproduces the exact prior immediate-harvest behavior; see kagg.
+    # policy.decide._DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD and
+    # kagg.policy.tasks._is_actually_harvestable for the mechanism.
+    "defer_one_time_harvest_to_max_yield": False,
     # T8.19, the user's own observation: committing every new tile to a
     # single top-ranked product invites a double price-crash risk (our
     # own volume plus a plausible independent opponent bet on the same

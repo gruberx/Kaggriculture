@@ -686,6 +686,26 @@ _DEFAULT_MAX_ANIMALS_PER_TYPE = 1
 # measured in self-play.
 _DEFAULT_ALWAYS_PURSUE_ONE_ANIMAL = False
 
+# T8.43, the user's own observation, confirmed as a real mechanism gap
+# rather than a ranking-strength question: always_pursue_one_animal's own
+# gate below was a one-shot trigger - "not placed_animal_type_counts"
+# permanently goes False the instant *any* animal exists anywhere, of any
+# type, so max_animals_per_type has never once bound in any measurement
+# this project has run (T8.41 traced animals_total stuck at exactly 1 in
+# every sampled seed regardless of the cap's value). Generalizes the gate
+# from a boolean "at least one, ever" to a count: the mechanism keeps
+# firing (still subject to the same "nothing stuck mid-pipeline" check)
+# until `sum(placed_animal_type_counts.values()) >=
+# always_pursue_animal_target_count`. At the default 1 this is exactly
+# `not placed_animal_type_counts` - bit-identical to every pre-T8.43
+# caller. Raising it alone would just re-buy unlimited copies of whichever
+# single animal type scores highest (recreating T8.22's original
+# 18-BUY_ANIMAL-orders bug from this other code path) without max_
+# animals_per_type also excluding already-capped types from _top_animal_
+# choice's own ranking - see the gating block in decide() for how both
+# pieces combine.
+_DEFAULT_ALWAYS_PURSUE_ANIMAL_TARGET_COUNT = 1
+
 # T8.18: verified directly against kaggriculture.py that PICKUP has no
 # structural prerequisite at all - only PLACE genuinely needs both an
 # animal in hand and a matching built structure. The shipped serial
@@ -740,6 +760,24 @@ _DEFAULT_ANIMAL_PICKUP_UNPINNED = False
 # prevent-loss target is). Default False, bit-identical to every
 # pre-T8.41 caller.
 _DEFAULT_PRIORITIZE_ANIMAL_SETUP = False
+
+# T8.43, the user's own observation, confirmed as a real ranking/task-
+# layer inconsistency, not just a calibration question: strategy._crop_
+# yield_and_tile_days (the layer that decides a one-time crop is worth
+# planting) already scores it assuming the *full* watering_bonus_window
+# gets watered before harvest (growth.forecast_one_time_yield). But
+# tasks._is_actually_harvestable has always proposed HARVEST the instant
+# a crop is legally harvestable (current_day - planted_day >= first_
+# yield_day), forfeiting that assumed bonus yield entirely for WHEAT/
+# CARROT (whose bonus windows start at/after first_yield_day - zero
+# bonus days ever realized) while leaving MELON (window mostly precedes
+# its own first_yield_day) largely unaffected - see that function's own
+# docstring for the full mechanism. When on, a one-time crop instead
+# waits for current_day - planted_day >= max_yield_day (the bonus
+# window's own end) or yield_units already at max_yield (already
+# capped). Default False, bit-identical to every pre-T8.43 caller - not
+# yet measured in self-play.
+_DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD = False
 
 # T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
 # `plant_qty` scale with the real labor force (1 + hires_per_day) instead
@@ -1019,7 +1057,9 @@ def _top_investment_choice(
     return None
 
 
-def _top_animal_choice(market_inventory: dict, current_day: int, params: dict) -> str | None:
+def _top_animal_choice(
+    market_inventory: dict, current_day: int, params: dict, excluded_types: frozenset[str] = frozenset()
+) -> str | None:
     """The highest-scoring animal that still has time to mature this
     season, as a plain animal name - `None` if none does.
 
@@ -1045,6 +1085,15 @@ def _top_animal_choice(market_inventory: dict, current_day: int, params: dict) -
     `unlocked_shops`/`net_of_seed_cost` are irrelevant here (they only
     affect crop scores, which this function never reads) so they're
     passed as `None`/`False` rather than threaded through as arguments.
+
+    `excluded_types` (T8.43): animal names to skip entirely, regardless
+    of score - the caller's own `max_animals_per_type`-capped types, once
+    `always_pursue_animal_target_count` lets this function be asked for a
+    *second* (or later) animal. Without this, raising the target count
+    alone would just re-buy unlimited copies of whichever single type
+    scores highest (recreating T8.22's original 18-BUY_ANIMAL-orders bug
+    from this other code path), never actually diversifying. Empty by
+    default, bit-identical to every pre-T8.43 caller.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
@@ -1063,6 +1112,8 @@ def _top_animal_choice(market_inventory: dict, current_day: int, params: dict) -
         animal_care_aware, animal_consumption_horizon_aware,
     )
     for name in sorted(ANIMALS, key=scores.__getitem__, reverse=True):
+        if name in excluded_types:
+            continue
         if _animal_has_time_to_mature(name, current_day, season_length_days):
             return name
     return None
@@ -1409,18 +1460,36 @@ def decide(obs: dict, params: dict) -> dict:
     # flag plants a crop while an animal is the top pick, this one buys
     # an animal while a crop is). have_animal_anywhere stays correctly
     # False below - the gating condition here already confirmed nothing
-    # is pending for any animal type, this one included. Once any animal
-    # exists anywhere, this path stops firing on its own (the gate's own
-    # condition goes False) - stuck_animal/max_animals_per_type's
-    # existing "finish what's already bought" logic take over exactly as
-    # today, unaffected.
+    # is pending for any animal type, this one included. Once
+    # always_pursue_animal_target_count animals exist anywhere, this path
+    # stops firing on its own (the gate's own condition goes False) -
+    # stuck_animal/max_animals_per_type's existing "finish what's already
+    # bought" logic take over exactly as today, unaffected.
+    #
+    # T8.43: generalizes the "at least one, ever" gate to a count (see
+    # _DEFAULT_ALWAYS_PURSUE_ANIMAL_TARGET_COUNT's own comment) - bit-
+    # identical at the default target_count=1, where `sum(...) < 1` is
+    # exactly `not placed_animal_type_counts`. Types already at max_
+    # animals_per_type's own cap are excluded from _top_animal_choice's
+    # ranking, so a higher target count diversifies across types instead
+    # of re-buying unlimited copies of whichever single type scores
+    # highest.
+    always_pursue_target_count = params.get(
+        "always_pursue_animal_target_count", _DEFAULT_ALWAYS_PURSUE_ANIMAL_TARGET_COUNT
+    )
     if (
         params.get("always_pursue_one_animal", _DEFAULT_ALWAYS_PURSUE_ONE_ANIMAL)
         and acquisition_animal is None
-        and not placed_animal_type_counts
+        and sum(placed_animal_type_counts.values()) < always_pursue_target_count
         and not any(shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0 for a in ANIMALS)
     ):
-        always_pursue_choice = _top_animal_choice(obs["market"]["inventory"], current_day, params)
+        max_animals_per_type = params.get("max_animals_per_type", _DEFAULT_MAX_ANIMALS_PER_TYPE)
+        capped_types = frozenset(
+            a for a in ANIMALS if placed_animal_type_counts.get(a, 0) >= max_animals_per_type
+        )
+        always_pursue_choice = _top_animal_choice(
+            obs["market"]["inventory"], current_day, params, excluded_types=capped_types
+        )
         if always_pursue_choice is not None:
             acquisition_animal = always_pursue_choice
 
@@ -1537,6 +1606,9 @@ def decide(obs: dict, params: dict) -> dict:
     feed_pickup_unpinned = params.get("feed_pickup_unpinned", _DEFAULT_FEED_PICKUP_UNPINNED)
     animal_pickup_unpinned = params.get("animal_pickup_unpinned", _DEFAULT_ANIMAL_PICKUP_UNPINNED)
     prioritize_animal_setup = params.get("prioritize_animal_setup", _DEFAULT_PRIORITIZE_ANIMAL_SETUP)
+    defer_one_time_harvest_to_max_yield = params.get(
+        "defer_one_time_harvest_to_max_yield", _DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD
+    )
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
@@ -1561,6 +1633,7 @@ def decide(obs: dict, params: dict) -> dict:
         feed_pickup_unpinned=feed_pickup_unpinned,
         animal_pickup_unpinned=animal_pickup_unpinned,
         prioritize_animal_setup=prioritize_animal_setup,
+        defer_one_time_harvest_to_max_yield=defer_one_time_harvest_to_max_yield,
     )
     assignment = assign_units(tasks, unit_positions)
 

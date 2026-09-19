@@ -949,6 +949,59 @@ def test_decide_always_pursue_one_animal_stops_once_any_animal_exists_anywhere()
     assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
 
 
+# --- T8.43: always_pursue_animal_target_count, at the decide()
+# integration layer -----------------------------------------------------
+
+
+def test_always_pursue_animal_target_count_defaults_to_one_bit_identical():
+    assert DEFAULT_PARAMS.get("always_pursue_animal_target_count", 1) == 1
+
+
+def test_top_animal_choice_skips_an_excluded_type():
+    # T8.43: excluded_types lets a caller keep an already-max_animals_
+    # per_type-capped type out of the ranking entirely, regardless of
+    # score - COW normally wins this market (see test_top_animal_choice_
+    # returns_the_best_scoring_animal_with_time_to_mature), SHEEP is next.
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    assert _top_animal_choice(
+        market_inventory, current_day=0, params=DEFAULT_PARAMS, excluded_types=frozenset({"COW"})
+    ) == "SHEEP"
+
+
+def test_decide_pursues_a_second_animal_type_once_the_first_is_placed_and_target_count_is_raised():
+    # T8.43, the user's own observation, confirmed as a real mechanism
+    # gap: the pre-T8.43 gate ("not placed_animal_type_counts") was a
+    # one-shot trigger that permanently disabled itself once *any*
+    # animal existed anywhere - max_animals_per_type never bound as a
+    # result. With always_pursue_animal_target_count=2 and a COW already
+    # placed and alive (max_animals_per_type still at its default 1, so
+    # COW is capped), the mechanism should keep firing and pursue a
+    # *different* animal type (SHEEP, the next-best score once COW is
+    # excluded - see test_top_animal_choice_skips_an_excluded_type
+    # above), not a second COW.
+    obs = _obs()
+    obs["market"]["inventory"] = {c: MARKET_I0 + 100_000 for c in CROPS}  # every crop crashed
+    obs["farms"][0]["tiles"][3][3] = _placed_cow_tile()
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=True, always_pursue_animal_target_count=2)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == [["BUY_ANIMAL", "SHEEP", 1]]
+
+
+def test_decide_stops_pursuing_once_target_count_animals_are_placed():
+    # Two different animal types already placed (COW + SHEEP, each at its
+    # own max_animals_per_type=1 default cap) with target_count=2 - the
+    # mechanism must not fire a third purchase.
+    obs = _obs()
+    obs["market"]["inventory"] = {c: MARKET_I0 + 100_000 for c in CROPS}
+    obs["farms"][0]["tiles"][3][3] = _placed_cow_tile()
+    sheep_tile = dict(_placed_cow_tile())
+    sheep_tile["animal"] = "SHEEP"
+    obs["farms"][0]["tiles"][3][4] = sheep_tile
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=True, always_pursue_animal_target_count=2)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == []
+
+
 def test_decide_buys_a_seed_for_the_top_crop_alongside_the_top_animal_by_default():
     # T6.3 closes the gap T6.1 opened: now that tasks.py (T6.2) and
     # BUY_ANIMAL (T6.3) both exist, decide() acts on the animal choice
@@ -1477,6 +1530,29 @@ def test_decide_prioritizes_finishing_animal_setup_over_routine_care():
     action = decide(obs, params)
     assert action["farmer"] == ["WATER"]
     assert action["hands"] == [["PICKUP", "COW", 1]]
+
+
+# --- T8.43: defer_one_time_harvest_to_max_yield, at the decide()
+# integration layer ---------------------------------------------------
+
+
+def test_decide_defers_wheat_harvest_when_the_flag_is_on():
+    # Confirms the flag actually reaches tasks.build_task_list end-to-end
+    # through decide() - see tests/test_policy_tasks.py for the unit-level
+    # mechanism coverage. WHEAT planted day 0, obs day 2: first_yield_day
+    # (2) reached but max_yield_day (4) is not - the farmer should WATER
+    # (still in the bonus window) instead of harvesting immediately.
+    obs = _obs()
+    obs["day"] = 2
+    obs["farms"][0]["farmer"] = [4, 4]
+    obs["farms"][0]["tiles"][4][4] = {
+        "kind": "PLANT", "crop": "WHEAT", "planted_day": 0,
+        "watered_today": False, "consecutive_unwatered": 0, "yield_units": 1,
+        "max_lifespan_step": 120, "fertilized_until_day": -1,
+    }
+    params = dict(DEFAULT_PARAMS, defer_one_time_harvest_to_max_yield=True)
+    action = decide(obs, params)
+    assert action["farmer"] == ["WATER"]
 
 
 def test_decide_defaults_wheat_buy_only_when_feed_needed_to_true_when_unset():
