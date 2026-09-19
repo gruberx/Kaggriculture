@@ -2691,6 +2691,48 @@ project's own established finding, a fresh submission's score is volatile for it
       writing code) - the core structural finding (a reactive same-day forecast cannot beat a static
       high floor against a sudden land-purchase burst) stands unchanged throughout all of this.
 
+- [x] T8.45 - bulk seed/animal purchase + `plant_while_animal_pending` (the user's own request, 2026-09-19,
+      after a per-hour trace of day 0 under the T8.44 day-plan config): only **21 of 24** planned tiles were
+      planted on day 0 despite **33** idle unit-turns. Traced by hour (`seeds_held`, hand ops, PLANT/PASS):
+      the 33 idle turns were two separate clusters, neither a labor shortage. (1) Hours 0-3 (9 turns): no seeds
+      yet (BUY_SEED settles next turn, hires act from H+1) and a bought-but-unplaced animal (`stuck_animal`)
+      nulls `plant_crop` - and, found while fixing it, `tasks._new_investment_tasks` returns *only* the animal
+      pipeline whenever `desired_animal` is set (early return), so 4 hands PASSed through the farmer's
+      BUILD/PICKUP/PLACE. (2) Hours 17-23 (14 turns): the T8.6 seed formula `labor_units * seed_buffer_per_unit`
+      (~5 seeds, restocked a few at a time) ran to 0 seeds at hour 22 with land still free - the hiring forecast
+      and the seed purchase were independent mechanisms and the second never saw the first's ambition.
+
+      Built (all default off/bit-identical, commit `4b16013`, 42 new tests, suite 635, golden/boundary clean):
+      `market.bulk_purchase_plan` - one pure rule for seeds *and* animals: `ceil` (seeds, +10%) / `floor`
+      (animals, +0%) of `planned * (1 + buffer)` minus what is already held *of the plan's own types*, spread over
+      several crop types by water-filling (they sum to one total), limited by budget. `bulk_seed_purchase` sizes it
+      from the free tiles about to be planted (minus tiles reserved for a planned animal, cap `bulk_purchase_max_
+      new_tiles=25`); `bulk_animal_purchase` from the planned-animal count (capped by `max_animals_per_type` and
+      shed room; the animal's cost is reserved out of the seed budget so a big seed order can't starve it);
+      `plant_while_animal_pending` lifts the decide-level block and makes `build_task_list` emit PLANT tasks next
+      to the animal tasks (`plant_alongside_animal`, excluding the tile the animal's BUILD claims).
+
+      **Mechanism works as designed** (seed 900 day 0, day-plan min=2): PLANT 21 -> 23 (bulk seeds) -> 24 (all
+      three), PASS 33 -> 16 -> 15, 27 seeds on hand at hour 1 instead of 5.
+
+      **Measured (`tools/measure_t845.py`, 50-seed working block) - no win anywhere, REJECTED**: shipped hiring
+      (min=8=max): bulk seeds `0.420` (21W/29L), no buffer `0.360`, +animals `0.420`, +plant_while `0.420`,
+      plant_while alone `0.000` (all ties). Day-plan min=2 with all three on: `0.020` (1W/49L); min=4: `0.060`.
+      Nothing cleared 0.58 so no automatic holdout; run by hand on 200 seeds (900-1099): bulk seeds and the full
+      bundle both `0.410` (82W/118L, Wilson upper bound 0.479 - below even), *identical* to each other.
+      **Why, traced not guessed** (`daily.py` day-by-day, seed 900): under the *shipped* 8-hand hiring day 0
+      already plants all 24 (81 idle turns, ~26 seeds bought - the legacy trickle is enough with `labor_units=9`),
+      so the flags only shift planting from hour 5 to hour 3 and change nothing that day - hence identical W/L;
+      the small negative is cash locked in surplus seeds, not a fix landing. Under day-plan min=2 the mechanism
+      is real but the loss is the T8.44 structural one: hands 2-4 at days 10-14 plant slowly, the second quadrant
+      buys later (seed 900: q=1 at day 12 with $10.7k in hand vs baseline q=2), and bulk buying then over-orders
+      (24-35 seeds on days 20/24, ~$2-2.8k idle) for labor that isn't there.
+      **Verdict**: a real, correctly-scoped fix for a real day-0 defect that cannot convert into wins - the seed
+      shortfall only existed *because* the day-plan config starves labor, and that config is what loses. All six
+      params stay off; shipped defaults, golden episodes untouched. Neither `bulk_seed_purchase` nor
+      `plant_while_animal_pending` is worth turning on for the shipped 8-hand config (measured neutral-to-worse).
+      Committed: `4b16013` (code+tests), this entry + `tools/measure_t845.py`. No Kaggle submission.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
