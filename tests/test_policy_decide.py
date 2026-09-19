@@ -402,6 +402,90 @@ def test_decide_passes_maintenance_actions_today_to_hires_per_day(monkeypatch):
     assert captured.get("maintenance_actions_today") == 2
 
 
+def test_decide_passes_n_quadrants_to_hires_per_day(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    obs["farms"][0]["unlocked_quadrants"] = ["NW", "NE", "SW"]
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "n_quadrants" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("n_quadrants") == 3
+
+
+def test_decide_n_quadrants_defaults_to_one_when_unlocked_quadrants_is_absent(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    del obs["farms"][0]["unlocked_quadrants"]
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "n_quadrants" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("n_quadrants") == 1
+
+
+def test_decide_weed_tiles_count_replant_cost_in_maintenance_actions_today_by_default(monkeypatch):
+    # T8.44 follow-up: kaggriculture.py's real DIG handler clears a WEED
+    # tile straight to None (no restored plant) - a weeded tile a farm
+    # intends to keep productive needs a follow-up PLANT+WATER, not just
+    # the DIG. Default day_plan_weed_replant_aware=True adds day_plan_
+    # new_crop_tile_actions (2.0) on top of the existing DIG(1).
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    obs["farms"][0]["tiles"][0][0] = {"kind": "WEED"}
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "maintenance_actions_today" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("maintenance_actions_today") == 3  # 1 (DIG) + 2.0 (PLANT+WATER)
+
+
+def test_decide_weed_replant_aware_can_be_disabled(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    obs["farms"][0]["tiles"][0][0] = {"kind": "WEED"}
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "maintenance_actions_today" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(
+        obs,
+        dict(DEFAULT_PARAMS, always_pursue_one_animal=False, day_plan_weed_replant_aware=False),
+    )
+    assert captured.get("maintenance_actions_today") == 1  # DIG only, pre-follow-up behavior
+
+
 def test_decide_planned_new_animals_is_one_when_pursuing_an_animal(monkeypatch):
     import kagg.policy.decide as decide_module
 

@@ -213,6 +213,31 @@ DEFAULT_PARAMS = {
     # _MAX_MARKET_ORDERS (bit-identical at today's shipped max_hires_per_
     # day=8, which never reaches this cap anyway).
     "max_hire_orders_per_turn": 10,
+    # T8.44 follow-up (the user's own observation after reviewing a
+    # per-day trace table with real план_ход/реал_ход columns): real
+    # movement cost per productive action grows with how many quadrants
+    # are open at once (work spread across more, farther-apart tiles).
+    # Measured directly, not guessed - 1 + total_move_actions /
+    # total_real_actions, grouped by len(unlocked_quadrants), across 3
+    # traced 30-day episodes: 1 quadrant averaged 2.386, 2 quadrants
+    # 2.841, 3 quadrants 3.390 (a roughly +0.45-0.5 step per additional
+    # quadrant); the 4th entry continues that step (extrapolated - the
+    # board's max is 4 quadrants). 1-indexed by len(unlocked_quadrants),
+    # clamped to this list's own length. Only consulted by hires_per_
+    # day's day_plan_hiring_aware branch - every other path keeps using
+    # the flat turns_per_task_estimate unchanged.
+    "day_plan_turns_per_task_by_quadrant_count": [2.4, 2.8, 3.4, 3.9],
+    # T8.44 follow-up (the user's own second observation from the same
+    # trace review): kaggriculture.py's real DIG handler clears a WEED
+    # tile straight to None - it does NOT restore a plant - so keeping a
+    # weeded tile productive needs a follow-up PLANT+WATER right after
+    # DIG, not just the DIG itself. When True, a WEED tile's maintenance_
+    # actions_today contribution becomes 1 (DIG) + day_plan_new_crop_
+    # tile_actions (the same PLANT+WATER cost a fresh tile already costs)
+    # instead of just 1. Defaults True - only affects maintenance_
+    # actions_today, which is itself unused unless day_plan_hiring_aware
+    # is also on.
+    "day_plan_weed_replant_aware": True,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,

@@ -837,6 +837,18 @@ _DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD = True
 _DEFAULT_DAY_PLAN_MAX_NEW_TILES_PER_DAY = 25
 _DEFAULT_DAY_PLAN_NEW_TILES_CASH_AWARE = True
 
+# T8.44 follow-up: a fresh crop tile's own PLANT+WATER cost, reused for a
+# just-dug WEED tile's own near-term follow-up work (see the tile-scan's
+# own WEED branch, and `day_plan_weed_replant_aware`'s comment there) -
+# duplicated here (not imported from `strategy.py`, which defines the
+# identical `day_plan_new_crop_tile_actions` default for its own use in
+# the planned-new-work multiplier) purely so this module's own tile scan
+# doesn't need a cross-module default import for one shared literal;
+# both read the same `"day_plan_new_crop_tile_actions"` params key, so a
+# caller who sweeps it gets a consistent value in both places regardless.
+_DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS = 2.0
+_DEFAULT_DAY_PLAN_WEED_REPLANT_AWARE = True
+
 # T8.44: a same-day quadrant top-up hire is only worth emitting if enough
 # turns remain today for the new hand to be productive - `hire_min_turns_
 # left` gates the HIRE-emission loop below on `turns_per_day -
@@ -1482,6 +1494,30 @@ def decide(obs: dict, params: dict) -> dict:
     # fell through to the bare `unlocked_tiles += 1` below, uncounted
     # beyond that) costs exactly one DIG (`kagg.policy.tasks.build_task_
     # list`'s own WEED handling), counted here too.
+    # T8.44 follow-up (2026-09-19, the user's own request): computed here,
+    # early - `unlocked_quadrants` doesn't depend on the tile scan below -
+    # so it's available for the day-plan forecast's quadrant-count-aware
+    # `turns_per_task` lookup (see `strategy.hires_per_day`'s own
+    # docstring). `n_unlocked_extra` (land-purchase gating, further below)
+    # stays a separate, unrelated read - this one is `len(...)`, not
+    # `len(...) - 1`.
+    n_quadrants = len(me.get("unlocked_quadrants", ["NW"]))
+    # T8.44 follow-up: a real, hand-verified per-tile action cost this
+    # session's own trace found missing, not assumed - kaggriculture.py's
+    # real DIG handler clears a WEED tile straight to `None` (does NOT
+    # restore a plant), so keeping a weeded tile productive needs a
+    # follow-up PLANT+WATER right after DIG, not just the DIG itself.
+    # Reuses `day_plan_new_crop_tile_actions` (the same PLANT+WATER cost a
+    # fresh tile already costs elsewhere in this forecast) rather than a
+    # separately-swept constant, since it's the identical follow-up work.
+    weed_replant_aware = params.get(
+        "day_plan_weed_replant_aware", _DEFAULT_DAY_PLAN_WEED_REPLANT_AWARE
+    )
+    weed_replant_actions = (
+        params.get("day_plan_new_crop_tile_actions", _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS)
+        if weed_replant_aware
+        else 0
+    )
     placed_animal_type_counts: dict[str, int] = {}
     free_tiles = 0
     unlocked_tiles = 0
@@ -1518,7 +1554,10 @@ def decide(obs: dict, params: dict) -> dict:
                     )
                 elif tile.get("kind") == "WEED":
                     n_weed_tiles += 1
-                    maintenance_actions_today += 1
+                    # 1 (DIG) + the follow-up PLANT+WATER once it's clear
+                    # (weed_replant_actions is 0 when day_plan_weed_
+                    # replant_aware is off - bit-identical -1 total).
+                    maintenance_actions_today += 1 + weed_replant_actions
     has_empty_tile = free_tiles > 0
     if stuck_animal is not None:
         acquisition_animal = stuck_animal
@@ -1723,6 +1762,7 @@ def decide(obs: dict, params: dict) -> dict:
         maintenance_actions_today=maintenance_actions_today,
         planned_new_crop_tiles=planned_new_crop_tiles,
         planned_new_animals=planned_new_animals,
+        n_quadrants=n_quadrants,
     )
     labor_units = 1 + early_target_hires
     max_plants_per_unit = params.get("max_plants_per_unit", _DEFAULT_MAX_PLANTS_PER_UNIT)
@@ -1890,6 +1930,7 @@ def decide(obs: dict, params: dict) -> dict:
         maintenance_actions_today=maintenance_actions_today,
         planned_new_crop_tiles=planned_new_crop_tiles,
         planned_new_animals=planned_new_animals,
+        n_quadrants=n_quadrants,
     )
     hires_today = me.get("hires_today", 0)
     # T8.44: a same-day (mid-day) top-up hire - e.g. a BUY_LAND settling
@@ -1992,7 +2033,7 @@ def decide(obs: dict, params: dict) -> dict:
     # One order per turn - if affordable for more than one quadrant at
     # once, the next turn's observation re-evaluates and queues the next
     # purchase then.
-    n_unlocked_extra = len(me.get("unlocked_quadrants", ["NW"])) - 1
+    n_unlocked_extra = n_quadrants - 1  # T8.44: n_quadrants computed early, reused here unchanged
     if should_buy_land(
         me["money"], n_unlocked_extra, params,
         free_tiles=free_tiles, unlocked_tiles=unlocked_tiles,

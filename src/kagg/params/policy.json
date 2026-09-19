@@ -17,6 +17,8 @@
   "day_plan_new_tiles_cash_aware": true,
   "hire_min_turns_left": 0,
   "max_hire_orders_per_turn": 10,
+  "day_plan_turns_per_task_by_quadrant_count": [2.4, 2.8, 3.4, 3.9],
+  "day_plan_weed_replant_aware": true,
   "sell_margin": 0,
   "drip_sell_max_per_turn": 5,
   "wheat_restock_threshold": 5,

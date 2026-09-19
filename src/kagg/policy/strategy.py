@@ -1098,6 +1098,23 @@ _DEFAULT_DAY_PLAN_HIRING_AWARE = False
 # per SPEC-policy.md's own rule against unswept intuition constants.
 _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS = 2.0
 _DEFAULT_DAY_PLAN_NEW_ANIMAL_ACTIONS = 4.0
+# The user's own follow-up observation (2026-09-19, after reviewing a
+# per-day trace table with план_ход/реал_ход columns): real movement cost
+# per productive action grows with how many quadrants are open at once
+# (more spread-out work means more inter-tile and inter-quadrant travel),
+# so a single flat `turns_per_task_estimate` under-predicts real turns
+# spent once land expands - exactly the same effect this session's own
+# earlier hand analysis flagged as "small per-hop" but real in aggregate
+# once multiplied by hundreds of daily actions. Measured directly (not
+# guessed): `1 + total_move_actions / total_real_actions`, grouped by
+# `len(unlocked_quadrants)`, across 3 traced 30-day episodes (`tools/
+# trace_t844.py`'s day-table variant) - 1 quadrant: 2.386, 2 quadrants:
+# 2.841, 3 quadrants: 3.390 (a roughly +0.45-0.5 step per additional
+# quadrant). Index 0 = 1 quadrant, index 3 (extrapolated, the board's max
+# of 4 quadrants) continues the same step. Only consulted by the day_
+# plan_hiring_aware branch below (via `n_quadrants`) - every other path
+# keeps using the flat `turns_per_task_estimate` unchanged.
+_DEFAULT_DAY_PLAN_TURNS_PER_TASK_BY_QUADRANT_COUNT = (2.4, 2.8, 3.4, 3.9)
 
 
 def hires_per_day(
@@ -1113,6 +1130,7 @@ def hires_per_day(
     maintenance_actions_today: int | None = None,
     planned_new_crop_tiles: int | None = None,
     planned_new_animals: int | None = None,
+    n_quadrants: int | None = None,
 ) -> int:
     """How many farm hands to hire right now.
 
@@ -1236,11 +1254,29 @@ def hires_per_day(
     `planned_new_animals * day_plan_new_animal_actions` for whatever new
     planting/acquisition is already decided this turn (`plant_crop`/
     `acquisition_animal`, both final by the time `decide()` calls this).
-    `total_turns = total_actions * turns_per_task_estimate`, then the
-    same `ceil(.../turns_per_day) - 1`, buffer, and `[min_hires_per_day,
-    max_hires_per_day]` clip every other path already uses - full reuse
-    of already-swept machinery, no separate multiplier. Divided by the
-    full `turns_per_day`, matching `workload_forecast_hiring_aware`'s own
+
+    `n_quadrants`/`day_plan_turns_per_task_by_quadrant_count` (T8.44
+    follow-up, the user's own observation after reviewing a per-day trace
+    table with real movement-turn counts): `total_turns = total_actions *
+    effective_turns_per_task`, where `effective_turns_per_task` is looked
+    up from `day_plan_turns_per_task_by_quadrant_count` by `n_quadrants`
+    (1-indexed, clamped to the list's own length) instead of the flat
+    `turns_per_task_estimate` - real per-quadrant-count measurement
+    (`1 + total_move_actions / total_real_actions`, grouped by `len(
+    unlocked_quadrants)` across 3 traced episodes) found real travel
+    overhead genuinely grows with how spread out the farm's work is: 1
+    quadrant averaged 2.386, 2 quadrants 2.841, 3 quadrants 3.390 - see
+    `_DEFAULT_DAY_PLAN_TURNS_PER_TASK_BY_QUADRANT_COUNT`'s own comment.
+    Falls back to the flat `turns_per_task_estimate` when `n_quadrants`
+    is `None` or the list is empty (`decide()` always passes a real
+    value in practice, matching this module's own graceful-fallback
+    convention elsewhere).
+
+    Then the same `ceil(.../turns_per_day) - 1`, buffer, and `[min_hires_
+    per_day, max_hires_per_day]` clip every other path already uses -
+    full reuse of already-swept machinery beyond the new quadrant-count
+    lookup. Divided by the full `turns_per_day`, matching
+    `workload_forecast_hiring_aware`'s own
     documented hour-independence (a fixed whole-day forecast known in
     full at hour 0, not a shrinking backlog). Engages only when the flag
     is on AND `maintenance_actions_today` is given (`None` falls through
@@ -1308,7 +1344,16 @@ def hires_per_day(
             + (planned_new_crop_tiles or 0) * new_crop_actions
             + (planned_new_animals or 0) * new_animal_actions
         )
-        total_turns = total_actions * turns_per_task
+        turns_by_quadrant = params.get(
+            "day_plan_turns_per_task_by_quadrant_count",
+            _DEFAULT_DAY_PLAN_TURNS_PER_TASK_BY_QUADRANT_COUNT,
+        )
+        if n_quadrants is not None and turns_by_quadrant:
+            idx = min(max(n_quadrants, 1), len(turns_by_quadrant)) - 1
+            effective_turns_per_task = turns_by_quadrant[idx]
+        else:
+            effective_turns_per_task = turns_per_task
+        total_turns = total_actions * effective_turns_per_task
         target = math.ceil(total_turns / turns_per_day) - 1
         target = math.ceil(target * (1 + buffer_fraction))
         return min(max(target, min_hires), max_hires)
