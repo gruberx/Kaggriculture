@@ -2626,6 +2626,71 @@ project's own established finding, a fresh submission's score is volatile for it
       every time a new quadrant opens throughout the whole game. No further param changes -
       `day_plan_hiring_aware` stays off, `min`/`max_hires_per_day` stay at 8/8.
 
+      **Second post-review follow-up (2026-09-19, the user's own request)**: reviewing a per-day
+      table (hands, forecast breakdown, real actions done, план_ход/реал_ход - planned vs. real
+      movement turns - and quadrant-open markers, requested incrementally over several turns) surfaced
+      two real, further gaps:
+
+      1. **Real movement cost per productive action grows with how many quadrants are open at once** -
+         measured directly (`1 + total_move_actions / total_real_actions`, grouped by
+         `len(unlocked_quadrants)`, across 3 traced 30-day episodes): 1 quadrant averaged `2.386`, 2
+         quadrants `2.841`, 3 quadrants `3.390`. Implemented as `day_plan_turns_per_task_by_quadrant_
+         count` (a new list param, `[2.4, 2.8, 3.4, 3.9]`), looked up by `n_quadrants` in `strategy.
+         hires_per_day`'s `day_plan_hiring_aware` branch instead of the flat `turns_per_task_estimate`.
+         Gated code+tests committed (`95c754a`, 8 new tests, full suite 604, golden/boundary_check
+         unaffected - the mechanism itself stays off by default).
+
+      2. **A WEED tile's real DIG handler clears it straight to `None`** (kaggriculture.py -
+         `farm["tiles"][fy][fx] = None`, no plant restored), so a weeded tile a farm intends to keep
+         productive needs a follow-up PLANT+WATER right after DIG - the existing WEED branch (`+1` for
+         DIG only) undercounted this. Added `day_plan_weed_replant_aware` (default `True`) - a WEED
+         tile's `maintenance_actions_today` contribution becomes `1 + day_plan_new_crop_tile_actions`
+         (3 total) instead of `1`. Same commit (`95c754a`).
+
+      **Re-measured (`tools/measure_t844.py`) with both changes applied - the quadrant-coefficient
+      piece DECISIVELY REGRESSED every grid point, not improved it**: headline `min=2` `0.360 -> 0.220`;
+      `min=4` `0.640 -> 0.360`; `min=8` `0.240 -> 0.220`; `max=16` and `cap=8` both collapsed to a flat
+      `0.000` (0W/50L/0T - every single seed lost, not just a weaker average); only `max_hire_orders_
+      per_turn=6` improved (`0.420 -> 0.500`). **Diagnosed the mechanical cause, not just reported the
+      regression**: the per-quadrant-count ratios (`2.386`/`2.841`/`3.390`) were averaged across *every*
+      day at that quadrant count, blending quiet steady-state-watering days (real ratio `~1.3-1.4`) with
+      busy expansion/harvest days (much higher) - applying the averaged coefficient *uniformly* to every
+      day at that quadrant count over-hired specifically on the quiet days, where the pre-existing flat
+      `turns_per_task_estimate=2.0` was already closer to correct.
+
+      **A follow-up hypothesis was designed, described to the user for approval *before* implementing
+      (per their own explicit ask), and then checked against real data before writing any code - and
+      refuted**: blend a "calm" and a "burst" coefficient via linear interpolation on `new_work_fraction`
+      (the share of a day's forecast coming from *new* planting/acquisition, `planned_new_crop_tiles *
+      day_plan_new_crop_tile_actions + planned_new_animals * day_plan_new_animal_actions`, over
+      `total_actions`) - already-available forecast components, no new board scan needed. A weighted
+      least-squares regression (`ratio ~ b0 + b1*fraction + b2*(n_quadrants-1)`, fit on 90 real
+      day-samples pooled across the 3 traced episodes - per-quadrant-count-bucket fits were tried first
+      and found unstable/contradictory with this little data, e.g. the 2-quadrant bucket had only 6
+      days) found `b1` (the fraction's own slope) came out **negative** (`-0.48`) - the opposite of the
+      assumed direction. Plausible mechanism (not just an unexplained sign flip): a burst day's new-tile
+      planting is a tight, systematic sweep across adjacent tiles (efficient), while a calm day's
+      scattered single-tile watering, routed by greedy priority-based assignment across multiple
+      simultaneously-moving hands, is apparently *less* path-efficient, not more. **Not implemented** -
+      building on a hypothesis the data itself contradicts would have repeated the same mistake, not
+      fixed it.
+
+      **Reverted the quadrant-coefficient piece, per the user's own explicit instruction** (`fe5a015`) -
+      `hires_per_day`'s `day_plan_hiring_aware` branch is back to the flat `turns_per_task_estimate`
+      unconditionally, `day_plan_turns_per_task_by_quadrant_count` removed from `params.py`/`policy.
+      json`, its 6 tests removed. **The WEED-replant-cost fix was kept, not reverted** - it was verified
+      independently against the real DIG handler and was never itself measured to regress anything (the
+      combined measurement above can't separate the two effects, but the user's instruction was
+      specifically to revert "the quadrant coefficient," and this fix stands on its own real-mechanism
+      verification regardless). Full suite green (598) after the revert, golden episodes/`boundary_
+      check.py` unaffected throughout (the whole `day_plan_hiring_aware` line of work has stayed off by
+      default at every step). `day_plan_hiring_aware` remains a well-tested, gated-off mechanism - three
+      independent refinements attempted (fallback_crop fix, quadrant-coefficient, calm/burst
+      interpolation), one kept (fallback_crop fix, real but insufficient), one reverted (quadrant
+      coefficient, measured harmful), one never implemented (calm/burst interpolation, refuted before
+      writing code) - the core structural finding (a reactive same-day forecast cannot beat a static
+      high floor against a sudden land-purchase burst) stands unchanged throughout all of this.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
