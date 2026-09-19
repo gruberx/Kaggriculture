@@ -1651,11 +1651,6 @@ def decide(obs: dict, params: dict) -> dict:
     # above; the crop-basket fallback further below hasn't run yet, so
     # plant_crop is still a single crop string or None here - verified
     # directly against this function's own control flow, no circularity).
-    # decide() structurally pursues at most one animal-acquisition
-    # pipeline at a time, so planned_new_animals is 0 or 1, never more
-    # (a real, currently-unaddressed gap for a multi-animal-per-day
-    # scenario - see parallel_animal_acquisition's own docstring - not
-    # something this forecast can paper over by assuming more).
     #
     # T8.44 fix (2026-09-19, the user's own follow-up after seeing a
     # per-day trace of this forecast): uses `fallback_crop` here, not
@@ -1676,13 +1671,61 @@ def decide(obs: dict, params: dict) -> dict:
     # planting while mid-acquisition would be wrong for the identical
     # reason.
     plant_crop_intent = fallback_crop if stuck_animal is None else None
-    planned_new_animals = 1 if acquisition_animal is not None else 0
+
+    # T8.44 second fix (2026-09-19, the user's own explicit request): a
+    # real count instead of a hardcoded 0/1 boolean cast - `decide()`
+    # still structurally progresses at most one animal-acquisition
+    # *pipeline* per turn (BUY->BUILD->PICKUP->PLACE - see parallel_
+    # animal_acquisition's own docstring for why), but the *forecast*
+    # should staff ahead of the whole intended campaign, not just
+    # today's single literal step, so a raised always_pursue_animal_
+    # target_count (a starting-portfolio or later expansion tuned to
+    # want, say, 5 or 10 animals) doesn't silently understate hiring by
+    # the same factor - the exact failure mode the user flagged. Uses
+    # the shortfall against that same target (already computed above,
+    # `always_pursue_target_count`) - how many more animals are still
+    # wanted in total, not yet placed - floored at 1 whenever acquisition_
+    # animal is actively set (never *less* than "one pipeline is
+    # genuinely in flight right now", including when the ranking-driven
+    # path picked one independent of the always_pursue target, e.g.
+    # already past that target - see always_pursue_one_animal's own gate
+    # above). Bit-identical at the shipped default (always_pursue_
+    # animal_target_count=1): shortfall is always exactly 1 whenever
+    # acquisition_animal is set, matching the old hardcoded value.
+    placed_animal_count = sum(placed_animal_type_counts.values())
+    animal_shortfall = max(0, always_pursue_target_count - placed_animal_count)
+    planned_new_animals = max(1, animal_shortfall) if acquisition_animal is not None else 0
+
+    # T8.44 third fix (same request): land is a real, shared, finite
+    # resource between new crop planting and new animal structures - the
+    # pre-fix formula let planned_new_crop_tiles claim every free tile
+    # (up to a full 25-tile quadrant) *and* separately planned a new
+    # BUILD_COOP/BUILD_PASTURE on "one more" tile, double-booking one
+    # tile's worth of capacity (worse, uncapped, once planned_new_animals
+    # can be >1). Only the *first* pursued animal's own structure need is
+    # actually knowable in advance (its real type, `acquisition_animal`,
+    # and whether a matching empty structure already exists,
+    # `empty_structure_kinds`); every animal beyond the first (the
+    # shortfall's own tail, whose eventual types aren't chosen yet) is
+    # conservatively assumed to need a fresh tile each - a safe, honestly
+    # documented simplification, not a precise multi-type reservation.
+    if acquisition_animal is not None:
+        first_animal_needs_new_tile = (
+            ANIMALS[acquisition_animal]["structure"] not in empty_structure_kinds
+        )
+        animals_needing_new_tiles = (
+            (1 if first_animal_needs_new_tile else 0) + max(0, planned_new_animals - 1)
+        )
+    else:
+        animals_needing_new_tiles = 0
+
     planned_new_crop_tiles = 0
     if plant_crop_intent is not None:
         day_plan_max_new_tiles = params.get(
             "day_plan_max_new_tiles_per_day", _DEFAULT_DAY_PLAN_MAX_NEW_TILES_PER_DAY
         )
-        cap = min(free_tiles, day_plan_max_new_tiles)
+        land_available_for_crops = max(0, free_tiles - animals_needing_new_tiles)
+        cap = min(land_available_for_crops, day_plan_max_new_tiles)
         if params.get("day_plan_new_tiles_cash_aware", _DEFAULT_DAY_PLAN_NEW_TILES_CASH_AWARE):
             seed_cost = CROPS[plant_crop_intent]["seed"]
             seeds_held = seeds.get(plant_crop_intent, 0)

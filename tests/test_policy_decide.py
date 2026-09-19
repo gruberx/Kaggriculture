@@ -485,6 +485,94 @@ def test_decide_planned_new_animals_is_zero_without_an_acquisition(monkeypatch):
     assert captured.get("planned_new_animals") == 0
 
 
+def test_decide_planned_new_animals_scales_with_a_raised_target_count(monkeypatch):
+    # T8.44 follow-up (the user's own explicit request): a fresh farm
+    # with always_pursue_animal_target_count raised beyond 1 (e.g. a
+    # future starting-portfolio bundle wanting 5 or 10 animals) must
+    # scale planned_new_animals with the real shortfall, not stay
+    # hardcoded at 1 - otherwise the hiring forecast would silently
+    # understate the campaign by that same factor.
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_animals" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(_obs(), dict(DEFAULT_PARAMS, always_pursue_animal_target_count=5))
+    assert captured.get("planned_new_animals") == 5
+
+
+def test_decide_planned_new_animals_subtracts_already_placed_animals_from_the_target(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    for i in range(3):
+        tiles[0][i] = {
+            "kind": "PASTURE", "animal": "COW", "placed_day": 0, "yield_units": 0,
+            "consecutive_unfed": 0, "fed_today": True, "cared_today": False,
+            "fertilizer_available": False, "pending_care_bonus": 0,
+        }
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_animals" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(
+        obs,
+        dict(DEFAULT_PARAMS, always_pursue_animal_target_count=5, max_animals_per_type=10),
+    )
+    # 5 wanted total, 3 already placed -> shortfall of 2, still pursuing
+    # (COW isn't at max_animals_per_type=10 yet).
+    assert captured.get("planned_new_animals") == 2
+
+
+def test_decide_planned_new_animals_floors_at_one_while_actively_pursuing(monkeypatch):
+    # Even once the always_pursue target is already met, an animal
+    # actively being pursued this turn (here via stuck_animal - a
+    # bought-but-unplaced COW in the shed, unconditional regardless of
+    # target-count accounting) must still count as at least 1 - a real,
+    # in-flight pipeline, never rounded down to 0 just because the
+    # broader target-count shortfall says "none needed".
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    tiles[0][0] = {
+        "kind": "PASTURE", "animal": "COW", "placed_day": 0, "yield_units": 0,
+        "consecutive_unfed": 0, "fed_today": True, "cared_today": False,
+        "fertilizer_available": False, "pending_care_bonus": 0,
+    }
+    obs["private"]["shed"]["COW"] = 1  # bought but unplaced -> stuck_animal, unconditional
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_animals" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(
+        obs,
+        dict(DEFAULT_PARAMS, always_pursue_animal_target_count=1, max_animals_per_type=10),
+    )
+    # target=1, already placed=1 -> shortfall=0, but stuck_animal forces
+    # acquisition_animal=COW regardless -> still floored at 1.
+    assert captured.get("planned_new_animals") == 1
+
+
 def test_decide_planned_new_crop_tiles_capped_by_free_tiles(monkeypatch):
     import kagg.policy.decide as decide_module
 
@@ -509,6 +597,85 @@ def test_decide_planned_new_crop_tiles_capped_by_free_tiles(monkeypatch):
     monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
     decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
     assert captured.get("planned_new_crop_tiles") == 3
+
+
+def test_decide_planned_new_crop_tiles_reserves_land_for_a_planned_animal(monkeypatch):
+    # T8.44 follow-up (the user's own explicit request): land is a real,
+    # shared, finite resource - a planned new animal (which needs a fresh
+    # BUILD_COOP/BUILD_PASTURE tile when no matching empty structure
+    # already exists) must come out of the same free_tiles pool
+    # planned_new_crop_tiles draws from, not be double-booked on top of
+    # it.
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    for y in range(10):
+        for x in range(10):
+            if y * 10 + x < 97:  # leaves exactly 3 free tiles; no COOP/PASTURE anywhere
+                tiles[y][x] = {
+                    "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": True,
+                    "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+                    "fertilized_until_day": -1,
+                }
+    obs["market"]["inventory"]["MELON"] = 1  # scarce -> highest price -> ranks first
+    obs["private"]["seeds"] = {"MELON": 100}
+    obs["farms"][0]["money"] = 1_000_000
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    # always_pursue_one_animal defaults True - a fresh farm (no animal
+    # anywhere) pursues one via that path, needing a fresh structure tile
+    # (empty_structure_kinds is empty - no COOP/PASTURE placed anywhere).
+    decide(obs, DEFAULT_PARAMS)
+    assert captured.get("planned_new_crop_tiles") == 2  # 3 free - 1 reserved for the animal
+
+
+def test_decide_planned_new_crop_tiles_does_not_reserve_land_when_a_structure_already_exists(
+    monkeypatch,
+):
+    # The counterpart to the test above: when a matching empty structure
+    # already exists, the first pursued animal doesn't need a fresh
+    # tile, so no land is reserved for it - both COOP and PASTURE are
+    # placed empty so this holds regardless of which animal type
+    # _top_animal_choice ends up picking (every ANIMALS entry needs one
+    # of exactly these two structure kinds).
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    for y in range(10):
+        for x in range(10):
+            if y * 10 + x < 95:  # leaves 3 free tiles + 1 COOP + 1 PASTURE = 5 non-plant
+                tiles[y][x] = {
+                    "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": True,
+                    "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+                    "fertilized_until_day": -1,
+                }
+    tiles[9][7] = {"kind": "COOP"}
+    tiles[9][8] = {"kind": "PASTURE"}
+    obs["market"]["inventory"]["MELON"] = 1
+    obs["private"]["seeds"] = {"MELON": 100}
+    obs["farms"][0]["money"] = 1_000_000
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, DEFAULT_PARAMS)
+    assert captured.get("planned_new_crop_tiles") == 3  # full 3 free tiles - none reserved
 
 
 def test_decide_planned_new_crop_tiles_capped_by_day_plan_max_new_tiles_per_day(monkeypatch):
