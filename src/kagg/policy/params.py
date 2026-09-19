@@ -462,6 +462,22 @@ DEFAULT_PARAMS = {
     # own docstring for why the WHEAT scan specifically needs this gate
     # (a real found coupling with HARVEST, not just a style choice).
     "feed_pickup_unpinned": False,
+    # T8.41, the user's own follow-up to feed_pickup_unpinned: the animal
+    # PICKUP is the one remaining action still pinned only to the farmer
+    # (tasks._PINNED_UNIT_INDEX). Off by default reproduces the exact
+    # prior farmer-only pickup; see kagg.policy.decide._DEFAULT_ANIMAL_
+    # PICKUP_UNPINNED for the mechanism.
+    "animal_pickup_unpinned": False,
+    # T8.41, the user's own observation: once bought, an animal's setup
+    # (BUILD_COOP/BUILD_PASTURE/PICKUP/PLACE) is emitted at the same
+    # priority tier as ordinary crop planting and gets starved of free
+    # units whenever prevent-loss/harvest/routine-care work already
+    # claimed them all - the expected case on a busy farm, not an edge
+    # case. Off by default reproduces the exact prior tier; see
+    # kagg.policy.decide._DEFAULT_PRIORITIZE_ANIMAL_SETUP for the
+    # mechanism and kagg.policy.tasks.PRIORITY_ANIMAL_SETUP for why it
+    # still yields to PREVENT_LOSS.
+    "prioritize_animal_setup": False,
     # T8.19, the user's own observation: committing every new tile to a
     # single top-ranked product invites a double price-crash risk (our
     # own volume plus a plausible independent opponent bet on the same

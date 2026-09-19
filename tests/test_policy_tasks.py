@@ -13,6 +13,7 @@ consecutive_unwatered>=1 (SPEC-gamelib.md: 2 consecutive misses -> weed).
 
 from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
 from kagg.policy.tasks import (
+    PRIORITY_ANIMAL_SETUP,
     PRIORITY_HARVEST,
     PRIORITY_LOW_VALUE_CARE,
     PRIORITY_MAINTENANCE,
@@ -1125,3 +1126,137 @@ def test_action_for_unit_movement_actually_reduces_distance():
     dx, dy = deltas[move]
     new_pos = (start[0] + dx, start[1] + dy)
     assert tile_distance(new_pos, task.pos) < tile_distance(start, task.pos)
+
+
+# --- T8.41: animal_pickup_unpinned -----------------------------------
+#
+# The one remaining farmer-only pin (see tasks._PINNED_UNIT_INDEX's own
+# docstring) - mirrors feed_pickup_unpinned's own unit_index mechanism
+# for the animal PICKUP task specifically.
+
+
+def test_build_task_list_still_pins_animal_pickup_by_default():
+    # Negative control / bit-identical-off check: matches the pre-T8.41
+    # test_build_task_list_pins_animal_pickup_to_unit_0 exactly, just
+    # naming the new flag explicitly at its default.
+    tiles = _empty_tiles()
+    tiles[3][3] = {"kind": "PASTURE"}
+    tasks = build_task_list(
+        tiles, desired_animal="COW", shed={"COW": 1}, animal_pickup_unpinned=False,
+    )
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "COW")
+    assert pickup.unit_index == 0
+
+
+def test_build_task_list_unpins_animal_pickup_when_flag_is_on():
+    tiles = _empty_tiles()
+    tiles[3][3] = {"kind": "PASTURE"}
+    tasks = build_task_list(
+        tiles, desired_animal="COW", shed={"COW": 1}, animal_pickup_unpinned=True,
+    )
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "COW")
+    assert pickup.unit_index is None
+
+
+def test_assign_units_lets_a_nearer_hand_take_the_unpinned_animal_pickup():
+    # A free hand nearer the shed access tile than the farmer takes the
+    # PICKUP once unpinned - the whole point (a busy/far farmer no
+    # longer blocks animal setup).
+    tiles = _empty_tiles()
+    tiles[3][3] = {"kind": "PASTURE"}
+    farmer, hand = (9, 9), (4, 4)  # hand stands right on a shed-access tile
+    tasks = build_task_list(
+        tiles, unit_positions=[farmer, hand],
+        desired_animal="COW", shed={"COW": 1}, animal_pickup_unpinned=True,
+    )
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "COW")
+    assignment = assign_units([pickup], [farmer, hand])
+    assert assignment == [None, pickup]  # the nearer hand (index 1), not the farmer
+
+
+def test_build_task_list_unpinned_animal_pickup_position_stays_farmer_anchored():
+    # Same convention as the wheat PICKUP (T8.2's stability argument):
+    # the *target position* doesn't move just because execution can now
+    # go to a different unit.
+    tiles = _empty_tiles()
+    tiles[3][3] = {"kind": "PASTURE"}
+    tasks = build_task_list(
+        tiles, unit_positions=[(4, 4), (9, 9)],
+        desired_animal="COW", shed={"COW": 1}, animal_pickup_unpinned=True,
+    )
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "COW")
+    assert pickup.pos in shed_access_tiles(10)
+
+
+# --- T8.41: prioritize_animal_setup -----------------------------------
+#
+# BUILD_COOP/BUILD_PASTURE/animal-PICKUP/PLACE default to PRIORITY_PLANT
+# (the same tier as ordinary crop planting); this flag lifts them to
+# PRIORITY_ANIMAL_SETUP (below PREVENT_LOSS/HARVEST, above ROUTINE_CARE/
+# PLANT) instead.
+
+
+def test_build_task_list_animal_tasks_stay_at_plant_priority_by_default():
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, unit_positions=[(4, 4)], desired_animal="COW", shed={"COW": 1})
+    assert tasks[0].priority == PRIORITY_PLANT
+
+
+def test_build_task_list_prioritizes_build_when_flag_is_on():
+    tiles = _empty_tiles()
+    tasks = build_task_list(
+        tiles, unit_positions=[(4, 4)], desired_animal="COW", shed={"COW": 1},
+        prioritize_animal_setup=True,
+    )
+    assert tasks[0].op == "BUILD_PASTURE"
+    assert tasks[0].priority == PRIORITY_ANIMAL_SETUP
+
+
+def test_build_task_list_prioritizes_animal_pickup_when_flag_is_on():
+    tiles = _empty_tiles()
+    tiles[3][3] = {"kind": "PASTURE"}
+    tasks = build_task_list(
+        tiles, desired_animal="COW", shed={"COW": 1}, prioritize_animal_setup=True,
+    )
+    pickup = next(t for t in tasks if t.op == "PICKUP" and t.item == "COW")
+    assert pickup.priority == PRIORITY_ANIMAL_SETUP
+
+
+def test_build_task_list_prioritizes_place_when_flag_is_on():
+    tiles = _empty_tiles()
+    tiles[4][4] = _empty_structure("PASTURE")
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], desired_animal="COW", farmer_inventory={"COW": 1},
+        prioritize_animal_setup=True,
+    )
+    assert tasks[0].op == "PLACE"
+    assert tasks[0].priority == PRIORITY_ANIMAL_SETUP
+
+
+def test_build_task_list_prioritize_animal_setup_does_not_affect_plant_crop_tasks():
+    tiles = _empty_tiles()
+    tasks = build_task_list(tiles, plant_crop="CARROT", prioritize_animal_setup=True)
+    assert all(t.priority == PRIORITY_PLANT for t in tasks if t.op == "PLANT")
+
+
+def test_assign_units_prioritized_animal_setup_wins_over_harvest_and_care():
+    # PRIORITY_ANIMAL_SETUP resolves before PRIORITY_ROUTINE_CARE/
+    # PRIORITY_PLANT work, so on a farm with just one free unit, the
+    # animal setup task wins over a routine (non-urgent) WATER even
+    # though that WATER task sits right under the unit's feet.
+    build = Task(priority=PRIORITY_ANIMAL_SETUP, pos=(9, 9), op="BUILD_PASTURE")
+    routine_water = Task(priority=PRIORITY_ROUTINE_CARE, pos=(0, 0), op="WATER")
+    assignment = assign_units([build, routine_water], [(0, 0)])
+    assert assignment == [build]
+
+
+def test_assign_units_prioritized_animal_setup_still_yields_to_prevent_loss():
+    # An unplaced animal is idle capital, not at real risk - a genuine
+    # PREVENT_LOSS task (something actually about to be lost) still
+    # resolves first even with the flag on.
+    urgent_water = Task(priority=PRIORITY_PREVENT_LOSS, pos=(9, 9), op="WATER")
+    build = Task(priority=PRIORITY_ANIMAL_SETUP, pos=(0, 0), op="BUILD_PASTURE")
+    assignment = assign_units([urgent_water, build], [(0, 0)])
+    # Only one free unit: PREVENT_LOSS resolves first, leaving nothing
+    # free for the animal-setup tier this turn.
+    assert assignment == [urgent_water]

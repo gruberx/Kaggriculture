@@ -49,6 +49,22 @@ _ANCHOR_UNIT_TOWARD_SHED = "UNIT_TOWARD_SHED"
 
 PRIORITY_PREVENT_LOSS = 0
 PRIORITY_HARVEST = 1
+# T8.41, the user's own observation: a bought-but-unplaced animal is idle
+# capital, not something at real risk of being lost (only a *placed*
+# tile animal's consecutive_unfed clock runs), so this sits below
+# PRIORITY_PREVENT_LOSS/PRIORITY_HARVEST - but at PRIORITY_PLANT (the
+# shipped tier for BUILD_COOP/BUILD_PASTURE/animal-PICKUP/PLACE, see
+# `_new_investment_tasks`), the whole animal-setup pipeline is starved
+# whenever tiers 0-2 already consume every free unit, which is the
+# expected case on a farm busy enough to need extra hands in the first
+# place - confirmed directly by reading assign_units's own strict
+# tier-by-tier free_units consumption (below), not assumed. Gated behind
+# `prioritize_animal_setup` (default False, bit-identical): see
+# `_new_investment_tasks`'s own docstring for the mechanism.
+# `assign_units` groups tiers via `sorted({t.priority for t in tasks})`
+# (T8.15's own precedent for inserting a value between two existing
+# integer tiers) - no other code needs to change to support this.
+PRIORITY_ANIMAL_SETUP = 1.5
 PRIORITY_ROUTINE_CARE = 2
 PRIORITY_PLANT = 3
 # T8.15: a real intermediate tier between PLANT and MAINTENANCE - not
@@ -89,9 +105,13 @@ _WHEAT_PICKUP_BATCH = 10
 # This constant remains the pin for the two ops that still have a genuine
 # single-unit-only pipeline: the aggregate wheat PICKUP (unpinnable only
 # when `feed_pickup_unpinned` is on - see `build_task_list`'s own
-# docstring) and the animal PICKUP, deliberately left pinned even under
-# that flag (T8.39's plan: a once-per-game two-turn pipeline, not worth a
-# second uncontrolled variable in that measurement). WATER/HARVEST/DIG/
+# docstring) and the animal PICKUP, pinned by default but unpinnable via
+# `animal_pickup_unpinned` (T8.41 - T8.39 deliberately left it pinned
+# even under `feed_pickup_unpinned`, scoping that measurement to the
+# wheat pipeline alone; T8.41 lifts the scope limit itself, since a
+# farmer-only pin is exactly the scaling bottleneck this constant's own
+# name describes - see `_new_investment_tasks`'s own docstring).
+# WATER/HARVEST/DIG/
 # COLLECT_FERTILIZER/CARE/PLANT (consumes the shared private["seeds"],
 # not any unit's inventory)/BUILD_COOP/BUILD_PASTURE are deliberately
 # left unpinned - a hand doing one of those in parallel is free
@@ -268,6 +288,8 @@ def build_task_list(
     water_bonus_window_aware: bool = False,
     parallel_animal_acquisition: bool = False,
     feed_pickup_unpinned: bool = False,
+    animal_pickup_unpinned: bool = False,
+    prioritize_animal_setup: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -401,6 +423,11 @@ def build_task_list(
     aggregate PICKUP itself becomes assignable to any free unit, not just
     the farmer). Defaults to `False`, bit-identical to every pre-T8.39
     caller.
+
+    `animal_pickup_unpinned`/`prioritize_animal_setup` (T8.41) - passed
+    straight through to `_new_investment_tasks`, see its own docstring
+    for both mechanisms. Both default to `False`, bit-identical to every
+    pre-T8.41 caller.
     """
     shed = shed or {}
     farmer_inventory = farmer_inventory or {}
@@ -487,6 +514,8 @@ def build_task_list(
             empty_tiles, matching_structure_tiles, unit_positions, len(tiles),
             plant_crop, desired_animal, desired_structure, shed, inventories, n_units, anchor, plant_qty,
             parallel_animal_acquisition,
+            animal_pickup_unpinned,
+            prioritize_animal_setup,
         )
     )
 
@@ -505,6 +534,8 @@ def _new_investment_tasks(
     plant_crop, desired_animal, desired_structure, shed, inventories, n_units, anchor=_ANCHOR_SHED,
     plant_qty: int = 1,
     parallel_animal_acquisition: bool = False,
+    animal_pickup_unpinned: bool = False,
+    prioritize_animal_setup: bool = False,
 ) -> list[Task]:
     """T6.4's real finding, not anticipated when T6.2 first wrote this
     pipeline: PLACE's real handler (kaggriculture.py) consumes the animal
@@ -540,6 +571,22 @@ def _new_investment_tasks(
     same-tier tasks correctly (T8.2's own greedy matching), no changes
     needed there.
 
+    `animal_pickup_unpinned` (T8.41) - mirrors `feed_pickup_unpinned`'s
+    own mechanism exactly, for the one pipeline that flag deliberately
+    left out of scope: `None if animal_pickup_unpinned else
+    _PINNED_UNIT_INDEX` for the animal PICKUP task's `unit_index`. The
+    PICKUP's *target position* stays farmer-anchored either way
+    (`unit_positions[:1]`, same as the wheat PICKUP - see this function's
+    own comment above) - only which unit is *assigned to execute it*
+    changes. Default False, bit-identical.
+
+    `prioritize_animal_setup` (T8.41, the user's own observation): when
+    on, every animal-acquisition task (BUILD_COOP/BUILD_PASTURE/PICKUP/
+    PLACE) is emitted at `PRIORITY_ANIMAL_SETUP` instead of `PRIORITY_
+    PLANT` - see that constant's own comment for why. Does not affect the
+    `plant_crop` branch (ordinary crop PLANT tasks stay at `PRIORITY_
+    PLANT` regardless). Default False, bit-identical.
+
     Only the `plant_crop` branch can return more than one task
     independent of this flag, up to `plant_qty` (T8.6), one PLANT task
     per distinct empty tile via `_compact_positions` - see its own
@@ -558,32 +605,37 @@ def _new_investment_tasks(
         animal_units = _units_holding(inventories, desired_animal, n_units)
         animal_in_hand = bool(animal_units)
         animal_in_shed = shed.get(desired_animal, 0) > 0
+        # T8.41: both new flags apply uniformly to every task this branch
+        # can emit - see this function's own docstring for the mechanism
+        # and reasoning for each.
+        animal_priority = PRIORITY_ANIMAL_SETUP if prioritize_animal_setup else PRIORITY_PLANT
+        pickup_unit_index = None if animal_pickup_unpinned else _PINNED_UNIT_INDEX
         if not parallel_animal_acquisition:
             if animal_in_hand and matching_structure_tiles:
                 pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
-                return [Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=animal_units[0])]
+                return [Task(animal_priority, pos, "PLACE", animal=desired_animal, unit_index=animal_units[0])]
             if not matching_structure_tiles and empty_tiles:
                 pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
                 build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
-                return [Task(PRIORITY_PLANT, pos, build_op)]
+                return [Task(animal_priority, pos, build_op)]
             if matching_structure_tiles and animal_in_shed and not animal_in_hand:
                 pos = _closest_pos(shed_access_tiles(board_size), unit_positions[:1])
                 return [
-                    Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)
+                    Task(animal_priority, pos, "PICKUP", item=desired_animal, qty=1, unit_index=pickup_unit_index)
                 ]
             return []
         animal_tasks: list[Task] = []
         if animal_in_hand and matching_structure_tiles:
             pos = _compact_position(matching_structure_tiles, board_size, anchor, unit_positions)
-            animal_tasks.append(Task(PRIORITY_PLANT, pos, "PLACE", animal=desired_animal, unit_index=animal_units[0]))
+            animal_tasks.append(Task(animal_priority, pos, "PLACE", animal=desired_animal, unit_index=animal_units[0]))
         if not matching_structure_tiles and empty_tiles:
             pos = _compact_position(empty_tiles, board_size, anchor, unit_positions)
             build_op = "BUILD_COOP" if desired_structure == "COOP" else "BUILD_PASTURE"
-            animal_tasks.append(Task(PRIORITY_PLANT, pos, build_op))
+            animal_tasks.append(Task(animal_priority, pos, build_op))
         if animal_in_shed and not animal_in_hand:
             pos = _closest_pos(shed_access_tiles(board_size), unit_positions[:1])
             animal_tasks.append(
-                Task(PRIORITY_PLANT, pos, "PICKUP", item=desired_animal, qty=1, unit_index=_PINNED_UNIT_INDEX)
+                Task(animal_priority, pos, "PICKUP", item=desired_animal, qty=1, unit_index=pickup_unit_index)
             )
         return animal_tasks
     if plant_crop is not None and empty_tiles and plant_qty > 0:

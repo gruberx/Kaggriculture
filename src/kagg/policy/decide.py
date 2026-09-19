@@ -715,6 +715,32 @@ _DEFAULT_PARALLEL_ANIMAL_ACQUISITION = False
 # every pre-T8.39 caller - not yet measured in self-play.
 _DEFAULT_FEED_PICKUP_UNPINNED = False
 
+# T8.41: the user's own follow-up - "any action pinned only to the
+# farmer is a scaling bottleneck." Grepping every unit_index/
+# _PINNED_UNIT_INDEX use in tasks.py found exactly one action T8.39 left
+# out of scope: the animal PICKUP (tasks._PINNED_UNIT_INDEX, still
+# unconditionally pinned). Mirrors feed_pickup_unpinned's own mechanism
+# for that one remaining pipeline - see tasks._new_investment_tasks's
+# own docstring. Default False, bit-identical to every pre-T8.41 caller.
+_DEFAULT_ANIMAL_PICKUP_UNPINNED = False
+
+# T8.41, the user's own observation: once an animal is bought, preparing
+# its place and installing it should outrank ordinary map work, tracked
+# for hired hands too, so a "picked up but never placed" animal doesn't
+# sit idle in a busy turn. Verified directly, not assumed: BUILD_COOP/
+# BUILD_PASTURE/animal-PICKUP/PLACE are all emitted at tasks.PRIORITY_
+# PLANT - the same tier as ordinary crop planting - and assign_units
+# resolves tiers strictly in order, consuming free_units as it goes, so
+# this pipeline gets zero free units whenever tiers 0-2 (PREVENT_LOSS/
+# HARVEST/ROUTINE_CARE) already used them all, the expected case on a
+# farm busy enough to need extra hands. When on, these tasks are emitted
+# at tasks.PRIORITY_ANIMAL_SETUP instead (between HARVEST and ROUTINE_
+# CARE) - see that constant's own comment for why it still yields to
+# PREVENT_LOSS (an unplaced animal isn't at risk the way a genuine
+# prevent-loss target is). Default False, bit-identical to every
+# pre-T8.41 caller.
+_DEFAULT_PRIORITIZE_ANIMAL_SETUP = False
+
 # T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
 # `plant_qty` scale with the real labor force (1 + hires_per_day) instead
 # of a hardcoded "one PLANT task per turn" baked in since Phase 3.
@@ -1509,6 +1535,8 @@ def decide(obs: dict, params: dict) -> dict:
         "parallel_animal_acquisition", _DEFAULT_PARALLEL_ANIMAL_ACQUISITION
     )
     feed_pickup_unpinned = params.get("feed_pickup_unpinned", _DEFAULT_FEED_PICKUP_UNPINNED)
+    animal_pickup_unpinned = params.get("animal_pickup_unpinned", _DEFAULT_ANIMAL_PICKUP_UNPINNED)
+    prioritize_animal_setup = params.get("prioritize_animal_setup", _DEFAULT_PRIORITIZE_ANIMAL_SETUP)
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
@@ -1531,6 +1559,8 @@ def decide(obs: dict, params: dict) -> dict:
         water_bonus_window_aware=water_bonus_window_aware,
         parallel_animal_acquisition=parallel_animal_acquisition,
         feed_pickup_unpinned=feed_pickup_unpinned,
+        animal_pickup_unpinned=animal_pickup_unpinned,
+        prioritize_animal_setup=prioritize_animal_setup,
     )
     assignment = assign_units(tasks, unit_positions)
 

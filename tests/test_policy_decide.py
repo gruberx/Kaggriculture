@@ -1388,6 +1388,59 @@ def test_decide_lets_the_nearer_hand_take_the_wheat_pickup_when_unpinned():
     assert action["hands"] == [["PICKUP", "WHEAT", 5]]
 
 
+# --- T8.41: animal_pickup_unpinned / prioritize_animal_setup, at the
+# decide() integration layer ---------------------------------------
+
+
+def test_decide_animal_pickup_stays_pinned_to_the_farmer_by_default():
+    # Bit-identical-off check, mirrors test_decide_feed_pickup_stays_
+    # pinned_to_the_farmer_by_default's own pattern.
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    obs["farms"][0]["farmer"] = [4, 4]  # a real shed-access tile
+    obs["farms"][0]["hands"] = [[2, 4]]  # standing right on the structure
+    obs["farms"][0]["tiles"][2][4] = {"kind": "PASTURE"}
+    obs["private"]["shed"]["COW"] = 1
+    action = decide(obs, DEFAULT_PARAMS)  # animal_pickup_unpinned unset -> False
+    assert action["farmer"] == ["PICKUP", "COW", 1]
+    assert action["hands"] == [["PASS"]]
+
+
+def test_decide_lets_a_nearer_hand_take_the_animal_pickup_when_unpinned():
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    obs["farms"][0]["farmer"] = [0, 0]  # far from every shed-access tile
+    obs["farms"][0]["hands"] = [[4, 4]]  # standing on one
+    obs["farms"][0]["tiles"][2][4] = {"kind": "PASTURE"}  # already built
+    obs["private"]["shed"]["COW"] = 1
+    params = dict(DEFAULT_PARAMS, animal_pickup_unpinned=True)
+    action = decide(obs, params)
+    assert action["hands"] == [["PICKUP", "COW", 1]]
+
+
+def test_decide_prioritizes_finishing_animal_setup_over_routine_care():
+    # A free hand faces both a routine (non-urgent) WATER and finishing
+    # an animal pickup - with prioritize_animal_setup on, the pickup
+    # wins even though the WATER task sits right under the hand's feet.
+    obs = _obs()
+    obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}
+    obs["farms"][0]["farmer"] = [0, 0]
+    obs["farms"][0]["tiles"][0][0] = {
+        "kind": "PLANT", "crop": "WHEAT", "planted_day": 0,
+        "watered_today": False, "consecutive_unwatered": 0,  # routine, not urgent
+        "yield_units": 0, "max_lifespan_step": 120, "fertilized_until_day": -1,
+    }
+    obs["farms"][0]["hands"] = [[4, 4]]  # standing on a shed-access tile
+    obs["farms"][0]["tiles"][2][4] = {"kind": "PASTURE"}  # already built
+    obs["private"]["shed"]["COW"] = 1
+    params = dict(
+        DEFAULT_PARAMS, animal_pickup_unpinned=True, prioritize_animal_setup=True,
+    )
+    action = decide(obs, params)
+    assert action["farmer"] == ["WATER"]
+    assert action["hands"] == [["PICKUP", "COW", 1]]
+
+
 def test_decide_defaults_wheat_buy_only_when_feed_needed_to_true_when_unset():
     # Mirrors test_decide_defaults_crop_net_of_seed_cost_to_true_when_unset's
     # pattern: a params dict missing the key entirely must behave like the
