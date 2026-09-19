@@ -651,7 +651,18 @@ def rank_portfolio(
 # 15000 - a real, held-out-gated result (see
 # _DEFAULT_LAND_BUY_MAX_FREE_TILE_FRACTION's own comment for the full
 # joint-sweep story; both land params were swept and accepted together).
-_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 15000
+#
+# T8.42, overturned: T8.40's real top-leaderboard data showed this
+# $15,000 reserve was never how strong play actually works - top players
+# buy land the instant it's affordable, often leaving $1-$100. T8.33
+# alone had already tried lowering this (labor left at the old
+# min_hires_per_day=2) and found it lost decisively - land bought
+# without labor to work it just sits idle. T8.42 lowered this *jointly*
+# with min_hires_per_day (below, also raised) and found the combination
+# wins decisively (96% n=50, 89.5% confirmed n=200 holdout,
+# tools/measure_t842.py) - see kagg.policy.params.DEFAULT_PARAMS's own
+# matching comment for the full measured story.
+_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY = 0
 
 # T8.7 (tasks/plan.md, Stage B's payoff): T7.4's own hires_per_day=0
 # result was invalid, not just stale - Phase 8's planning found it ran
@@ -704,7 +715,17 @@ _DEFAULT_DYNAMIC_HIRING = True
 # the seed-900 confirmation (8 hands by end of episode vs the old
 # default's 1, hand PASS only 101/1438 turns - genuinely working, not
 # idling; final money 41365 vs 36172, +14.4% on this one seed).
-_DEFAULT_MIN_HIRES_PER_DAY = 2
+#
+# T8.42, raised again: T8.40's real top-leaderboard data showed hired-
+# hand count front-loaded from day 0 far beyond this floor (median 4 on
+# day 0, 8 by day 6). T8.41 already found raising labor alone (with land
+# unchanged) doesn't help - nothing extra to work - and T8.34 found a
+# *reactive* signal mistimed and losing. This raises the same stable,
+# non-reactive floor mechanism straight to the shipped max_hires_per_day
+# ceiling, jointly with land_purchase_threshold_money=0 (above) - see
+# _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY's own comment for the measured
+# story.
+_DEFAULT_MIN_HIRES_PER_DAY = 8
 # The edge this stays comfortably clear of: fib-priced hire #8 costs $21
 # (the 8th hire that day), $54 cumulative for the day - negligible next
 # to a season's ~$30k of money (see hire_cost's own fib curve), so 8 is a

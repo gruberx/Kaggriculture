@@ -31,11 +31,19 @@ _DEFAULT_PARAMS_PATH = os.path.join(
 # file, or this loader never being called at all, shouldn't behave any
 # differently than a fully-populated one.
 DEFAULT_PARAMS = {
-    # T8.8: raised again 10000 -> 15000 once hires_per_day=1 (T8.7)
-    # landed - see kagg.policy.strategy's own
-    # _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY comment for the measured
-    # story (swept jointly with land_buy_max_free_tile_fraction below).
-    "land_purchase_threshold_money": 15000,  # T7.4 first raised this from 5000
+    # T8.42, real-data-calibrated: T8.40's saved top-leaderboard extract
+    # showed top players buy their 2nd quadrant leaving essentially zero
+    # cash reserve (several team-seasons as low as $1-$88 right after the
+    # purchase), decisively contradicting the $15,000 reserve this
+    # project had carried since T8.8. T8.33 alone already tried lowering
+    # this (0-10000) with labor left at the old min_hires_per_day=2 and
+    # found it decisively lost - land bought without labor to work it
+    # just sits idle. T8.42 lowered this *jointly* with min_hires_per_day
+    # (below) at real-data-calibrated levels and found the joint change
+    # wins decisively: 96% (n=50), 89.5% confirmed on a 200-seed holdout
+    # (tools/measure_t842.py) - see kagg.policy.strategy's own
+    # _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY comment for the full story.
+    "land_purchase_threshold_money": 0,
     # T8.7: raised 0 -> 1 - T7.4's own hires_per_day=0 result was invalid
     # (ran against real bugs, fixed by T8.4/T8.6), and the re-run sweep
     # flipped completely: every nonzero value tried won 96-100% direct
@@ -62,7 +70,18 @@ DEFAULT_PARAMS = {
     # and tools/measure_t816d.py/tools/trace_t816d.py for the sweep and
     # seed-900 confirmation.
     "dynamic_hiring": True,
-    "min_hires_per_day": 2,  # T8.16(d): swept and accepted - see above
+    # T8.42, real-data-calibrated: T8.40's saved top-leaderboard extract
+    # showed hired-hand count front-loaded from day 0 far beyond anything
+    # tested before (median 4 on day 0, 8 by day 6, 10 by day 9) - T8.41
+    # traced why raising labor alone (without land) doesn't help (nothing
+    # extra to work), and T8.34 found a *reactive* hiring signal
+    # (workload_forecast_free_tile_weight) mistimed and losing. This
+    # raises the same stable floor mechanism T8.32 first tried (4) all
+    # the way to the shipped max_hires_per_day ceiling (8) - a flat,
+    # non-reactive target from day 0, jointly with land_purchase_
+    # threshold_money=0 above. See that param's own comment for the
+    # measured story.
+    "min_hires_per_day": 8,
     "max_hires_per_day": 8,  # fib hire #8 costs $21 - still negligible
     "turns_per_task_estimate": 2.0,  # T8.16(d): swept, stayed at this value
     "hire_cash_reserve": 0,  # the user's own "protect starting capital" ask

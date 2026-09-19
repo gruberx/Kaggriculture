@@ -2238,6 +2238,109 @@ project's own established finding, a fresh submission's score is volatile for it
       trace_t841.py` (one-off tuning/diagnostic scripts, not part of the committed test suite - no
       further `src/kagg/` changes, Stage A was rejected). No Kaggle submission (nothing accepted).
 
+- [x] T8.42 — land expansion: a real-data-calibrated joint labor+land resweep (T8.41's own named next
+      step, user's own request, 2026-09-19: "давай теперь займёмся расширением земли"). **Accepted -
+      the strongest, most decisively confirmed self-play result this project has measured for either
+      land or labor.**
+
+      **Real numbers, pulled from T8.40's already-saved extract (`data/top_replay_records/`, no new
+      fetching) - far more extreme than anything tested before**: top players buy their 2nd quadrant
+      (NE, $1,000) leaving essentially zero cash reserve - money right after the purchase medians in
+      the tens to low hundreds of dollars across all 11 real episodes, several as low as $1-$88 (DSM
+      `$2`, Arda Ceylan `$1`, SpaTaro `$81`) - against this project's shipped `land_purchase_threshold_
+      money=15000` (requiring $16,000 on hand just to buy a $1,000 quadrant). Hired-hand count is
+      front-loaded from day 0 far beyond anything measured before: `hands_max` median **4 on day 0**
+      (never below 4), **6 by day 2**, **8 by day 6**, **10 by day 9**, **11 by day 11** - ours ships
+      flat at 2 all season.
+
+      **Extensive prior art, respected not re-litigated**: T8.3/T8.8 first calibrated these two land
+      params under a real 1-2-labor-unit regime, explicitly flagged stale once T8.29's labor fix
+      landed. T8.32 found a joint `(min_hires_per_day=4, land_purchase_threshold_money=10000,
+      land_buy_max_free_tile_fraction=0.2)` scoring 64% at n=50 but regressing to 54.5%
+      (`accept_candidate=False`) at n=200 - named "a candidate worth revisiting... via a wider grid
+      search or a larger held-out sample." T8.33 found lowering `land_purchase_threshold_money` *alone*
+      (labor left at 2) decisively rejected at every value 0-10000, confirmed at n=200 (31.5%) - traced
+      cause: land bought without labor to work it just sits idle. T8.34 found raising labor via a
+      *reactive* signal (`workload_forecast_free_tile_weight`) also decisively rejected - traced cause:
+      the signal peaks day 0 before any backlog exists, then reverts, a mistimed one-time burst. What's
+      new here: real numbers calibrate both levers much further than T8.32's own point, using the
+      *stable floor* mechanism (`min_hires_per_day`, T8.32's own mechanism, not T8.34's rejected
+      reactive one).
+
+      **Stage 1 (`tools/measure_t842.py`), diagonal grid, 50-seed working block**: baseline (shipped: 2,
+      15000) `0.000` (0W/0L/50T, a harness sanity check - identical params vs. itself); `(4, 10000)`
+      (T8.32's own point, re-confirmed) `0.600` (30W/20L/0T) - `accept_candidate=False`, still
+      overlapping; `(6, 2000)` `0.920` (46W/4L/0T) - clears; `(8, 0)` `0.960` (48W/2L/0T) - clears,
+      the strongest. Per T8.32's own explicit n=50-noise lesson, went straight to a 200-seed
+      confirmation for `(8, 0)` rather than trusting the n=50 number: **`0.895` (179W/21L/0T), Wilson
+      `[0.845, 0.930]` entirely clear of the even-odds baseline's `[0.431, 0.569]` - `accept_candidate=
+      True`, holds up decisively, not a repeat of T8.32's own regression trap.**
+
+      **Traced (`tools/trace_t842.py`, seeds 100/101/900) before accepting**: hand count flat at exactly
+      8 from day 0 through day 11 in every traced seed - the stable-floor mechanism working exactly as
+      designed, no reactive mistiming. Land expansion is dramatic: candidate reaches **all 4 quadrants**
+      by day 15-20 (NE day 11, SW day 12, SE day 15-21) vs. the baseline's 2 by day 22-25 - closing most
+      of T8.40's own real gap (top players: NE by day 6-9; still a real remaining gap, not fully closed,
+      but a large, genuine move in the right direction). `BUY_LAND` fired promptly across the traced
+      episodes with no sign of being permanently blocked. Final money favored the candidate in 2/3
+      traced seeds (e.g. 44103 vs. 35378; 51115 vs. 38601) and lost in the third (19396 vs. 23525) -
+      consistent with an ~90% win rate, not universal dominance.
+
+      **Real mechanical finding, confirmed not assumed - `_MAX_MARKET_ORDERS=10` order-queue crowding
+      is real, not just a hypothetical risk**: `decide.py`'s final order list is `(hires + sells +
+      tail)[:_MAX_MARKET_ORDERS]` - at `min_hires_per_day=8`, a turn with `hires_today` still low can
+      queue up to 8 `HIRE` orders, leaving little or no room for `sells`/`tail` (where `BUY_LAND`/wheat
+      restock/`SELL` live) *that specific turn*. This was directly confirmed, not speculated: 5
+      pre-existing unit tests broke exactly this way (`BUY_LAND`/`SELL FERTILIZER`/`SELL MELON` orders
+      silently missing from `action["market"]` on a synthetic single-turn fixture with `hires_today`
+      unset). **Not a practical blocker, though**: the real multi-turn trace above shows `BUY_LAND`
+      firing successfully across full episodes regardless (once `hires_today` reaches its target
+      partway through the day, later turns free up the queue) - a real, once-per-day-at-most delay,
+      not a permanent block, consistent with the strong measured win rate. Fixed the 5 affected unit
+      tests by setting `hires_today` in their fixtures (mirrors the existing `test_decide_does_not_
+      hire_past_the_daily_target` pattern) rather than changing `decide.py`'s own order-construction
+      logic, which was not part of what was measured/accepted here - a real `_MAX_MARKET_ORDERS`/
+      order-priority fix (e.g. reserving room for `tail` before `hires`) is a separate, still-open lead
+      for a future task if a trace ever shows it costing real games, not assumed necessary from this
+      evidence alone.
+
+      **14 more pre-existing unit tests needed updating for the same root cause** (not order-queue
+      crowding, but the *default value itself* changing): several `test_policy_strategy.py` tests
+      computed their own expected `hires_per_day()` output using the shipped defaults directly (some
+      literally commented "min/max_hires_per_day defaults") and needed their hardcoded `2` updated to
+      `8`; others relied on the *old* default floor (2) being low enough not to interfere with a
+      smaller hand-computed target, and needed an explicit `min_hires_per_day` override added to keep
+      isolating the mechanism they actually test (matching this file's own established precedent for
+      exactly this kind of isolation, e.g. `test_hires_per_day_dynamic_hiring_never_drops_below_min_
+      hires_per_day`'s own comment). One (`test_hires_per_day_dynamic_hiring_min_hires_per_day_
+      defaults_to_two`) was the default-value test itself, renamed and updated to assert `8`.
+
+      **Golden episodes re-recorded** (`tests/test_agent_golden_episodes.py`, nineteenth re-record) -
+      every single one of the six fixed seeds moved *higher*, a real and uniform jump (e.g.
+      starter/seed3: 44688 -> 67716, +51.5%; pass/seed1: 42123 -> 49283, +17.0%), unlike T8.31's own
+      mixed-but-net-positive record. `test_no_animal_escapes_across_the_golden_seeds` (T8.38) - the
+      permanently non-re-recordable guardrail - passed unchanged.
+
+      **Accepted**: `min_hires_per_day` 2 -> 8, `land_purchase_threshold_money` 15000 -> 0
+      (`src/kagg/params/policy.json`, `src/kagg/policy/params.py`'s `DEFAULT_PARAMS`, and the matching
+      `_DEFAULT_MIN_HIRES_PER_DAY`/`_DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY` constants in `kagg.policy.
+      strategy`). `land_buy_max_free_tile_fraction` untouched (shipped `0.1`) - the money threshold
+      alone was already the dominant, binding gate at every level tried; not swept further here.
+
+      **What's still open**: the remaining gap to top players' own NE-by-day-6-9 timing (ours: day 11
+      typically) - `land_buy_min_frontier_distance` (still its shipped no-op `99`) or `max_hires_per_day`
+      itself (top's day-9-11 hand counts, 10-11, exceed our shipped ceiling of 8) are the natural next
+      levers, not tried here to keep this task's own grid diagonal rather than a wider cross-product. A
+      genuine `_MAX_MARKET_ORDERS`/order-priority fix, if a future trace shows the crowding above
+      actually costing real games (not just unit-test fixtures). `wheat_self_sufficiency_aware` against
+      the now-real multi-animal feed demand this task's own labor/land scaling may finally create -
+      T8.41 found it untested for lack of exactly this demand; worth re-checking now that land is no
+      longer the hard bottleneck it was.
+
+      Full suite green (547), `compileall`/`boundary_check.py` clean. Committed: `tools/measure_t842.py`,
+      `tools/trace_t842.py`, the `src/kagg/` param changes, the 19 fixed pre-existing tests, this entry.
+      No Kaggle submission yet - ask before submitting, as always.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

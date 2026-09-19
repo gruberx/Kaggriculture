@@ -338,13 +338,32 @@ AGENT_MAIN_PATH = os.path.join(
 # *higher*: 36814 -> 37023) - genuine seed-to-seed variance, not a sign
 # the fix is wrong; the self-play win rate over 100 seeds is the real
 # acceptance signal here, not six fixed numbers.
+#
+# Re-recorded a nineteenth time for T8.42: land_purchase_threshold_money
+# 15000 -> 0 and min_hires_per_day 2 -> 8, jointly, calibrated directly
+# against T8.40's real top-leaderboard data (top players buy their 2nd
+# quadrant leaving essentially zero cash reserve, and front-load hired-
+# hand count far beyond this project's old floor). Measured and accepted
+# directly against the checked-in baseline (tools/measure_t842.py: 96%
+# working, 89.5% confirmed on a 200-seed holdout, Wilson
+# [0.845, 0.930] entirely clear of the even-odds baseline) - the
+# strongest, most decisively confirmed self-play result this project has
+# measured for either land or labor (T8.32's own closest prior attempt
+# regressed from 64% at n=50 to an unaccepted 54.5% at n=200; this result
+# holds up, not a repeat of that noise trap). A real, large, and uniform
+# jump across every one of these six seeds (e.g. starter/seed3: 44688 ->
+# 67716, +51.5%; pass/seed1: 42123 -> 49283, +17.0%) - every single seed
+# moved higher, unlike T8.31's own mixed-but-net-positive record just
+# above; tools/trace_t842.py confirms the mechanism directly (hand count
+# flat at 8 from day 0, all 4 quadrants reached by day ~15-20 vs. the old
+# baseline's 2 by day ~22-25).
 _GOLDEN = {
-    ("starter", 1): (42122.0, 3657.0),
-    ("starter", 2): (42108.0, 3767.0),
-    ("starter", 3): (44688.0, 3571.0),
-    ("pass", 1): (42123.0, 3000.0),
-    ("pass", 2): (45471.0, 3000.0),
-    ("pass", 3): (45440.0, 3000.0),
+    ("starter", 1): (47663.0, 4054.0),
+    ("starter", 2): (64798.0, 3506.0),
+    ("starter", 3): (67716.0, 3647.0),
+    ("pass", 1): (49283.0, 3000.0),
+    ("pass", 2): (61973.0, 3000.0),
+    ("pass", 3): (69306.0, 3000.0),
 }
 
 

@@ -466,7 +466,12 @@ def test_hires_per_day_dynamic_hiring_scales_with_pending_task_count():
     # number), 24 turns left today (hour=0): needed_unit_turns = 96,
     # target = ceil(96 / 24) - 1 = 3 (minus the farmer's own turn - the
     # farmer is already one of the labor units working the backlog).
-    params = {"dynamic_hiring": True}
+    # min_hires_per_day passed explicitly (not relying on the ambient
+    # default, which T8.42 raised to 8) so this test keeps verifying the
+    # formula itself, independent of the floor's currently accepted value
+    # - see test_hires_per_day_dynamic_hiring_never_drops_below_min_
+    # hires_per_day's own comment for the established precedent.
+    params = {"dynamic_hiring": True, "min_hires_per_day": 1}
     got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24)
     assert got == 3
 
@@ -493,14 +498,24 @@ def test_hires_per_day_dynamic_hiring_never_drops_below_min_hires_per_day():
     assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 1
 
 
-def test_hires_per_day_dynamic_hiring_min_hires_per_day_defaults_to_two():
-    # T8.16(d): swept jointly with the other three dynamic_hiring knobs -
-    # 2 (and 3, tied) decisively beat the old flat constant's value of 1
-    # on the working block (0.94 vs 0.62); held-out gate cleared 49W/1L/0T
-    # (98%) against the pre-T8.16(d) checked-in baseline. See
-    # tools/measure_t816d.py for the full sweep.
+def test_hires_per_day_dynamic_hiring_min_hires_per_day_defaults_to_eight():
+    # T8.16(d) first accepted 2 (swept jointly with the other three
+    # dynamic_hiring knobs - 2, and 3 tied, decisively beat the old flat
+    # constant's value of 1 on the working block: 0.94 vs 0.62; held-out
+    # gate cleared 49W/1L/0T (98%) against the pre-T8.16(d) checked-in
+    # baseline. See tools/measure_t816d.py for that sweep).
+    #
+    # T8.42 raised it again, 2 -> 8: T8.40's real top-leaderboard data
+    # showed hired-hand count front-loaded from day 0 far beyond 2
+    # (median 4 on day 0, 8 by day 6) - a stable, non-reactive floor
+    # raised straight to the shipped max_hires_per_day ceiling, jointly
+    # with land_purchase_threshold_money=0 (see kagg.policy.strategy's
+    # own _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY comment). Measured and
+    # accepted directly against the checked-in baseline
+    # (tools/measure_t842.py: 96% working, 89.5% confirmed on a 200-seed
+    # holdout).
     params = {"dynamic_hiring": True}
-    assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 2
+    assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 8
 
 
 def test_hires_per_day_dynamic_hiring_respects_a_custom_min_and_max():
@@ -533,7 +548,10 @@ def test_hires_per_day_dynamic_hiring_respects_a_cash_reserve():
 
 
 def test_hires_per_day_dynamic_hiring_hires_normally_once_reserve_is_cleared():
-    params = {"dynamic_hiring": True, "hire_cash_reserve": 1000}
+    # min_hires_per_day passed explicitly (not the ambient default, which
+    # T8.42 raised to 8) - this test is about the reserve-clearing
+    # mechanism, not the floor's currently accepted value.
+    params = {"dynamic_hiring": True, "hire_cash_reserve": 1000, "min_hires_per_day": 1}
     got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24, money=1500)
     assert got == 3
 
@@ -543,8 +561,11 @@ def test_hires_per_day_dynamic_hiring_cash_reserve_defaults_to_zero():
     # money never blocks hiring on its own (the first hire costs $1 -
     # affordability is checked elsewhere in decide(), this reserve exists
     # only for the case the user actually named: protecting the starting
-    # capital, not a blanket "never hire while poor" rule).
-    params = {"dynamic_hiring": True}
+    # capital, not a blanket "never hire while poor" rule). min_hires_
+    # per_day passed explicitly (not the ambient default, which T8.42
+    # raised to 8) - this test is about the reserve default, not the
+    # floor's currently accepted value.
+    params = {"dynamic_hiring": True, "min_hires_per_day": 1}
     got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24, money=1)
     assert got == 3
 
@@ -555,18 +576,26 @@ def test_hires_per_day_dynamic_hiring_respects_a_spare_capacity_buffer():
     # computed target is scaled up by (1 + hire_buffer_fraction) before
     # clipping to [min, max]. 48 tasks, turns_per_task_estimate=2.0,
     # 24 turns left -> raw target = ceil(96/24) - 1 = 3; with a 10%
-    # buffer, ceil(3 * 1.10) = ceil(3.3) = 4.
-    params = {"dynamic_hiring": True, "hire_buffer_fraction": 0.10}
+    # buffer, ceil(3 * 1.10) = ceil(3.3) = 4. min_hires_per_day passed
+    # explicitly (not the ambient default, which T8.42 raised to 8) -
+    # this test is about the buffer arithmetic, not the floor's currently
+    # accepted value.
+    params = {"dynamic_hiring": True, "hire_buffer_fraction": 0.10, "min_hires_per_day": 1}
     got = hires_per_day(params, pending_task_count=48, hour=0, turns_per_day=24)
     assert got == 4
 
 
 def test_hires_per_day_dynamic_hiring_buffer_defaults_to_zero():
     # No hire_buffer_fraction given - bit-identical to the unbuffered
-    # formula for every pre-T8.16 caller.
-    without_buffer = hires_per_day({"dynamic_hiring": True}, pending_task_count=48, hour=0, turns_per_day=24)
+    # formula for every pre-T8.16 caller. min_hires_per_day passed
+    # explicitly (not the ambient default, which T8.42 raised to 8) so
+    # both sides of the comparison stay below the floor.
+    without_buffer = hires_per_day(
+        {"dynamic_hiring": True, "min_hires_per_day": 1}, pending_task_count=48, hour=0, turns_per_day=24
+    )
     with_zero_buffer = hires_per_day(
-        {"dynamic_hiring": True, "hire_buffer_fraction": 0.0}, pending_task_count=48, hour=0, turns_per_day=24
+        {"dynamic_hiring": True, "hire_buffer_fraction": 0.0, "min_hires_per_day": 1},
+        pending_task_count=48, hour=0, turns_per_day=24,
     )
     assert without_buffer == with_zero_buffer == 3
 
@@ -688,7 +717,7 @@ def test_hires_per_day_workload_forecast_hiring_aware_matches_a_hand_computed_ta
     )
     melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
     total_turns = (cow_actions * 1 + melon_actions * 10) * 2.0  # turns_per_task_estimate
-    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)  # min/max_hires_per_day defaults
+    expected = min(max(math.ceil(total_turns / 24) - 1, 8), 8)  # min/max_hires_per_day defaults (T8.42: 8)
     params = {"dynamic_hiring": True, "workload_forecast_hiring_aware": True}
     got = hires_per_day(
         params,
@@ -726,7 +755,7 @@ def test_hires_per_day_workload_forecast_hiring_aware_defaults_to_on():
     )
     melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
     total_turns = (cow_actions * 2 + melon_actions * 5) * 2.0  # turns_per_task_estimate
-    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)  # min/max_hires_per_day defaults
+    expected = min(max(math.ceil(total_turns / 24) - 1, 8), 8)  # min/max_hires_per_day defaults (T8.42: 8)
     params = {"dynamic_hiring": True}
     got = hires_per_day(
         params, hour=0, turns_per_day=24, animal_tile_counts={"COW": 2}, crop_tile_counts={"MELON": 5}
@@ -793,19 +822,21 @@ def test_hires_per_day_workload_forecast_scaling_only_can_be_disabled_for_the_to
     # variant this task's own sweep needs to re-test at its own knobs
     # (see _DEFAULT_WORKLOAD_FORECAST_SCALING_ONLY's own comment for why).
     # 1 COW + 30 MELON: chosen so the two variants land on different
-    # clipped hire counts (2 vs 3), so this also proves the flag is
-    # actually wired to hires_per_day's output, not just to the per-tile
-    # helpers in isolation.
+    # clipped hire counts (1 vs 3 - min_hires_per_day passed explicitly
+    # below so T8.42's now-higher default floor of 8 doesn't mask either
+    # value), so this also proves the flag is actually wired to hires_
+    # per_day's output, not just to the per-tile helpers in isolation.
     cow_actions = _animal_actions_per_tile_day(
         "COW", 30, care_aware=False, fertilizer_income_aware=False, scaling_only=False
     )
     melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=False)
     total_turns = (cow_actions * 1 + melon_actions * 30) * 2.0  # turns_per_task_estimate
-    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)  # min/max_hires_per_day defaults
+    expected = min(max(math.ceil(total_turns / 24) - 1, 1), 8)  # min_hires_per_day=1, explicit below
     params = {
         "dynamic_hiring": True,
         "workload_forecast_hiring_aware": True,
         "workload_forecast_scaling_only": False,
+        "min_hires_per_day": 1,
     }
     got = hires_per_day(
         params,
@@ -851,23 +882,26 @@ def test_hires_per_day_workload_forecast_free_tile_weight_raises_the_forecast():
     # task_estimate multiplication, for unit consistency - see
     # hires_per_day's own docstring addendum), hand-computed below.
     # free_tiles=50/weight=1.0 chosen so the two variants land on
-    # different clipped hire counts (4 vs 2, both verified directly via
-    # score/turns computation before writing this, matching
-    # test_hires_per_day_workload_forecast_scaling_only_can_be_disabled_
-    # for_the_total_work_variant's own convention), so this also proves
-    # the weight is actually wired to hires_per_day's output, not just
-    # to the raw total_turns math in isolation.
+    # different clipped hire counts (4 vs 1 - min_hires_per_day passed
+    # explicitly below so T8.42's now-higher default floor of 8 doesn't
+    # mask either value, both verified directly via score/turns
+    # computation before writing this, matching test_hires_per_day_
+    # workload_forecast_scaling_only_can_be_disabled_for_the_total_work_
+    # variant's own convention), so this also proves the weight is
+    # actually wired to hires_per_day's output, not just to the raw
+    # total_turns math in isolation.
     cow_actions = _animal_actions_per_tile_day(
         "COW", 30, care_aware=False, fertilizer_income_aware=False, scaling_only=True
     )
     melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
     free_tile_weight = 1.0
     total_turns = (cow_actions * 1 + melon_actions * 10 + 50 * free_tile_weight) * 2.0
-    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 8)
+    expected = min(max(math.ceil(total_turns / 24) - 1, 1), 8)
     params = {
         "dynamic_hiring": True,
         "workload_forecast_hiring_aware": True,
         "workload_forecast_free_tile_weight": free_tile_weight,
+        "min_hires_per_day": 1,
     }
     got = hires_per_day(
         params,

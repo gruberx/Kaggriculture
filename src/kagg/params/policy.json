@@ -1,8 +1,8 @@
 {
-  "land_purchase_threshold_money": 15000,
+  "land_purchase_threshold_money": 0,
   "hires_per_day": 1,
   "dynamic_hiring": true,
-  "min_hires_per_day": 2,
+  "min_hires_per_day": 8,
   "max_hires_per_day": 8,
   "turns_per_task_estimate": 2.0,
   "hire_cash_reserve": 0,

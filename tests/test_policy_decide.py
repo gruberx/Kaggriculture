@@ -151,8 +151,13 @@ def test_decide_never_exceeds_ten_market_orders():
 
 
 def test_decide_queues_hire_when_hires_per_day_is_positive():
+    # dynamic_hiring explicitly off - this test is about the static
+    # hires_per_day path specifically, not dynamic_hiring's now-higher
+    # min_hires_per_day=8 default (T8.42), which would otherwise take
+    # over and mask the value asserted here - same isolation
+    # test_hire_is_never_crowded_out_by_sell_orders already uses.
     obs = _obs()
-    params = dict(DEFAULT_PARAMS, hires_per_day=2)
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=2)
     action = decide(obs, params)
     hire_orders = [o for o in action["market"] if o == ["HIRE"]]
     assert len(hire_orders) == 2
@@ -304,7 +309,11 @@ def test_decide_labor_units_reflects_the_real_dynamic_hiring_forecast_not_the_st
         return original(*args, **kwargs)
 
     monkeypatch.setattr(decide_module, "build_task_list", spy)
-    decide(obs, DEFAULT_PARAMS)
+    # min_hires_per_day pinned to its pre-T8.42 value of 2 - this test is
+    # about the real forecast (3) clearing a floor it's actually above,
+    # not T8.42's now-higher default floor of 8, which would otherwise
+    # swallow the forecast value this test exists to confirm.
+    decide(obs, dict(DEFAULT_PARAMS, min_hires_per_day=2))
 
     assert captured.get("plant_crop") == "MELON"
     assert captured.get("plant_qty") == 4
@@ -335,11 +344,16 @@ def test_decide_labor_units_reflects_free_tiles_via_the_workload_forecast(monkey
         return original(*args, **kwargs)
 
     monkeypatch.setattr(decide_module, "build_task_list", spy)
-    decide(obs, DEFAULT_PARAMS)
+    # min_hires_per_day pinned to its pre-T8.42 value of 2, same reason
+    # as the sibling test above - keeps the hand-verified 3/5 values
+    # meaningful instead of both clipping to T8.42's now-higher default
+    # floor of 8.
+    base_params = dict(DEFAULT_PARAMS, min_hires_per_day=2)
+    decide(obs, base_params)
     assert captured.get("plant_qty") == 3
 
     captured.clear()
-    params = dict(DEFAULT_PARAMS, workload_forecast_free_tile_weight=0.5)
+    params = dict(base_params, workload_forecast_free_tile_weight=0.5)
     decide(obs, params)
     assert captured.get("plant_qty") == 5
 
@@ -394,8 +408,12 @@ def test_decide_liquidates_the_shed_near_the_end_of_the_season():
 
 
 def test_decide_does_not_liquidate_early_in_the_season():
+    # hires_today=8 (T8.42's shipped min_hires_per_day) - "already
+    # staffed for today," so this turn's own HIRE orders don't crowd the
+    # SELL order off the 10-order cap.
     obs = _obs()
     obs["day"] = 0
+    obs["farms"][0]["hires_today"] = 8
     obs["private"]["shed"]["MELON"] = 50
     action = decide(obs, DEFAULT_PARAMS)
     sell_melon = [o for o in action["market"] if o[0] == "SELL" and o[1] == "MELON"]
@@ -591,7 +609,11 @@ def test_decide_defaults_use_fertilizer_to_false_when_unset():
 
 
 def test_decide_does_not_fertilize_by_default():
+    # hires_today=8 (T8.42's shipped min_hires_per_day) - "already
+    # staffed for today," so this turn's own HIRE orders don't crowd the
+    # SELL order off the 10-order cap.
     obs = _obs()
+    obs["farms"][0]["hires_today"] = 8
     obs["farms"][0]["tiles"][2][2] = {
         "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": True,
         "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
@@ -636,8 +658,10 @@ def test_decide_defaults_investment_anchor_to_unit_toward_shed_when_unset():
 
 
 def test_decide_does_not_hire_past_the_daily_target():
+    # hires_today matches the shipped min_hires_per_day=8 default (T8.42)
+    # - "already staffed for today," not the pre-T8.42 value of 2.
     obs = _obs()
-    obs["farms"][0]["hires_today"] = 2
+    obs["farms"][0]["hires_today"] = 8
     params = dict(DEFAULT_PARAMS, hires_per_day=2)
     action = decide(obs, params)
     assert [o for o in action["market"] if o == ["HIRE"]] == []
@@ -650,8 +674,15 @@ def test_decide_queues_land_purchase_when_affordable_and_over_threshold():
     # correctly decline here, since a fully-empty farm is exactly the
     # "don't buy more land yet" case; land_buy_max_free_tile_fraction=1.0
     # opts back into the fully-ungated mechanism to test threshold alone).
+    # hires_today=8 (T8.42's shipped min_hires_per_day) - "already
+    # staffed for today," so the day's own 8 HIRE orders don't crowd
+    # BUY_LAND out of the 10-order cap on this single-turn fixture (a
+    # real, once-per-day-at-most effect confirmed harmless across a full
+    # episode by tools/trace_t842.py - BUY_LAND still fires the same day,
+    # just not necessarily this exact synthetic snapshot's turn).
     obs = _obs()
     obs["farms"][0]["money"] = 10_000
+    obs["farms"][0]["hires_today"] = 8
     params = dict(DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=1.0)
     action = decide(obs, params)
     assert ["BUY_LAND"] in action["market"]
@@ -675,8 +706,11 @@ def test_decide_does_not_buy_land_while_most_tiles_are_free_when_the_gate_is_ena
 
 
 def test_decide_buys_land_when_the_gate_is_enabled_and_few_free_tiles_remain():
+    # hires_today=8 - see the sibling test above for why (T8.42's shipped
+    # min_hires_per_day, kept from crowding BUY_LAND off this turn).
     obs = _obs()
     obs["farms"][0]["money"] = 1_000_000
+    obs["farms"][0]["hires_today"] = 8
     for y in range(10):
         for x in range(10):
             if not (x < 2 and y < 2):  # leave only a 2x2 corner free
@@ -1234,9 +1268,13 @@ def test_decide_buys_wheat_once_an_animal_is_being_pursued():
     # market), feed is needed even before the animal is actually placed -
     # restocking should already be active so feed is on hand by the time
     # PLACE fires. animal_net_of_cost explicitly off - see the tests above.
+    # hires_today=8 (T8.42's shipped min_hires_per_day) - "already staffed
+    # for today," so this turn's own HIRE orders don't crowd the wheat
+    # restock (last in decide()'s own tail-ordering) off the 10-order cap.
     obs = _obs()
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW ranks first overall
     obs["private"]["shed"]["WHEAT"] = 0
+    obs["farms"][0]["hires_today"] = 8
     params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
     action = decide(obs, params)
     assert [o for o in action["market"] if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"] == [
