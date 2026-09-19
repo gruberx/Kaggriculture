@@ -704,6 +704,29 @@ _DEFAULT_ALWAYS_PURSUE_ONE_ANIMAL = False
 # animals_per_type also excluding already-capped types from _top_animal_
 # choice's own ranking - see the gating block in decide() for how both
 # pieces combine.
+#
+# **Measured a strong win rate, then REJECTED on a stricter guardrail, not
+# on win rate** (tools/measure_t843_stage2.py/trace_t843_stage2.py):
+# target_count=3 (all three animal types, cap left at its shipped 1) won
+# decisively on self-play - working 86% (43W/7L/0T), holdout 83.5%
+# (167W/33L/0T), Wilson [0.777, 0.880] - and traced cleanly (reaches
+# GOOSE+SHEEP+COW by day 3 in every traced seed, wins on final money in
+# all 5). But test_no_animal_escapes_across_the_golden_seeds (T8.38's own
+# never-re-recordable guardrail) then found **30 real animal escapes
+# across the 6 golden seeds** at target_count=3 (zero at target_count=1)
+# - that guardrail's own explicit rule makes an escape disqualifying
+# regardless of win rate, so this was reverted despite the strong number.
+# Root cause, verified structurally in code, not just inferred from the
+# count: _WHEAT_FEED_RESERVE (10 above) and wheat_restock_threshold/
+# wheat_restock_qty (5/10) are all flat constants sized for "at most 1
+# animal" (the only case that ever existed before this task) - three
+# animals with different feed schedules (GOOSE interval=1, SHEEP
+# interval=3, COW interval=2) roughly triple simultaneous feed demand
+# with no matching scale-up, causing recurring consecutive_unfed>=2
+# escapes, especially before hiring ramps up early game. Kept available
+# (tested, default 1 - bit-identical to every pre-T8.43 caller) for a
+# future revisit once the feed-supply chain itself scales with animal
+# count - a concrete, named next step, not built here.
 _DEFAULT_ALWAYS_PURSUE_ANIMAL_TARGET_COUNT = 1
 
 # T8.18: verified directly against kaggriculture.py that PICKUP has no

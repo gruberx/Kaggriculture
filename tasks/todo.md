@@ -2341,6 +2341,86 @@ project's own established finding, a fresh submission's score is volatile for it
       `tools/trace_t842.py`, the `src/kagg/` param changes, the 19 fixed pre-existing tests, this entry.
       No Kaggle submission yet - ask before submitting, as always.
 
+- [x] T8.43 — post-expansion refinement: adaptive hiring, harvest-timing fix, real multi-animal pursuit
+      (the user's own detailed feedback after watching real games post-T8.42, 2026-09-19, four
+      concrete problems - see `/root/.claude/plans/jazzy-jumping-lamport.md` for the full request and
+      investigation). **Stages 1-2 measured (both reported honestly - a rejected null result and a
+      strong-win-rate-but-guardrail-rejected result); Stages 3-5 not yet started.**
+
+      **Investigation found two of the user's four claims were real, previously-undiscovered mechanism
+      gaps, not just calibration questions** (full evidence in the plan file): (1) hiring is a flat
+      floor with no reactive boost when a new quadrant opens - `workload_forecast_free_tile_weight`
+      already exists for this but was only ever measured under the old `land_purchase_threshold_
+      money=15000` regime (T8.32/T8.34), never re-tested since T8.42; (2) `always_pursue_one_animal`'s
+      own gate (`not placed_animal_type_counts`) is a one-shot trigger that permanently disables itself
+      the instant *any* animal exists anywhere - the real reason `max_animals_per_type` has never once
+      bound in any measurement (T8.41: `animals_total` stuck at exactly 1 regardless of the cap); (3)
+      confirmed the user's own watering question ("yes, watering past first eligibility keeps adding
+      yield") and found the ranking layer (`strategy._crop_yield_and_tile_days`) already assumes full
+      bonus-window maturation while the task layer (`tasks._is_actually_harvestable`) has always
+      harvested the instant a crop is legally harvestable - a real, previously undocumented
+      inconsistency.
+
+      **Stage 1 (`tools/measure_t843.py`, `defer_one_time_harvest_to_max_yield`) - REJECTED (null
+      result)**: first attempt (deferring every one-time crop's harvest to `max_yield_day`) was
+      decisively rejected - 40% win rate (20W/30L/0T), n=50. Traced (`tools/trace_t843_stage1.py`) to a
+      real cost the plan's own first draft got wrong: MELON's bonus window (ages 6-12) does precede
+      `first_yield_day=10` for *most* of its span but not all of it - ages 10-12 are inside both the
+      window and past eligibility, so deferring unscoped delayed MELON's own harvest (this project's
+      dominant crop by far its highest tile-turnover volume) by up to 2 real days per cycle. Re-scoped
+      to only defer crops whose bonus window *starts* at or after `first_yield_day` (`min(watering_
+      bonus_window(crop)) >= first_yield_day` - a principled, general condition, not a hardcoded
+      WHEAT/CARROT list) and re-measured: `0.300` (15W/12L/23T) - mostly ties (WHEAT/CARROT are rarely
+      the top-ranked crop under current play, so the mechanism rarely even activates) and roughly a
+      coin flip (15W/12L) in the minority of games where it does. Below the `0.58` meaningful-win
+      threshold either way - kept available (tested, off by default) but not accepted. **What's still
+      open**: whether WHEAT/CARROT would activate more often (and the fix matter more) once Stage 3's
+      hiring work or a starting-portfolio nudge (Stage 4) actually gets them planted in volume - not
+      re-tried here per the plan's own "move on, don't get stuck" discipline.
+
+      **Stage 2 (`tools/measure_t843_stage2.py`/`trace_t843_stage2.py`, `always_pursue_animal_target_
+      count`) - measured a strong, decisively-confirmed win rate, then REJECTED on a stricter guardrail,
+      not on win rate.** Generalized `always_pursue_one_animal`'s one-shot gate to a count (`sum(placed_
+      animal_type_counts.values()) < target_count`, bit-identical at the default 1), with `_top_animal_
+      choice` gaining an `excluded_types` parameter so a higher target count diversifies across animal
+      types (skipping any already at `max_animals_per_type`'s own cap) instead of re-buying unlimited
+      copies of the single highest-scoring type - closing the exact structural gap the investigation
+      found. Grid on 50 working seeds: `target_count=2,cap=1` `0.600` (30W/20L/0T, `accept_candidate=
+      False`); `target_count=3,cap=1` (all three animal types) `0.860` (43W/7L/0T, clears); `target_
+      count=2,cap=2` (a second copy of the *same* type instead of diversifying) `0.400` (20W/30L/0T -
+      actively worse, a second COW is a weaker bet than a first SHEEP/GOOSE). `target_count=3,cap=1`
+      confirmed at n=200: **`0.835` (167W/33L/0T), Wilson `[0.777, 0.880]`, `accept_candidate=True`.**
+      Traced (5 seeds, 900-904): candidate reaches GOOSE+SHEEP+COW by day 3 in every seed (baseline: a
+      single COW all season), winning on final money in all 5 traced seeds.
+
+      **Then `pytest tests/test_agent_golden_episodes.py` found `test_no_animal_escapes_across_the_
+      golden_seeds` (T8.38's own permanently non-re-recordable guardrail) failing: 30 real animal
+      escapes across the 6 golden seeds at `target_count=3` (zero at `target_count=1`).** That
+      guardrail's own explicit rule ("a farm having its animal escape is never an improvement to
+      accept") makes this disqualifying regardless of the win rate - reverted `always_pursue_animal_
+      target_count` back to its bit-identical default of `1` despite the strong measured number, exactly
+      the discipline this task's own plan named up front ("never re-recordable... rejected regardless
+      of win rate"). **Root cause, verified structurally in code, not just inferred from the escape
+      count**: `decide._WHEAT_FEED_RESERVE` (10) and `wheat_restock_threshold`/`wheat_restock_qty`
+      (5/10) are all flat constants, sized for "at most 1 animal" (the only case that ever existed
+      before this task, enforced by the very one-shot gate this stage fixed) - three animals with
+      different feed schedules (GOOSE `interval=1`, SHEEP `interval=3`, COW `interval=2`) roughly triple
+      simultaneous feed demand with no matching scale-up, causing recurring `consecutive_unfed>=2`
+      escapes, especially before hiring ramps up early game. **What's still open, a concrete named next
+      step**: scale the feed-supply chain (`_WHEAT_FEED_RESERVE`/`wheat_restock_threshold`/`wheat_
+      restock_qty`, or `wheat_self_sufficiency_aware`'s own existing mechanism) with the real number of
+      animals placed before ever re-attempting `target_count>1` - the mechanism itself (the gated
+      `always_pursue_animal_target_count` param) is kept available, off/safe by default, exactly this
+      project's established convention for a well-evidenced-but-currently-unsafe idea.
+
+      Both new mechanisms (code + tests) committed as gated, bit-identical-off building blocks
+      (`3d9f642`, "T8.43 Stage 0"). Full suite green (557), `compileall`/`boundary_check.py` clean.
+      Golden money table unchanged (both stages ship at their bit-identical defaults) -
+      `test_golden_episodes_reproduce_recorded_final_money` and the T8.38 escape guardrail both pass
+      unchanged, no re-record needed. **Stages 3 (hiring re-test), 4 (starting portfolio, contingent on
+      1-2), 5 (WHEAT sell-withholding) not yet started.** No Kaggle submission - ask before submitting,
+      as always.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
