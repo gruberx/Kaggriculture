@@ -2135,6 +2135,109 @@ project's own established finding, a fresh submission's score is volatile for it
       per the plan; retrying any of the named mechanisms is separate, later, measured work. No Kaggle
       submission.
 
+- [x] T8.41 — joint labor + animal-cap resweep: unpinning, priority, and domestic WHEAT (the T8.40
+      follow-up, user's own request, 2026-09-19: "давай теперь на основе этих данных обновим тактику" -
+      update tactics based on T8.40's real-data gap). Two rounds of follow-up during planning, both
+      investigated directly against the real code before finalizing the plan (see
+      `/root/.claude/plans/jazzy-jumping-lamport.md` for the full write-up folded into this entry):
+
+      1. **"Is anything else hardcoded to the farmer specifically?"** Grepped every `unit_index`/
+         `_PINNED_UNIT_INDEX` use in `tasks.py`: exactly one action was still farmer-only - the animal
+         PICKUP (T8.39 deliberately left it pinned, scoping that measurement to the wheat pipeline
+         alone). Everything else was already generalized.
+      2. **"Once bought, an animal's setup should outrank all other map tasks - is that actually true
+         today?"** Read `assign_units`/`_new_investment_tasks` directly: BUILD_COOP/BUILD_PASTURE/
+         animal-PICKUP/PLACE all sat at `PRIORITY_PLANT` - the same tier as ordinary crop planting -
+         and `assign_units` resolves tiers strictly in order, so this pipeline got zero free units
+         whenever tiers 0-2 already consumed them all, the expected case on a busy farm. Confirmed, not
+         assumed.
+      3. **"Should purchases be spread via specialized worker groups, and what do real WHEAT numbers
+         show?"** Seeds are a non-issue mechanically - PLANT draws from the shared `private["seeds"]`
+         pool, no per-unit pickup step exists, so no "one unit hoards the seeds" failure mode is even
+         possible. Recommended against static worker-group specialization: `assign_units`'s existing
+         global-nearest-(unit,task)-pair matching already load-balances once the two real gaps above are
+         closed, and a rigid split would trade T8.2's proven turn-to-turn assignment stability for a
+         partition with no evidence it's needed. Computed directly from T8.40's already-saved extract
+         (no new fetching, 330 real episode-day rows): top players run WHEAT-tiles/animals-held at
+         median `1.06`/mean `1.09` during the mid-game plateau, `corr(WHEAT bought, WHEAT price) =
+         -0.03` (they grow their own feed, not buy their way into a price spike) - ours: exactly `0`
+         across all 640 sampled team-days (verified turn-by-turn, WHEAT always bought, never planted).
+         `wheat_self_sufficiency_aware` (T8.24, already built) measured as an exact no-op before because
+         "animals essentially never get bought" - this task's own animal scaling was meant to be the
+         missing demand that mechanism needed.
+
+      **Stage 0 (built, committed separately first)**: two new flags, both default `False`, bit-
+      identical when off. `animal_pickup_unpinned` mirrors `feed_pickup_unpinned`'s own mechanism for
+      the one pipeline T8.39 left out of scope. `prioritize_animal_setup` adds a new
+      `PRIORITY_ANIMAL_SETUP` tier (between `PRIORITY_HARVEST` and `PRIORITY_ROUTINE_CARE`, still below
+      `PRIORITY_PREVENT_LOSS` - an unplaced animal is idle capital, not something actually at risk the
+      way a genuine prevent-loss target is) for BUILD_COOP/BUILD_PASTURE/animal-PICKUP/PLACE. 15 new
+      tests (`tests/test_policy_tasks.py`, `tests/test_policy_decide.py`), full suite green (547
+      passed), `compileall`/`boundary_check.py` clean.
+
+      **Stage A (measured, `tools/measure_t841.py`) - decisively rejected, not a marginal miss**: the
+      untested cell (T8.22/T8.25/T8.27/T8.28/T8.32/T8.34/T8.37/T8.39 all tested labor and animal-cap
+      increases on the wrong cell - hiring increases with at most 1 animal on the farm, animal-cap
+      increases at flat `min_hires_per_day=2` - confirmed directly against `strategy.hires_per_day()`).
+      A diagonal grid, each candidate = `(min_hires_per_day, max_animals_per_type)` bundled with
+      `feed_pickup_unpinned=True`/`animal_pickup_unpinned=True`/`prioritize_animal_setup=True`, on the
+      50-seed working block against the shipped baseline: `(4, 2)` win rate `0.020` (1W/49L/0T),
+      `(6, 3)` `0.000` (0W/50L/0T), `(8, 4)` `0.000` (0W/50L/0T) - monotonically *worse* with more
+      labor/animals, not the predicted rise-then-plateau (a large win itself would have been suspicious
+      per T8.33's own lesson; a monotonic loss like this is a different, real signal). Baseline row
+      (identical params played against itself, a harness sanity check) landed at the expected 50.0%/
+      0W/0L/50T. No candidate cleared `accept_candidate`; no 200-seed holdout run (nothing to confirm),
+      no Stage B/C (both gated on Stage A clearing, per the plan).
+
+      **Traced (`tools/trace_t841.py`, seeds 100-102 at (4,2), seed 100 at (8,4)) before writing this
+      up - the real cause, not a bug**: `max_animals_per_type` never actually bound in *any* sampled
+      seed, baseline or candidate alike - `animals_total` stayed at exactly `1` the entire game every
+      time. A second animal simply never outranks crops under today's market/scoring regardless of the
+      cap or labor available - the cap-increase half of this task's own hypothesis was never really
+      exercised by any of these games. The real driver of the loss: the single NW quadrant's ~24
+      workable tiles are already fully worked by the *baseline's* 2 units within the first several
+      days - extra hands have nothing more productive to do until land actually expands, and land
+      purchase (`land_purchase_threshold_money`/`land_buy_*`) is gated purely on money, never on labor,
+      so more hands don't buy land any sooner on their own. Where the extra hands' time went instead:
+      comparable-to-slightly-worse weed counts (routine care missed during the same brief per-tile idle
+      windows, now spread across more units walking further for the same task density) and real, if
+      modest, extra hire cost (`(8,4)`: `$1,620` over the season vs. baseline's `$60` - the fib-scaled
+      per-day hire cost genuinely compounds at 8 hires/day even though it's negligible at 2).
+      `sell_revenue` came in *lower* for the candidate in most traced seeds too (e.g. seed 100 `(8,4)`:
+      `$43,793` vs. baseline's `$50,564`) - coordination overhead, not just idle capacity, a real
+      downside from more units competing for the same small tile set. In the one case extra hands *did*
+      eventually fund a 3rd quadrant (`(8,4)`, seed 100: 3 quadrants vs. baseline's 2), it happened at
+      day 29 - one turn from season end, too late to capitalize on before liquidation.
+
+      **Verdict: rejected, with the same rigor as T8.25/T8.28/T8.37's own null-result precedent.**
+      Stage 0's two flags ship (default `False`, a real correctness fix each - the farmer-only PICKUP
+      pin and the priority-starvation gap are both genuine, confirmed defects, worth having available
+      even though this specific bundle didn't pay off), but no behavioral default changes:
+      `min_hires_per_day` stays `2`, `max_animals_per_type` stays `1`,
+      `feed_pickup_unpinned`/`animal_pickup_unpinned`/`prioritize_animal_setup` stay `False`. No
+      golden-episode re-record needed (shipped defaults byte-identical; both golden-episode tests,
+      including the permanent T8.38 escape guardrail, passed unchanged as part of the full suite).
+
+      **What this actually resolves vs. what's still open**: T8.22/T8.25/T8.37/T8.39's shared "revisit
+      `max_animals_per_type` once real labor exists" reopening condition is now closed, decisively - not
+      because labor was the missing piece, but because it wasn't: land was. **The real, well-evidenced
+      next narrower thing** (T8.40's own headline finding, still unaddressed): top players reach a 2nd
+      quadrant by median day 6-9 (22/22), ours only around day 22-24 in this task's own traces, gated
+      purely on `land_purchase_threshold_money`/`land_buy_max_free_tile_fraction`/`land_buy_min_
+      frontier_distance` - none of which this task touched. A future task should test land-expansion
+      timing directly (e.g. a lower/scaling `land_purchase_threshold_money`, or gating less
+      conservatively on `land_buy_min_frontier_distance`), decoupled from labor - land, not labor, is
+      what top players' extra hands actually have to work with. Separately, `wheat_self_sufficiency_
+      aware`/the real WHEAT-ratio finding (investigation question 3 above) remains untested in practice
+      for the same reason `max_animals_per_type` never bound: animals never scaled up enough in this
+      task's own measurement to create the feed demand that mechanism needs - worth revisiting once (or
+      if) a future land-expansion task actually gets multiple animals onto the farm.
+
+      Full suite green (547 tests, including the 15 new Stage 0 ones), `compileall`/`boundary_check.py`
+      clean. Two commits: Stage 0's plumbing, then this entry plus `tools/measure_t841.py`/`tools/
+      trace_t841.py` (one-off tuning/diagnostic scripts, not part of the committed test suite - no
+      further `src/kagg/` changes, Stage A was rejected). No Kaggle submission (nothing accepted).
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
