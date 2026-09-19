@@ -1617,16 +1617,36 @@ def decide(obs: dict, params: dict) -> dict:
     # (a real, currently-unaddressed gap for a multi-animal-per-day
     # scenario - see parallel_animal_acquisition's own docstring - not
     # something this forecast can paper over by assuming more).
+    #
+    # T8.44 fix (2026-09-19, the user's own follow-up after seeing a
+    # per-day trace of this forecast): uses `fallback_crop` here, not
+    # `plant_crop`. `plant_crop` (just above, `fallback_crop if have_seed
+    # else None`) stays `None` until a seed is *physically on hand* -
+    # `have_seed` - which a fresh BUY_SEED order can't satisfy until next
+    # turn (T8.5: market orders settle after this turn's unit actions).
+    # `fallback_crop` itself is the ranking layer's already-computed
+    # intent (real market prices already factored in via `_top_crop_
+    # basket`), available with zero seeds held - gating the forecast on
+    # `plant_crop` silently blinded it to that already-known intent on
+    # day 0 (or any day starting from zero seed stock of the target
+    # crop): traced directly, day 0's forecast said 4 total actions
+    # (maintenance=0, new_crop=0) against a real ~46, entirely because
+    # `plant_crop` was `None` at that instant. Still respects the same
+    # `stuck_animal` gate `plant_crop` itself is nulled by ("finish the
+    # paid-for animal before starting a new crop too") - forecasting new
+    # planting while mid-acquisition would be wrong for the identical
+    # reason.
+    plant_crop_intent = fallback_crop if stuck_animal is None else None
     planned_new_animals = 1 if acquisition_animal is not None else 0
     planned_new_crop_tiles = 0
-    if plant_crop is not None:
+    if plant_crop_intent is not None:
         day_plan_max_new_tiles = params.get(
             "day_plan_max_new_tiles_per_day", _DEFAULT_DAY_PLAN_MAX_NEW_TILES_PER_DAY
         )
         cap = min(free_tiles, day_plan_max_new_tiles)
         if params.get("day_plan_new_tiles_cash_aware", _DEFAULT_DAY_PLAN_NEW_TILES_CASH_AWARE):
-            seed_cost = CROPS[plant_crop]["seed"]
-            seeds_held = seeds.get(plant_crop, 0)
+            seed_cost = CROPS[plant_crop_intent]["seed"]
+            seeds_held = seeds.get(plant_crop_intent, 0)
             affordable = int(me["money"] // seed_cost) if seed_cost > 0 else cap
             cap = min(cap, seeds_held + affordable)
         planned_new_crop_tiles = max(0, cap)

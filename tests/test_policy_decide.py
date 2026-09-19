@@ -533,6 +533,59 @@ def test_decide_planned_new_crop_tiles_cash_aware_can_be_disabled(monkeypatch):
     assert captured.get("planned_new_crop_tiles") == 25
 
 
+def test_decide_planned_new_crop_tiles_uses_fallback_crop_with_zero_seeds_held(monkeypatch):
+    # T8.44 fix (2026-09-19, the user's own follow-up after a per-day
+    # trace showed day 0's forecast was 4 instead of a real ~46): with
+    # zero seeds held (a genuinely fresh farm - plant_crop is None,
+    # have_seed is False), the forecast must still see the ranking
+    # layer's already-known intent (fallback_crop) instead of reporting
+    # zero planned new planting.
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()  # fresh farm - free_tiles=100, private.seeds={} (empty)
+    obs["market"]["inventory"]["MELON"] = 1  # scarce -> highest price -> ranks first
+    obs["farms"][0]["money"] = 1_000_000  # affordability must not be the binding cap here
+    assert obs["private"]["seeds"] == {}
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("planned_new_crop_tiles") == 25  # free_tiles/day_plan_max_new_tiles_per_day cap
+
+
+def test_decide_planned_new_crop_tiles_is_zero_while_finishing_a_stuck_animal(monkeypatch):
+    # plant_crop itself is nulled while stuck_animal is not None ("finish
+    # the paid-for animal before starting a new crop too") - the forecast
+    # must respect the same gate, not just fall back to fallback_crop
+    # unconditionally.
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    obs["market"]["inventory"]["MELON"] = 1
+    obs["private"]["seeds"] = {"MELON": 100}
+    obs["farms"][0]["money"] = 1_000_000
+    obs["private"]["shed"]["COW"] = 1  # a bought-but-unplaced animal -> stuck_animal
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("planned_new_crop_tiles") == 0
+
+
 def test_decide_hire_min_turns_left_escape_hatch_still_hires_the_first_hand_of_the_day():
     # hires_today == 0 is a deliberate escape hatch - late in the day, a
     # gate that blocked the day's very first hire would leave the farm
