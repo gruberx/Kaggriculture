@@ -2417,9 +2417,67 @@ project's own established finding, a fresh submission's score is volatile for it
       (`3d9f642`, "T8.43 Stage 0"). Full suite green (557), `compileall`/`boundary_check.py` clean.
       Golden money table unchanged (both stages ship at their bit-identical defaults) -
       `test_golden_episodes_reproduce_recorded_final_money` and the T8.38 escape guardrail both pass
-      unchanged, no re-record needed. **Stages 3 (hiring re-test), 4 (starting portfolio, contingent on
-      1-2), 5 (WHEAT sell-withholding) not yet started.** No Kaggle submission - ask before submitting,
-      as always.
+      unchanged, no re-record needed.
+
+      **Stage 3 (`tools/measure_t843_stage3.py`/`measure_t843_stage3b.py`, dynamic hiring re-test) -
+      REJECTED, with a sharper structural diagnosis than the plan started with.** Before sweeping
+      anything, found a real, previously-unnoticed fact: T8.42 raised `min_hires_per_day` 2 -> 8 but
+      never touched `max_hires_per_day` (already shipped at 8) - so today's shipped params have
+      `min_hires_per_day == max_hires_per_day == 8`. `strategy.hires_per_day`'s own clip, `min(max(
+      target, min_hires), max_hires)`, collapses to exactly 8 regardless of what the forecast computes -
+      `dynamic_hiring=True` is currently inert in practice, a flat 8 every day. Two sub-experiments, both
+      on the 50-seed working block:
+      - **3a (lower the floor)**: `min_hires_per_day` in `{2, 4}` x `workload_forecast_free_tile_weight`
+        in `{0.0, 0.1}`, `max_hires_per_day` left at 8. Decisively rejected at every point - `min=2`:
+        `0.080` (4W/46L/0T); `min=4`: `0.240` (12W/38L/0T). Weight 0.0 and 0.1 produced bit-identical
+        W/L records at every single seed - not a bug, a real finding: the forecast's own animal/crop-turn
+        total (with or without a small free-tile term) computes well below 8 most of the time, so `min`
+        clips it back up regardless of the weight either way. Lowering the floor just lets that
+        undersized forecast value through - actively harmful, confirming T8.34's own original "mistimed/
+        undersized" finding on this mechanism, now under the new land/labor regime too, not just the old
+        one.
+      - **3b (raise the ceiling instead, the user's own literal formula)**: `max_hires_per_day` in
+        `{12, 16}` x `workload_forecast_free_tile_weight` in `{0.3, 1.0}` (the user's own request treats
+        free and occupied tiles equally, not "small relative to 1.0" as the mechanism's own docstring
+        assumed), `min_hires_per_day` left at the accepted 8. Every single point tied the baseline
+        exactly - `0.000` (0W/0L/50T), bit-identical behavior on all 50 seeds, not just a weak effect.
+        **Mechanically verified why, not just observed**: `target = ceil(total_turns / 24) - 1` needs
+        `total_turns > 216` to ever exceed 8 (`(8+1)*24`). At `weight=1.0`, `free_tile_turns` alone maxes
+        out at 100 (the entire board, best case) - even with every animal/crop-turn term added on top,
+        216 is structurally out of reach for a 100-tile board. The `/24` full-day-divide the mechanism
+        was designed with (T8.26/T8.32, deliberately dividing by the whole day rather than remaining
+        turns, per that docstring's own reasoning) makes it roughly an order of magnitude too small to
+        ever compete with a static floor of 8, not just occasionally too small.
+      **Verdict: the accepted static floor (`min_hires_per_day=8`, T8.42) is doing real, necessary work
+      that the "dynamic" forecast mechanism cannot currently replace or usefully augment at any tested
+      setting - not a tuning miss, a structural mismatch between the forecast's own `/turns_per_day`
+      scaling and what a competitive hiring level (8+) actually requires.** `workload_forecast_free_
+      tile_weight` stays at its shipped bit-identical `0.0`; `min`/`max_hires_per_day` stay at 8. **A
+      concrete next step, not attempted here**: redesign the forecast's own scale (e.g. divide by
+      `turns_left_today` like the reactive `pending_task_count` path does, or drop the `/turns_per_day`
+      full-day framing entirely) before ever re-sweeping this axis again - the current formula's ceiling
+      is the problem, not any single parameter choice within it.
+
+      **Stage 4 (starting portfolio) - deferred, not built**: contingent per the plan on Stages 1-2
+      first showing the organic ranking already produces something close to the user's proposed mix.
+      Stage 2's mechanism (the one that would produce real multi-animal diversification) was rejected on
+      the escape guardrail, not accepted - building a forced starting allocation on top of a still-unsafe
+      feed-supply chain would risk recreating the same escape problem from a different angle. Waits on
+      Stage 2's own named next step (scaling the feed-supply chain with animal count) before this
+      question can be usefully re-asked.
+
+      **Stage 5 (WHEAT sell-withholding) - not attempted this task**, deprioritized given Stages 1-3's
+      combined evidence: the user's own proposed starting mix leaned on WHEAT/animals maturing faster
+      than MELON, but Stage 1 found WHEAT rarely even gets planted under current play (mostly ties) and
+      Stage 2's animal diversification is blocked on the same feed-scaling prerequisite as Stage 4 -
+      withholding WHEAT sales to deny an opponent's (currently rare, on our own side) animal economy has
+      a weaker case to make right now than when the plan was first written. T8.41's own real-leaderboard
+      correlation (`corr(combined WHEAT bought, WHEAT price) ~ -0.03`) already flagged this as the
+      weakest-evidenced of the four original ideas.
+
+      Committed: `tools/measure_t843_stage3.py`, `tools/measure_t843_stage3b.py`, this entry. No param
+      changes from Stage 3 (rejected). Full suite green, `compileall`/`boundary_check.py` clean, no
+      re-record needed (nothing accepted). No Kaggle submission - ask before submitting, as always.
 
 ## Not planned yet (see plan.md)
 

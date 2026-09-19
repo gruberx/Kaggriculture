@@ -822,7 +822,23 @@ _DEFAULT_WORKLOAD_FORECAST_SCALING_ONLY = True
 # for every caller that doesn't set it, matching this module's own
 # graduated-weight convention - e.g. T8.3h's crop_self_impact_opponent_
 # weight - rather than an all-or-nothing bool). Not yet measured in
-# self-play.
+# self-play (at the time this comment was first written).
+#
+# T8.43: measured twice more under T8.42's now-shipped min_hires_per_
+# day=8/land_purchase_threshold_money=0 regime (tools/measure_t843_
+# stage3.py/stage3b.py) and rejected both ways - see tasks/todo.md's own
+# T8.43 Stage 3 entry for the full numbers. Mechanically verified, not
+# just observed: hires_per_day's own `target = ceil(total_turns / turns_
+# per_day) - 1` needs total_turns > 216 to ever exceed 8 - even at
+# weight=1.0 (the user's own literal "free and occupied tiles count
+# equally" formula) free_tile_turns alone maxes out at 100 (the entire
+# board), nowhere near enough. The forecast's own full-day `/turns_per_
+# day` scale is roughly an order of magnitude too small to ever compete
+# with or usefully augment a static floor of 8 - a structural ceiling on
+# this whole mechanism, not a parameter-choice problem. A real fix would
+# need to change the forecast's own scale (e.g. divide by turns_left_
+# today like the reactive pending_task_count path does), not sweep this
+# weight again as-is.
 _DEFAULT_WORKLOAD_FORECAST_FREE_TILE_WEIGHT = 0.0
 
 # Matches tools/analyze_unit_economics.py's own SEASON_LENGTH_DAYS - a
