@@ -2733,6 +2733,42 @@ project's own established finding, a fresh submission's score is volatile for it
       `plant_while_animal_pending` is worth turning on for the shipped 8-hand config (measured neutral-to-worse).
       Committed: `4b16013` (code+tests), this entry + `tools/measure_t845.py`. No Kaggle submission.
 
+- [x] T8.46 - two-step "sell everything, then buy seeds on the real new prices" (the user's idea, 2026-09-19).
+      Traced cause first (`flip.py`, seeds 900-902, day 11): the T8.45 bulk seed buy at ~ turn 11.01 was priced on
+      the market *before* the agent's own sale of last night's harvest (85-89 melons in the shed, dripped 5/turn)
+      was priced in; 6-8 turns later MELON fell from 260 to 189 (level with STRAWBERRY 187), the ranking flipped
+      and the 12-15 bought MELON seeds were stranded (17 MEL to the end of the game in all three seeds). The
+      premise (89 melons in the shed) was already in the observation at purchase time; the ranking just does not
+      price its own pending sales. An agent cannot query prices mid-turn (`decide()` returns every order at once,
+      `_process_market` settles them afterwards, new prices appear in the next observation) - hence two steps.
+      Built `defer_seed_purchase_on_crop_sale` (0 = off): a turn whose previewed sale of crop products is >= N
+      units sends no BUY_SEED; the next turn buys on the real post-sale prices. Sell-everything half = the existing
+      `drip_sell_max_per_turn` set large. Commit + 9 tests, suite 644, golden/boundary untouched (defaults off).
+      Verified on the real trace: 11.00 `SELL MELON 89`, no BUY; 11.01 real MELON 183 vs STR 186 (my projection
+      was 189) -> STRAWBERRY top, 17 STR bought, no stranded MELON.
+
+      **Measured (`tools/measure_t846.py`, 50 seeds vs the shipped baseline)**: day-plan min=2 + T8.45 bundle
+      `0.020` -> `+ dump` `0.400` (20W/30L) -> `+ dump + defer` `0.400` (identical); min=4 + bundle + dump +
+      defer `0.960` (48W/2L); **shipped hiring + dump only `1.000` (50W/0L), 200-seed holdout `1.000` (200W/0L/0T,
+      Wilson [0.981, 1.0]) - `accept_candidate=True`**; adding defer / bulk seeds / the full bundle on top of the
+      shipped hiring changed nothing (all `1.000`, ceiling). The defer half shows no measurable effect anywhere
+      (identical W/L to dump alone at every pair) - it works mechanically but the arena cannot see it.
+
+      **Why this is NOT flipped to default, checked before believing a perfect score**: head-to-head money is
+      robust (seed 900: 58244 vs 42360, same in both seats) but 200/200 is a *mirror-market* effect. The arena
+      opponent is the shipped drip-seller competing for the same MELON price: dumping first captures the high
+      price before the rival's supply arrives (avg 235/unit vs 197 in the traced day). Against the external
+      opponents the golden tests use, 20 seeds each: vs `starter` dump-only `+551` mean (12/20 better), vs `pass`
+      `+3120` (13/20 better); the min=4 + bundle + dump + defer point is `-959` / `-891` (9/20 each) - i.e. its
+      arena `0.96` does not carry over. The six golden seeds move both ways (starter/1 54893 -> 48899, starter/2
+      64798 -> 67418, pass/1 56320 -> 51571, pass/2 61973 -> 64263). So: dump-only is non-negative on average vs
+      non-competing opponents and huge vs a same-market rival; whether the real ladder rivals behave like the
+      mirror is unknowable from here. Defaults stay off (golden money table would also need a 21st re-record) -
+      the user decides. `drip_sell_max_per_turn` is the one param to flip if they choose to.
+      Side finding: T8.45's "1W/49L at min=2" was mostly the drip-sale starving cash (it recovers to 0.40 with
+      dump alone), so the day-plan line is less dead in the arena than T8.44 concluded - but the external check
+      says it is still not a gain in absolute money.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
