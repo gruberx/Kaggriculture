@@ -1494,13 +1494,13 @@ def decide(obs: dict, params: dict) -> dict:
     # fell through to the bare `unlocked_tiles += 1` below, uncounted
     # beyond that) costs exactly one DIG (`kagg.policy.tasks.build_task_
     # list`'s own WEED handling), counted here too.
-    # T8.44 follow-up (2026-09-19, the user's own request): computed here,
-    # early - `unlocked_quadrants` doesn't depend on the tile scan below -
-    # so it's available for the day-plan forecast's quadrant-count-aware
-    # `turns_per_task` lookup (see `strategy.hires_per_day`'s own
-    # docstring). `n_unlocked_extra` (land-purchase gating, further below)
-    # stays a separate, unrelated read - this one is `len(...)`, not
-    # `len(...) - 1`.
+    # Computed here, early - `unlocked_quadrants` doesn't depend on the
+    # tile scan below - purely to avoid a second, later read for
+    # `n_unlocked_extra` (land-purchase gating, further below, which is
+    # `len(...) - 1`). A quadrant-count-aware day-plan hiring lookup was
+    # tried here too (T8.44 follow-up) and reverted - see `strategy.
+    # hires_per_day`'s own docstring/neighbor-constant comment for the
+    # measured regression that caused the revert.
     n_quadrants = len(me.get("unlocked_quadrants", ["NW"]))
     # T8.44 follow-up: a real, hand-verified per-tile action cost this
     # session's own trace found missing, not assumed - kaggriculture.py's
@@ -1762,7 +1762,6 @@ def decide(obs: dict, params: dict) -> dict:
         maintenance_actions_today=maintenance_actions_today,
         planned_new_crop_tiles=planned_new_crop_tiles,
         planned_new_animals=planned_new_animals,
-        n_quadrants=n_quadrants,
     )
     labor_units = 1 + early_target_hires
     max_plants_per_unit = params.get("max_plants_per_unit", _DEFAULT_MAX_PLANTS_PER_UNIT)
@@ -1930,7 +1929,6 @@ def decide(obs: dict, params: dict) -> dict:
         maintenance_actions_today=maintenance_actions_today,
         planned_new_crop_tiles=planned_new_crop_tiles,
         planned_new_animals=planned_new_animals,
-        n_quadrants=n_quadrants,
     )
     hires_today = me.get("hires_today", 0)
     # T8.44: a same-day (mid-day) top-up hire - e.g. a BUY_LAND settling

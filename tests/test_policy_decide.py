@@ -402,44 +402,6 @@ def test_decide_passes_maintenance_actions_today_to_hires_per_day(monkeypatch):
     assert captured.get("maintenance_actions_today") == 2
 
 
-def test_decide_passes_n_quadrants_to_hires_per_day(monkeypatch):
-    import kagg.policy.decide as decide_module
-
-    obs = _obs()
-    obs["farms"][0]["unlocked_quadrants"] = ["NW", "NE", "SW"]
-
-    captured = {}
-    original_hire = decide_module.hires_per_day
-
-    def hire_spy(*args, **kwargs):
-        if "n_quadrants" in kwargs:
-            captured.update(kwargs)
-        return original_hire(*args, **kwargs)
-
-    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
-    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
-    assert captured.get("n_quadrants") == 3
-
-
-def test_decide_n_quadrants_defaults_to_one_when_unlocked_quadrants_is_absent(monkeypatch):
-    import kagg.policy.decide as decide_module
-
-    obs = _obs()
-    del obs["farms"][0]["unlocked_quadrants"]
-
-    captured = {}
-    original_hire = decide_module.hires_per_day
-
-    def hire_spy(*args, **kwargs):
-        if "n_quadrants" in kwargs:
-            captured.update(kwargs)
-        return original_hire(*args, **kwargs)
-
-    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
-    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
-    assert captured.get("n_quadrants") == 1
-
-
 def test_decide_weed_tiles_count_replant_cost_in_maintenance_actions_today_by_default(monkeypatch):
     # T8.44 follow-up: kaggriculture.py's real DIG handler clears a WEED
     # tile straight to None (no restored plant) - a weeded tile a farm

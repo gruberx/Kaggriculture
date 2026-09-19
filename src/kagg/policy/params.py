@@ -213,20 +213,21 @@ DEFAULT_PARAMS = {
     # _MAX_MARKET_ORDERS (bit-identical at today's shipped max_hires_per_
     # day=8, which never reaches this cap anyway).
     "max_hire_orders_per_turn": 10,
-    # T8.44 follow-up (the user's own observation after reviewing a
-    # per-day trace table with real план_ход/реал_ход columns): real
-    # movement cost per productive action grows with how many quadrants
-    # are open at once (work spread across more, farther-apart tiles).
-    # Measured directly, not guessed - 1 + total_move_actions /
-    # total_real_actions, grouped by len(unlocked_quadrants), across 3
-    # traced 30-day episodes: 1 quadrant averaged 2.386, 2 quadrants
-    # 2.841, 3 quadrants 3.390 (a roughly +0.45-0.5 step per additional
-    # quadrant); the 4th entry continues that step (extrapolated - the
-    # board's max is 4 quadrants). 1-indexed by len(unlocked_quadrants),
-    # clamped to this list's own length. Only consulted by hires_per_
-    # day's day_plan_hiring_aware branch - every other path keeps using
-    # the flat turns_per_task_estimate unchanged.
-    "day_plan_turns_per_task_by_quadrant_count": [2.4, 2.8, 3.4, 3.9],
+    # T8.44 follow-up, tried and reverted (the user's own observation
+    # after reviewing a per-day trace table with real план_ход/реал_ход
+    # columns, then a follow-up measurement): a quadrant-count-aware
+    # turns_per_task list (real per-quadrant-count measured ratios: 1
+    # quadrant 2.386, 2 quadrants 2.841, 3 quadrants 3.390) was tried and
+    # decisively made every grid point worse (headline 0.360 -> 0.220,
+    # two points collapsed to a flat 0.000) - the averaged-per-quadrant-
+    # count ratios blended quiet steady-state days with busy expansion
+    # days and over-hired on the quiet ones. See kagg.policy.strategy's
+    # own comment (right above hires_per_day, the constant that used to
+    # sit here) for the full measured story and the follow-up interp-
+    # olation hypothesis that was also checked and refuted before ever
+    # being implemented. No param here any more - hires_per_day's day_
+    # plan branch uses the flat turns_per_task_estimate unconditionally.
+    #
     # T8.44 follow-up (the user's own second observation from the same
     # trace review): kaggriculture.py's real DIG handler clears a WEED
     # tile straight to None - it does NOT restore a plant - so keeping a

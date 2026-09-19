@@ -1074,68 +1074,6 @@ def test_hires_per_day_day_plan_new_animal_actions_default_matches_hand_derivati
     assert got == expected
 
 
-def test_hires_per_day_day_plan_n_quadrants_selects_from_the_quadrant_coefficient_list():
-    # T8.44 follow-up: real measured coefficients (1/2/3 quadrants:
-    # 2.4/2.8/3.4) replace the flat turns_per_task_estimate when
-    # n_quadrants is given - 1-indexed into the list.
-    base = {
-        "dynamic_hiring": True, "day_plan_hiring_aware": True,
-        "min_hires_per_day": 0, "max_hires_per_day": 1000,
-    }
-    for n_quadrants, coeff in ((1, 2.4), (2, 2.8), (3, 3.4), (4, 3.9)):
-        got = hires_per_day(
-            base, hour=0, turns_per_day=24,
-            maintenance_actions_today=50, planned_new_crop_tiles=0, planned_new_animals=0,
-            n_quadrants=n_quadrants,
-        )
-        expected = min(max(math.ceil(50 * coeff / 24) - 1, 0), 1000)
-        assert got == expected, (n_quadrants, coeff)
-
-
-def test_hires_per_day_day_plan_n_quadrants_clamps_beyond_the_list_length():
-    params = {
-        "dynamic_hiring": True, "day_plan_hiring_aware": True,
-        "min_hires_per_day": 0, "max_hires_per_day": 1000,
-    }
-    at_4 = hires_per_day(
-        params, hour=0, turns_per_day=24, maintenance_actions_today=50,
-        planned_new_crop_tiles=0, planned_new_animals=0, n_quadrants=4,
-    )
-    at_9 = hires_per_day(
-        params, hour=0, turns_per_day=24, maintenance_actions_today=50,
-        planned_new_crop_tiles=0, planned_new_animals=0, n_quadrants=9,
-    )
-    assert at_4 == at_9  # clamped to the last (index 3) coefficient
-
-
-def test_hires_per_day_day_plan_n_quadrants_none_falls_back_to_flat_turns_per_task():
-    params = {
-        "dynamic_hiring": True, "day_plan_hiring_aware": True,
-        "min_hires_per_day": 0, "max_hires_per_day": 1000,
-        "turns_per_task_estimate": 5.0,
-    }
-    got = hires_per_day(
-        params, hour=0, turns_per_day=24, maintenance_actions_today=50,
-        planned_new_crop_tiles=0, planned_new_animals=0,  # n_quadrants omitted
-    )
-    expected = min(max(math.ceil(50 * 5.0 / 24) - 1, 0), 1000)
-    assert got == expected
-
-
-def test_hires_per_day_day_plan_turns_per_task_by_quadrant_count_can_be_overridden():
-    params = {
-        "dynamic_hiring": True, "day_plan_hiring_aware": True,
-        "min_hires_per_day": 0, "max_hires_per_day": 1000,
-        "day_plan_turns_per_task_by_quadrant_count": [10.0],
-    }
-    got = hires_per_day(
-        params, hour=0, turns_per_day=24, maintenance_actions_today=50,
-        planned_new_crop_tiles=0, planned_new_animals=0, n_quadrants=1,
-    )
-    expected = min(max(math.ceil(50 * 10.0 / 24) - 1, 0), 1000)
-    assert got == expected
-
-
 def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():
     # T8.3q: kaggriculture.py's _daily_refresh_animals sets
     # fertilizer_available=True every surviving day regardless of
