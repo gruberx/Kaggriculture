@@ -540,11 +540,25 @@ DEFAULT_PARAMS = {
     # window is watered before harvest, but tasks._is_actually_
     # harvestable has always proposed HARVEST the instant it's legally
     # harvestable, forfeiting that assumed bonus yield entirely for
-    # WHEAT/CARROT (zero bonus days ever realized). Off by default
-    # reproduces the exact prior immediate-harvest behavior; see kagg.
-    # policy.decide._DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD and
-    # kagg.policy.tasks._is_actually_harvestable for the mechanism.
-    "defer_one_time_harvest_to_max_yield": False,
+    # WHEAT/CARROT (zero bonus days ever realized). Scoped to crops whose
+    # window starts at/after first_yield_day (WHEAT/CARROT, not MELON -
+    # see kagg.policy.tasks._is_actually_harvestable's own docstring for
+    # why an unscoped first attempt was rejected).
+    #
+    # **Measured (tools/measure_t843.py): 0.300 win rate (15W/12L/23T,
+    # n=50) - not a clearing accept_candidate result on its own (mostly
+    # ties, since WHEAT/CARROT are rarely top-ranked under current play -
+    # the mechanism doesn't even activate in most games), but 15W/12L
+    # (0.556) where it does activate, and bit-identical (a tie) whenever
+    # it doesn't. Enabled by the user's own explicit decision, 2026-09-19:
+    # "Включи вторую версию 1 этапа по умолчанию. Она не ухудшает
+    # ситуацию, но потенциально может улучшить если использовать эти
+    # культуры" - a deliberate call to ship a no-worse/possibly-better
+    # mechanism ahead of a full n=200 holdout confirmation, not a project-
+    # default acceptance verdict.** See kagg.policy.decide._DEFAULT_DEFER_
+    # ONE_TIME_HARVEST_TO_MAX_YIELD and kagg.policy.tasks._is_actually_
+    # harvestable for the mechanism.
+    "defer_one_time_harvest_to_max_yield": True,
     # T8.19, the user's own observation: committing every new tile to a
     # single top-ranked product invites a double price-crash risk (our
     # own volume plus a plausible independent opponent bet on the same

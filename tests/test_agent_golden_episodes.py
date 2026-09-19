@@ -357,11 +357,32 @@ AGENT_MAIN_PATH = os.path.join(
 # above; tools/trace_t842.py confirms the mechanism directly (hand count
 # flat at 8 from day 0, all 4 quadrants reached by day ~15-20 vs. the old
 # baseline's 2 by day ~22-25).
+#
+# Re-recorded a twentieth time for T8.43 Stage 1: defer_one_time_harvest_
+# to_max_yield turned on (scoped to crops whose watering_bonus_window
+# starts at/after first_yield_day - WHEAT/CARROT, not MELON; see kagg.
+# policy.tasks._is_actually_harvestable's own docstring for the mechanism
+# and why an unscoped first attempt was rejected). Not a project
+# accept_candidate verdict - tools/measure_t843.py measured 0.300 win
+# rate (15W/12L/23T, n=50), mostly ties since WHEAT/CARROT are rarely
+# top-ranked under current play (the mechanism doesn't even activate in
+# most games), but 15W/12L (0.556) where it does. Enabled by the user's
+# own explicit decision, 2026-09-19 ("she doesn't make things worse, and
+# could help once these crops are actually used") ahead of a full n=200
+# holdout confirmation - see kagg.policy.decide._DEFAULT_DEFER_ONE_TIME_
+# HARVEST_TO_MAX_YIELD for the full reasoning. Only 2 of these six seeds
+# moved at all (starter/seed1: 47663 -> 54893, +15.2%; pass/seed1: 49283
+# -> 56320, +14.3% - both higher, not lower); seeds 2/3 on both opponents
+# were untouched, consistent with WHEAT/CARROT simply not being planted
+# in those particular episodes. test_no_animal_escapes_across_the_golden_
+# seeds (T8.38's own never-re-recordable guardrail) still passes
+# unchanged - zero escapes, confirming this change is safe by that
+# guardrail's own standard even without a full self-play accept.
 _GOLDEN = {
-    ("starter", 1): (47663.0, 4054.0),
+    ("starter", 1): (54893.0, 4294.0),
     ("starter", 2): (64798.0, 3506.0),
     ("starter", 3): (67716.0, 3647.0),
-    ("pass", 1): (49283.0, 3000.0),
+    ("pass", 1): (56320.0, 3000.0),
     ("pass", 2): (61973.0, 3000.0),
     ("pass", 3): (69306.0, 3000.0),
 }

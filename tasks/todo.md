@@ -2477,7 +2477,25 @@ project's own established finding, a fresh submission's score is volatile for it
 
       Committed: `tools/measure_t843_stage3.py`, `tools/measure_t843_stage3b.py`, this entry. No param
       changes from Stage 3 (rejected). Full suite green, `compileall`/`boundary_check.py` clean, no
-      re-record needed (nothing accepted). No Kaggle submission - ask before submitting, as always.
+      re-record needed (nothing accepted).
+
+      **Post-review update, the user's own explicit decision, 2026-09-19**: after reviewing Stage 1's
+      numbers directly ("Выведи сколько побед, поражений и ничьих было в 1 этапе"), the user asked to
+      enable the re-scoped Stage 1 candidate (`defer_one_time_harvest_to_max_yield=True`) by default
+      anyway - "Она не ухудшает ситуацию, но потенциально может улучшить если использовать эти
+      культуры" (it doesn't make things worse, and could help once these crops are actually used). This
+      is a deliberate ship-ahead-of-full-confirmation call, not a project `accept_candidate` verdict -
+      the measured number (`0.300`, 15W/12L/23T, n=50) never cleared the acceptance bar and was never
+      confirmed at n=200. Flipped `defer_one_time_harvest_to_max_yield` `False -> True` in `src/kagg/
+      params/policy.json`, `DEFAULT_PARAMS`, and `decide._DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD`,
+      with the reasoning and the caveat recorded directly in the code comments (not just here). Golden
+      episodes re-recorded a twentieth time: only 2 of the 6 fixed seeds moved at all (starter/seed1:
+      47663 -> 54893, +15.2%; pass/seed1: 49283 -> 56320, +14.3% - both higher), the other 4 untouched
+      (WHEAT/CARROT weren't planted in those particular episodes) - consistent with the measured mostly-
+      ties result. **`test_no_animal_escapes_across_the_golden_seeds` (T8.38's own never-re-recordable
+      guardrail) still passes unchanged - zero escapes** - confirming this is safe by that guardrail's
+      own standard even without a full self-play accept. Full suite green (557), `compileall`/`boundary_
+      check.py` clean. No Kaggle submission - ask before submitting, as always.
 
 ## Not planned yet (see plan.md)
 

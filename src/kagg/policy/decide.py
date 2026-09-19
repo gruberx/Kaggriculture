@@ -798,9 +798,19 @@ _DEFAULT_PRIORITIZE_ANIMAL_SETUP = False
 # docstring for the full mechanism. When on, a one-time crop instead
 # waits for current_day - planted_day >= max_yield_day (the bonus
 # window's own end) or yield_units already at max_yield (already
-# capped). Default False, bit-identical to every pre-T8.43 caller - not
-# yet measured in self-play.
-_DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD = False
+# capped).
+#
+# **Measured (tools/measure_t843.py): 0.300 win rate (15W/12L/23T, n=50)
+# - not a clearing accept_candidate result on its own (mostly ties, since
+# WHEAT/CARROT are rarely top-ranked under current play - the mechanism
+# doesn't even activate in most games), but 15W/12L (0.556) where it does
+# activate, and bit-identical (a tie) whenever it doesn't. Enabled by the
+# user's own explicit decision, 2026-09-19: "Включи вторую версию 1 этапа
+# по умолчанию. Она не ухудшает ситуацию, но потенциально может улучшить
+# если использовать эти культуры" - a deliberate call to ship a
+# no-worse/possibly-better mechanism ahead of a full n=200 holdout
+# confirmation, not a project-default acceptance verdict.**
+_DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD = True
 
 # T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
 # `plant_qty` scale with the real labor force (1 + hires_per_day) instead
