@@ -2594,6 +2594,38 @@ project's own established finding, a fresh submission's score is volatile for it
       measurement (rejected). Golden episodes/T8.38 escape guardrail untouched (nothing accepted). Full
       suite green, `compileall`/`boundary_check.py` clean. No Kaggle submission - ask before submitting.
 
+      **Post-review fix + re-measurement, the user's own follow-up (2026-09-19)**: after seeing a
+      per-day table of the rejected `min=2` candidate (hands hired, the forecast's own components,
+      real actions done, and unwatered/unfed/weed counts, all by day), the user asked why day 0's
+      forecast was so wrong (`4` computed vs `~46` real actions) and whether it could be fixed. Traced
+      to a real, narrow bug: `planned_new_crop_tiles` was gated on `plant_crop`, which stays `None`
+      until a seed is *physically on hand* (`have_seed`) - on day 0 (or any day starting from zero
+      seed stock of the target crop), `BUY_SEED` can't settle until next turn (T8.5: market orders
+      resolve after this turn's unit actions), so `plant_crop` is `None` even though `fallback_crop`
+      (the ranking layer's own already-computed intent, real market prices already factored in via
+      `_top_crop_basket`) already knew exactly what would be planted. **Fixed**: use `fallback_crop`
+      instead (still gated on `stuck_animal is None`, the same condition that nulls `plant_crop`
+      itself, for the same "finish the paid-for animal first" reason) - `src/kagg/policy/decide.py`,
+      2 new tests (zero-seeds-held day-0 case now sees the real intent; `stuck_animal` still zeroes
+      the forecast). Full suite green (596), golden episodes/`boundary_check.py` unaffected (still
+      ships off by default). Committed (`638d5f0`).
+
+      Re-traced (`tools/trace_t844.py`'s day-table variant): day 0's forecast corrected from `4`
+      (`maintenance=0, new_crop=0`) to `54` (`new_crop=25`) - much closer to the real `~47` actions
+      actually performed. **Re-measured the same grid (`tools/measure_t844.py`) - still DECISIVELY
+      REJECTED at every point**, confirming the day-0 bug was real but not the decisive cause:
+      `min=2` headline `0.300 -> 0.360`; `min=4` `0.660 -> 0.640` (working-block win, but holdout
+      `0.490 -> 0.515` - still statistically even, still REJECTED); `min=8` `0.180 -> 0.240`;
+      `hire_min_turns_left=6` `0.320 -> 0.460`; `max_hire_orders_per_turn=6` `0.300 -> 0.420`;
+      `cap=8` stays the worst point (`0.080`). Several points improved measurably (the fix is real
+      and directionally correct), but none crossed the acceptance bar, and the best candidate
+      (`min=4`) again collapsed on the 200-seed holdout - reconfirming this task's own root-cause
+      finding: the day-0 forecast error only ever affected the *first* day of a 30-day season, while
+      the dominant loss mechanism (a reactive forecast structurally cannot anticipate a future
+      land-purchase burst, so pre-positioned idle labor beats reactive same-day sizing) operates
+      every time a new quadrant opens throughout the whole game. No further param changes -
+      `day_plan_hiring_aware` stays off, `min`/`max_hires_per_day` stay at 8/8.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
