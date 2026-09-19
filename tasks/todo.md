@@ -2497,6 +2497,103 @@ project's own established finding, a fresh submission's score is volatile for it
       own standard even without a full self-play accept. Full suite green (557), `compileall`/`boundary_
       check.py` clean. No Kaggle submission - ask before submitting, as always.
 
+- [x] T8.44 — day-plan-driven dynamic hiring: burst-day-aware forecast built from real per-tile-today
+      action counts, direct follow-up to T8.43 Stage 3's mechanical proof that `workload_forecast_
+      hiring_aware`'s own formula can never exceed 8 hires from a realistic board (`total_turns > 216`
+      needed, unreachable). **The user's own detailed request** (2026-09-19, after a session of hand-
+      verifying real per-scenario turn costs directly against `kaggriculture.py`): compute, every turn
+      (`decide()` is a pure function of `(obs, params)` - no cross-turn memory, confirmed by reading
+      `agent_main.py`), a real turns-needed-today estimate - maintenance for already-placed tiles
+      (WATER/FEED plus whatever HARVEST/CARE/FERTILIZE is actually due right now) plus already-decided
+      new commitments (new PLANT+WATER, new animal BUILD+PICKUP+PLACE+FEED) - and drive the hiring
+      target from it directly, generalizing to whatever crop/animal mix is actually being pursued.
+      Turn-by-turn task execution stays unchanged (reactive); only the hiring target changes. Plus a
+      same-day top-up gate for a newly-opened quadrant, deferring to the next day if too few turns
+      remain today to be productive.
+
+      Built in one pass (a single coherent formula, not several independently-testable stages like
+      T8.43's five): `kagg.policy.tasks.crop_tile_day_actions`/`animal_tile_day_actions` (new helpers,
+      reusing `_is_actually_harvestable` - inherits T8.43's own harvest-timing scoping for free) give
+      each already-placed tile's real action count *today*, not `_crop_actions_per_tile_day`'s
+      lifetime-averaged rate. `decide()`'s existing six-purpose tile scan extended to a seventh purpose
+      (`maintenance_actions_today`, summing the two new helpers over every placed tile, plus a new
+      `WEED` branch this scan never distinguished before - it fell through to a bare `unlocked_tiles`
+      increment, uncounted beyond that). `planned_new_crop_tiles`/`planned_new_animals` computed right
+      after `plant_crop`/`acquisition_animal` are both finalized (verified no circularity), capped by
+      `free_tiles`/`day_plan_max_new_tiles_per_day` (one quadrant, 25) and, by default, affordability
+      (`day_plan_new_tiles_cash_aware`). New `strategy.hires_per_day` branch (`day_plan_hiring_aware`,
+      checked *before* `workload_forecast_hiring_aware`, which stays untouched as the fallback), full
+      reuse of the existing `turns_per_task_estimate`/buffer/`[min,max]_hires_per_day` clip machinery.
+      `hire_min_turns_left` gates same-day top-up HIRE orders once turns remaining today are too few,
+      with a `hires_today == 0` escape hatch (never leave the farm with zero labor for a whole day).
+      `max_hire_orders_per_turn` (default matches `_MAX_MARKET_ORDERS=10`) caps the HIRE-emission loop -
+      load-bearing once `target_hires` can exceed ~10 (this mechanism's whole point): `hires` sits first
+      in the final `(hires + sells + tail)[:_MAX_MARKET_ORDERS]` truncation, so an uncapped burst would
+      silently drop every `tail` order (BUY_SEED/BUY_ANIMAL/BUY_LAND/wheat restock) that turn.
+
+      All 7 new params bit-identical/off by default. 37 new tests (14 `tasks.py`, 8 `strategy.py`, 15
+      `decide.py`) - full suite 594 passed, golden episodes bit-identical, `compileall`/`boundary_
+      check.py` clean, `decide()` timing unaffected (~0.7ms on and off, both well under the 50ms
+      target). Committed gated (`6a828f0`, "T8.44 Stage 0").
+
+      **Measured (`tools/measure_t844.py`, 50-seed working block) - DECISIVELY REJECTED at every grid
+      point, with a real, traced structural cause, not a tuning miss.** Per the user's own explicit call
+      ("min_hires_per_day думаю надо снизить до 2... если оно не действует то скорее надо править это
+      чем заменять таким высоким минимальным порогом"), `min_hires_per_day` was swept DOWN to `{2, 4, 8}`
+      in the primary grid, not held at the accepted 8:
+      - `min=2` (headline, `max=12, cap=25`): `0.300` (15W/35L/0T) - the same catastrophic shape T8.43
+        Stage 3a found for the *old* forecast at a low floor.
+      - `min=4`: `0.660` (33W/17L/0T) working-block win, but **collapsed to `0.490` (98W/102L/0T) on the
+        200-seed holdout (900-1099) - REJECTED, statistically even, the working-block result was noise,
+        not a real effect.**
+      - `min=8` (T8.42's own accepted floor, otherwise headline): `0.180` (9W/41L/0T) - still decisively
+        worse than the shipped baseline, even at the *same* floor value, because the day-plan forecast's
+        own ceiling (`max=12`) and shape differ from the old one.
+      - `max=16`, `hire_min_turns_left=6`, `max_hire_orders_per_turn=6`: all statistically indistinguishable
+        from the `min=2` headline (~0.30-0.32) - none of these secondary axes changed the outcome.
+      - `cap=8` (smaller new-tile-per-day cap): `0.080` (4W/46L/0T) - the worst point in the grid.
+
+      **Traced directly** (`tools/trace_t844.py`, seeds 900-902, hand counts/PLANT/HIRE/BUY_SEED/money
+      day-by-day for both `min=2` and `min=8` against the shipped baseline), specifically checking the
+      plan's own named risk (the `labor_units` -> `plant_qty`/`seed_target` throttle spiral) per the
+      user's framing that a low-`min` loss should be diagnosed, not just reported as a reason to keep
+      `min=8`. **That specific spiral did NOT occur** - BUY_SEED/PLANT counts track real board need
+      correctly at every traced day, never collapsing to zero while seeds/tiles were actually needed.
+      **The real, different cause found instead**: the day-plan forecast, even though it correctly sizes
+      *today's already-known* workload (confirmed directly - hands legitimately drop to 2 during the
+      steady-state watering phase, days 1-8, exactly matching this session's own hand-derived formula
+      that a 24-tile quadrant needs only ~2-3 workers to water), has **no way to anticipate tomorrow's
+      burst**. The shipped baseline's flat `min=8=max` floor pays for hands that sit idle ~54% of the
+      time during that same steady-state window (`hands_pass_fraction=0.54`, confirmed in the trace) -
+      but because `HIRE` is nearly free (`fib(8)=$21` total) while a land purchase's own newly-opened
+      quadrant needs a large labor force *immediately* to be worth anything, pre-positioning idle labor
+      *before* it's needed beats reactively sizing labor to *exactly* today's known work, every time a
+      burst is coming. The day-plan forecast, however accurate about the present, structurally cannot
+      see a burst before it happens - each traced episode shows `min=2`'s hand count ramping slowly
+      (2 -> 7 -> 9 over several days) after a new quadrant opens, while the baseline's already-hired 8
+      hands start working it the very same day.
+      **A specific follow-up hypothesis was tested and refuted, not left unchecked**: suspected
+      `day_plan_new_tiles_cash_aware`'s affordability cap was compounding the ramp lag (money crashes to
+      near-zero the instant land is bought, so that same turn's `planned_new_crop_tiles` term collapses
+      too) - re-measured `min=2`/`min=4` with `day_plan_new_tiles_cash_aware=False`: `0.220` (11W/39L/0T)
+      and `0.660` (33W/17L/0T, bit-identical to the cash-aware version) - disabling it did not meaningfully
+      change either result, ruling this out as the dominant cause.
+      **Verdict: this is the same structural finding T8.43 Stage 3 already reached from a different
+      angle, now confirmed from the opposite direction too** - a *reactive* hiring signal (however
+      accurate about current workload) cannot compete with a static high floor in this game's economy,
+      because hiring is nearly free and land-purchase bursts are large and sudden. `day_plan_hiring_
+      aware` stays off (bit-identical shipped default); `min`/`max_hires_per_day` stay at the T8.42-
+      accepted `8`/`8`. **A concrete next step, not attempted here** (out of this task's scope per the
+      user's own request, which was about sizing today's workload, not anticipating land purchases): a
+      genuinely *anticipatory* signal - e.g. hiring ahead of a land purchase the farm itself is about to
+      make (its own `should_buy_land`/cash trajectory is already known one step ahead), not a same-day
+      reactive one - would need to look forward, not just at the present tile board, to ever beat the
+      static floor.
+
+      Committed: `tools/measure_t844.py`, `tools/trace_t844.py`, this entry. No param changes from
+      measurement (rejected). Golden episodes/T8.38 escape guardrail untouched (nothing accepted). Full
+      suite green, `compileall`/`boundary_check.py` clean. No Kaggle submission - ask before submitting.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
