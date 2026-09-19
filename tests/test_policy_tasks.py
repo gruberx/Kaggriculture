@@ -22,8 +22,10 @@ from kagg.policy.tasks import (
     PRIORITY_ROUTINE_CARE,
     Task,
     action_for_unit,
+    animal_tile_day_actions,
     assign_units,
     build_task_list,
+    crop_tile_day_actions,
 )
 
 
@@ -1313,3 +1315,91 @@ def test_assign_units_prioritized_animal_setup_still_yields_to_prevent_loss():
     # Only one free unit: PREVENT_LOSS resolves first, leaving nothing
     # free for the animal-setup tier this turn.
     assert assignment == [urgent_water]
+
+
+# --- crop_tile_day_actions / animal_tile_day_actions (T8.44) -----------
+
+
+def test_crop_tile_day_actions_counts_only_water_for_a_freshly_planted_tile():
+    # WHEAT: first_yield_day=2, so a tile planted today (age 0) isn't
+    # harvestable yet - just the unconditional WATER.
+    tile = _plant_tile(planted_day=10)
+    assert crop_tile_day_actions(tile, current_day=10) == 1
+
+
+def test_crop_tile_day_actions_adds_harvest_once_eligible():
+    tile = _plant_tile(planted_day=0, yield_units=1)
+    # WHEAT first_yield_day=2.
+    assert crop_tile_day_actions(tile, current_day=2) == 2  # WATER + HARVEST
+
+
+def test_crop_tile_day_actions_does_not_add_harvest_when_yield_units_is_zero():
+    tile = _plant_tile(planted_day=0, yield_units=0)
+    assert crop_tile_day_actions(tile, current_day=5) == 1  # WATER only
+
+
+def test_crop_tile_day_actions_reuses_defer_one_time_harvest_to_max_yield():
+    # WHEAT's bonus window (ages 2-4) starts at first_yield_day (2), so
+    # deferring waits for max_yield_day=4 - see _is_actually_harvestable's
+    # own docstring. At age 2 (current_day=2), harvest isn't proposed yet
+    # when deferring is on.
+    tile = _plant_tile(planted_day=0, yield_units=1)
+    assert crop_tile_day_actions(
+        tile, current_day=2, defer_one_time_harvest_to_max_yield=True
+    ) == 1  # WATER only - HARVEST deferred
+    assert crop_tile_day_actions(
+        tile, current_day=4, defer_one_time_harvest_to_max_yield=True
+    ) == 2  # WATER + HARVEST - max_yield_day reached
+
+
+def test_crop_tile_day_actions_use_fertilizer_off_by_default():
+    tile = _plant_tile(planted_day=0)
+    tile["fertilized_until_day"] = -1
+    assert crop_tile_day_actions(tile, current_day=5) == 1  # WATER only
+
+
+def test_crop_tile_day_actions_adds_fertilize_when_due_and_flag_on():
+    tile = _plant_tile(planted_day=0)
+    tile["fertilized_until_day"] = -1  # due - covers before today
+    assert crop_tile_day_actions(tile, current_day=5, use_fertilizer=True) == 2  # WATER + FERTILIZE
+
+
+def test_crop_tile_day_actions_skips_fertilize_when_still_covered():
+    tile = _plant_tile(planted_day=0)
+    tile["fertilized_until_day"] = 10  # covers today (5) already
+    assert crop_tile_day_actions(tile, current_day=5, use_fertilizer=True) == 1  # WATER only
+
+
+def test_animal_tile_day_actions_counts_only_feed_by_default():
+    tile = _animal_tile()
+    assert animal_tile_day_actions(tile) == 1
+
+
+def test_animal_tile_day_actions_adds_harvest_when_yield_units_positive():
+    tile = _animal_tile(yield_units=1)
+    assert animal_tile_day_actions(tile) == 2  # FEED + HARVEST
+
+
+def test_animal_tile_day_actions_adds_collect_fertilizer_when_available():
+    tile = _animal_tile(fertilizer_available=True)
+    assert animal_tile_day_actions(tile) == 2  # FEED + COLLECT_FERTILIZER
+
+
+def test_animal_tile_day_actions_care_aware_off_by_default():
+    tile = _animal_tile(cared_today=False)
+    assert animal_tile_day_actions(tile) == 1  # FEED only, CARE not counted
+
+
+def test_animal_tile_day_actions_adds_care_when_due_and_flag_on():
+    tile = _animal_tile(cared_today=False)
+    assert animal_tile_day_actions(tile, care_aware=True) == 2  # FEED + CARE
+
+
+def test_animal_tile_day_actions_skips_care_when_already_cared_today():
+    tile = _animal_tile(cared_today=True)
+    assert animal_tile_day_actions(tile, care_aware=True) == 1  # FEED only
+
+
+def test_animal_tile_day_actions_all_four_terms_at_once():
+    tile = _animal_tile(yield_units=1, fertilizer_available=True, cared_today=False)
+    assert animal_tile_day_actions(tile, care_aware=True) == 4

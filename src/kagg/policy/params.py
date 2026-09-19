@@ -170,6 +170,49 @@ DEFAULT_PARAMS = {
     # see kagg.policy.strategy.hires_per_day's own docstring for the
     # mechanism.
     "workload_forecast_free_tile_weight": 0.0,
+    # T8.44, the user's own follow-up after T8.43 Stage 3's mechanical
+    # proof that workload_forecast_hiring_aware's own formula can never
+    # exceed 8 hires from a realistic board (total_turns > 216 needed,
+    # unreachable at any free_tile_weight tried): a burst-day-aware
+    # alternative built from real per-tile-today action counts (`kagg.
+    # policy.tasks.crop_tile_day_actions`/`animal_tile_day_actions`) plus
+    # this turn's already-decided new planting/animal-acquisition, in
+    # place of _crop_actions_per_tile_day's lifetime-averaged rate. See
+    # kagg.policy.strategy.hires_per_day's own docstring for the formula.
+    # Default False (bit-identical) - see tasks/todo.md's T8.44 entry for
+    # the measured sweep and accept/reject verdict.
+    "day_plan_hiring_aware": False,
+    # Real, hand-verified per-tile action costs (this session's own
+    # derivation, checked directly against kaggriculture.py): a fresh
+    # crop tile costs PLANT+WATER=2 actions its first day; a fresh animal
+    # costs BUILD+PICKUP+PLACE+FEED=4 (PICKUP/PLACE must be the same
+    # unit - PLACE consumes the acting unit's own inventory).
+    "day_plan_new_crop_tile_actions": 2.0,
+    "day_plan_new_animal_actions": 4.0,
+    # Caps the day-plan forecast's planned-new-crop-tiles term at one
+    # quadrant (25) per day - guards against assuming the entire free
+    # board gets planted in a single day.
+    "day_plan_max_new_tiles_per_day": 25,
+    # Additionally caps planned-new-crop-tiles by what's actually
+    # affordable (seeds held + what today's money can buy) - keeps a
+    # freshly-opened, still-broke quadrant from forecasting phantom work
+    # it can't fund. True is the physically honest bound.
+    "day_plan_new_tiles_cash_aware": True,
+    # T8.44: a same-day top-up hire (e.g. a BUY_LAND settling mid-day)
+    # only queues further HIRE orders this turn if at least this many
+    # turns remain today, unless zero hires have happened yet today (the
+    # escape hatch - never leave the farm with zero labor for a whole
+    # day). Default 0 (bit-identical - the gate always passes).
+    "hire_min_turns_left": 0,
+    # T8.44: caps how many HIRE orders the emission loop queues in one
+    # turn - load-bearing once target_hires can exceed roughly
+    # _MAX_MARKET_ORDERS=10 (day_plan_hiring_aware's whole point): hires
+    # is listed first in the final truncated market-order list, so an
+    # uncapped burst would silently drop every BUY_SEED/BUY_ANIMAL/
+    # BUY_LAND/wheat-restock order that turn. Defaults to 10, matching
+    # _MAX_MARKET_ORDERS (bit-identical at today's shipped max_hires_per_
+    # day=8, which never reaches this cap anyway).
+    "max_hire_orders_per_turn": 10,
     "sell_margin": 0,
     "drip_sell_max_per_turn": 5,
     "wheat_restock_threshold": 5,

@@ -908,6 +908,71 @@ def _animal_tile_tasks(
     return tasks, feed_priority
 
 
+def crop_tile_day_actions(
+    tile: dict,
+    current_day: int,
+    *,
+    use_fertilizer: bool = False,
+    defer_one_time_harvest_to_max_yield: bool = False,
+) -> int:
+    """T8.44: how many real actions a single already-planted PLANT tile
+    costs *today* - the per-tile "today" term the day-plan hiring forecast
+    (`kagg.policy.strategy.hires_per_day`'s new `day_plan_hiring_aware`
+    branch) sums across every planted tile, in place of `_crop_actions_
+    per_tile_day`'s lifetime-averaged rate (T8.43 Stage 3's own traced
+    defect: a rate averaged over a tile's whole lifespan smooths a real
+    single-day burst, e.g. MELON's one PLANT action, into a 1/13 sliver -
+    see that param's own comment for the full mechanical proof).
+
+    `1` (WATER) unconditionally - a live PLANT tile needs exactly one
+    WATER/day regardless of `watered_today` (this forecast sizes a whole
+    day's work at hour 0, before any of today's WATER tasks have actually
+    fired yet - the same whole-day-rate reasoning `_ROUTINE_RECURRING_OPS`
+    already applies to the reactive `pending_task_count` path).
+
+    `+ 1` if `_is_actually_harvestable(tile, current_day, defer_one_time_
+    harvest_to_max_yield)` and `yield_units > 0` - reuses that predicate
+    verbatim (T8.43's own harvest-timing scoping applies for free, no new
+    gap introduced here).
+
+    `+ 1` if fertilize is due, mirroring `_plant_tile_tasks`'s own gate
+    (`fertilized_until_day < current_day`) - deliberately *not* also
+    gated on `fertilizer_units` the way the real task is: this is a
+    forecast of the day's total workload, not an emittable task, so
+    whether a unit happens to be holding FERTILIZER this turn is beside
+    the point (the point is whether the *tile* has work pending).
+    """
+    actions = 1  # WATER
+    if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
+        tile, current_day, defer_one_time_harvest_to_max_yield
+    ):
+        actions += 1
+    if use_fertilizer and tile.get("fertilized_until_day", -1) < current_day:
+        actions += 1
+    return actions
+
+
+def animal_tile_day_actions(tile: dict, *, care_aware: bool = False) -> int:
+    """T8.44: `crop_tile_day_actions`'s counterpart for a placed animal
+    tile - mirrors `_animal_tile_tasks` exactly (same four possible
+    actions), but unconditionally (not gated on `wheat_units`/eligible-
+    unit bookkeeping - again a forecast of total demand, not an emittable
+    task).
+
+    `1` (FEED) unconditionally, `+ 1` if `yield_units > 0` (production
+    ready to HARVEST), `+ 1` if `fertilizer_available` (ready to
+    COLLECT_FERTILIZER), `+ 1` if `care_aware` and not yet `cared_today`.
+    """
+    actions = 1  # FEED
+    if tile.get("yield_units", 0) > 0:
+        actions += 1
+    if tile.get("fertilizer_available", False):
+        actions += 1
+    if care_aware and not tile.get("cared_today", False):
+        actions += 1
+    return actions
+
+
 def assign_units(tasks: list[Task], unit_positions: list[tuple[int, int]]) -> list[Task | None]:
     """Assign each unit position to at most one task, processing
     priority tiers in order and matching greedily by distance *within*

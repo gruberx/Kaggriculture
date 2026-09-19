@@ -39,7 +39,13 @@ from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_sched
 from kagg.gamelib.shed import shed_room
 from kagg.policy.market import buy_wheat_order, sell_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, score_portfolio, should_buy_land
-from kagg.policy.tasks import action_for_unit, assign_units, build_task_list
+from kagg.policy.tasks import (
+    action_for_unit,
+    animal_tile_day_actions,
+    assign_units,
+    build_task_list,
+    crop_tile_day_actions,
+)
 
 _MAX_MARKET_ORDERS = 10
 
@@ -812,6 +818,47 @@ _DEFAULT_PRIORITIZE_ANIMAL_SETUP = False
 # confirmation, not a project-default acceptance verdict.**
 _DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD = True
 
+# T8.44 (day-plan-driven dynamic hiring, the user's own follow-up after
+# T8.43 Stage 3's mechanical proof of `workload_forecast_hiring_aware`'s
+# own formula's unreachable-past-8 ceiling): the planned-new-work terms
+# `kagg.policy.strategy.hires_per_day`'s new `day_plan_hiring_aware`
+# branch adds to `maintenance_actions_today` (the tile-scan's own
+# real per-tile-today sum, via `kagg.policy.tasks.crop_tile_day_actions`/
+# `animal_tile_day_actions`). `day_plan_max_new_tiles_per_day` guards
+# against forecasting the *entire* free board getting planted in one day
+# (25 - one quadrant, the same unit this session's hand calculations were
+# done in); `day_plan_new_tiles_cash_aware` additionally caps the
+# planned-new-tiles count by what's actually affordable (seeds already
+# held plus what today's money can buy), so a freshly-opened, still-broke
+# quadrant doesn't forecast phantom work it can't fund. Both default to
+# values that keep the mechanism physically honest once
+# `day_plan_hiring_aware` is turned on - see that flag's own comment
+# (kagg.policy.strategy) for why the flag itself defaults off.
+_DEFAULT_DAY_PLAN_MAX_NEW_TILES_PER_DAY = 25
+_DEFAULT_DAY_PLAN_NEW_TILES_CASH_AWARE = True
+
+# T8.44: a same-day quadrant top-up hire is only worth emitting if enough
+# turns remain today for the new hand to be productive - `hire_min_turns_
+# left` gates the HIRE-emission loop below on `turns_per_day -
+# current_hour >= hire_min_turns_left`, except when `hires_today == 0`
+# (a deliberate escape hatch: never leave the farm with zero labor for a
+# whole day just because the gate would otherwise block the day's very
+# first hire - see the loop's own comment). Default 0 (bit-identical -
+# the gate always passes).
+_DEFAULT_HIRE_MIN_TURNS_LEFT = 0
+
+# T8.44: independently re-verified line-by-line against this module's own
+# order-construction code - `sell_max_orders` already reserves room
+# against `len(hires)`, but `tail` (BUY_SEED/BUY_ANIMAL/BUY_LAND/wheat
+# restock) has no such reservation, and `market = (hires + sells +
+# tail)[:_MAX_MARKET_ORDERS]` puts `hires` first - so a `target_hires`
+# above roughly `_MAX_MARKET_ORDERS` would silently drop every `tail`
+# order that turn without a dedicated cap. Matches `_MAX_MARKET_ORDERS`
+# by default (bit-identical - the shipped `max_hires_per_day=8` already
+# never reaches this cap in practice, but `day_plan_hiring_aware` is
+# specifically designed to be able to exceed 8 on a burst day).
+_DEFAULT_MAX_HIRE_ORDERS_PER_TURN = _MAX_MARKET_ORDERS
+
 # T8.6 (tasks/plan.md): parallel planting + batched seed purchase - lets
 # `plant_qty` scale with the real labor force (1 + hires_per_day) instead
 # of a hardcoded "one PLANT task per turn" baked in since Phase 3.
@@ -1405,22 +1452,44 @@ def decide(obs: dict, params: dict) -> dict:
     stuck_animal = next(
         (a for a in ANIMALS if shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0), None
     )
-    # One scan covers six questions at once: which animal types are
+    # T8.44: read here, before the six-purpose tile scan below, instead of
+    # after it (their pre-T8.44 location, just before build_task_list) -
+    # pure dict-lookup reordering, bit-identical - so the scan can use
+    # them to accumulate maintenance_actions_today via crop_tile_day_
+    # actions/animal_tile_day_actions (both need use_fertilizer/care_
+    # aware/defer_one_time_harvest_to_max_yield to match whatever this
+    # episode actually has turned on).
+    use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
+    care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
+    defer_one_time_harvest_to_max_yield = params.get(
+        "defer_one_time_harvest_to_max_yield", _DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD
+    )
+    # One scan covers seven questions at once: which animal types are
     # already placed (stuck/already-have-one logic above), whether any
     # empty tile exists at all, which structure kinds already sit empty
     # (T6.5: BUY_SEED/BUY_ANIMAL shouldn't fire with nowhere to use them -
     # a full farm just accumulates unused seeds/animals), how much
     # unlocked land is free and how far the nearest free tile is from the
-    # shed (T8.3, should_buy_land's occupancy-aware gates), and (T8.6)
-    # how many tiles are already committed to a plant - the real
-    # denominator plant_budget needs to know how much more planting the
-    # current labor force can still take on.
+    # shed (T8.3, should_buy_land's occupancy-aware gates), how many tiles
+    # are already committed to a plant - the real denominator plant_
+    # budget needs to know how much more planting the current labor force
+    # can still take on - (T8.6), and (T8.44) the real total actions
+    # every already-placed tile needs *today*, for the day-plan hiring
+    # forecast (`maintenance_actions_today`, summed via `crop_tile_day_
+    # actions`/`animal_tile_day_actions` - see `kagg.policy.strategy.
+    # hires_per_day`'s own `day_plan_hiring_aware` docstring). A WEED tile
+    # (a real category this scan never distinguished before T8.44 - it
+    # fell through to the bare `unlocked_tiles += 1` below, uncounted
+    # beyond that) costs exactly one DIG (`kagg.policy.tasks.build_task_
+    # list`'s own WEED handling), counted here too.
     placed_animal_type_counts: dict[str, int] = {}
     free_tiles = 0
     unlocked_tiles = 0
     nearest_free_shed_distance: int | None = None
     empty_structure_kinds: set[str] = set()
     n_plant_tiles = 0
+    n_weed_tiles = 0
+    maintenance_actions_today = 0
     board_size = len(me["tiles"])
     for y, row in enumerate(me["tiles"]):
         for x, tile in enumerate(row):
@@ -1436,10 +1505,20 @@ def decide(obs: dict, params: dict) -> dict:
                     placed_animal_type_counts[tile["animal"]] = (
                         placed_animal_type_counts.get(tile["animal"], 0) + 1
                     )
+                    maintenance_actions_today += animal_tile_day_actions(tile, care_aware=care_aware)
                 elif tile.get("kind") in ("COOP", "PASTURE"):
                     empty_structure_kinds.add(tile["kind"])
                 elif tile.get("kind") == "PLANT":
                     n_plant_tiles += 1
+                    maintenance_actions_today += crop_tile_day_actions(
+                        tile,
+                        current_day,
+                        use_fertilizer=use_fertilizer,
+                        defer_one_time_harvest_to_max_yield=defer_one_time_harvest_to_max_yield,
+                    )
+                elif tile.get("kind") == "WEED":
+                    n_weed_tiles += 1
+                    maintenance_actions_today += 1
     has_empty_tile = free_tiles > 0
     if stuck_animal is not None:
         acquisition_animal = stuck_animal
@@ -1526,6 +1605,32 @@ def decide(obs: dict, params: dict) -> dict:
         if always_pursue_choice is not None:
             acquisition_animal = always_pursue_choice
 
+    # T8.44: planned-new-work estimate for the day-plan hiring forecast
+    # (`hires_per_day`'s `day_plan_hiring_aware` branch), computed here -
+    # right after acquisition_animal/plant_crop are both finalized
+    # (stuck_animal/max_animals_per_type/always_pursue_one_animal gating
+    # above; the crop-basket fallback further below hasn't run yet, so
+    # plant_crop is still a single crop string or None here - verified
+    # directly against this function's own control flow, no circularity).
+    # decide() structurally pursues at most one animal-acquisition
+    # pipeline at a time, so planned_new_animals is 0 or 1, never more
+    # (a real, currently-unaddressed gap for a multi-animal-per-day
+    # scenario - see parallel_animal_acquisition's own docstring - not
+    # something this forecast can paper over by assuming more).
+    planned_new_animals = 1 if acquisition_animal is not None else 0
+    planned_new_crop_tiles = 0
+    if plant_crop is not None:
+        day_plan_max_new_tiles = params.get(
+            "day_plan_max_new_tiles_per_day", _DEFAULT_DAY_PLAN_MAX_NEW_TILES_PER_DAY
+        )
+        cap = min(free_tiles, day_plan_max_new_tiles)
+        if params.get("day_plan_new_tiles_cash_aware", _DEFAULT_DAY_PLAN_NEW_TILES_CASH_AWARE):
+            seed_cost = CROPS[plant_crop]["seed"]
+            seeds_held = seeds.get(plant_crop, 0)
+            affordable = int(me["money"] // seed_cost) if seed_cost > 0 else cap
+            cap = min(cap, seeds_held + affordable)
+        planned_new_crop_tiles = max(0, cap)
+
     # T8.6: labor_units is 1 (the farmer) plus however many hands the
     # hiring mechanism targets hiring today - the real capacity this
     # turn's planting decision should scale with, not the fixed "one tile
@@ -1595,6 +1700,9 @@ def decide(obs: dict, params: dict) -> dict:
         crop_tile_counts=_crop_tile_counts(me["tiles"]),
         days_remaining=hires_per_day_days_remaining,
         free_tiles=free_tiles,
+        maintenance_actions_today=maintenance_actions_today,
+        planned_new_crop_tiles=planned_new_crop_tiles,
+        planned_new_animals=planned_new_animals,
     )
     labor_units = 1 + early_target_hires
     max_plants_per_unit = params.get("max_plants_per_unit", _DEFAULT_MAX_PLANTS_PER_UNIT)
@@ -1630,8 +1738,6 @@ def decide(obs: dict, params: dict) -> dict:
         plant_crop = basket_seq if basket_seq else None
         plant_qty = len(basket_seq)
 
-    use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
-    care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
     water_bonus_window_aware = params.get("water_bonus_window_aware", _DEFAULT_WATER_BONUS_WINDOW_AWARE)
     parallel_animal_acquisition = params.get(
         "parallel_animal_acquisition", _DEFAULT_PARALLEL_ANIMAL_ACQUISITION
@@ -1639,9 +1745,6 @@ def decide(obs: dict, params: dict) -> dict:
     feed_pickup_unpinned = params.get("feed_pickup_unpinned", _DEFAULT_FEED_PICKUP_UNPINNED)
     animal_pickup_unpinned = params.get("animal_pickup_unpinned", _DEFAULT_ANIMAL_PICKUP_UNPINNED)
     prioritize_animal_setup = params.get("prioritize_animal_setup", _DEFAULT_PRIORITIZE_ANIMAL_SETUP)
-    defer_one_time_harvest_to_max_yield = params.get(
-        "defer_one_time_harvest_to_max_yield", _DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD
-    )
 
     unit_positions = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
     tasks = build_task_list(
@@ -1764,10 +1867,41 @@ def decide(obs: dict, params: dict) -> dict:
         crop_tile_counts=_crop_tile_counts(me["tiles"]),
         days_remaining=hires_per_day_days_remaining,
         free_tiles=free_tiles,
+        maintenance_actions_today=maintenance_actions_today,
+        planned_new_crop_tiles=planned_new_crop_tiles,
+        planned_new_animals=planned_new_animals,
     )
     hires_today = me.get("hires_today", 0)
+    # T8.44: a same-day (mid-day) top-up hire - e.g. a BUY_LAND settling
+    # this same turn jumps free_tiles, and the day-plan forecast above
+    # reacts to it automatically (recomputed fresh every call, no new
+    # state) - is only worth emitting if enough turns remain today for
+    # the new hand to be productive. `hire_min_turns_left` (default 0,
+    # bit-identical - the gate always passes) requires `turns_per_day -
+    # current_hour >= hire_min_turns_left` before queuing *further* HIRE
+    # orders once at least one has already been hired today
+    # (`hires_today == 0` is a deliberate escape hatch: never leave the
+    # farm with zero labor for a whole day just because the gate would
+    # otherwise block the day's very first hire, e.g. one blocked by
+    # hire_cash_reserve earlier that same hour - a clear regression risk
+    # worse than one slightly-late hire). `max_hire_orders_per_turn`
+    # (default matches `_MAX_MARKET_ORDERS`) caps how many HIRE orders
+    # this loop queues in one turn - load-bearing once target_hires can
+    # exceed roughly 10 (day_plan_hiring_aware's whole point): `hires` is
+    # listed first in the final `(hires + sells + tail)[:_MAX_MARKET_
+    # ORDERS]` truncation below, so an uncapped burst would silently drop
+    # every `tail` order (BUY_SEED/BUY_ANIMAL/BUY_LAND/wheat restock) that
+    # turn. A target above the cap simply finishes over the next turn(s),
+    # self-correcting via hires_today - no extra state needed.
+    hire_min_turns_left = params.get("hire_min_turns_left", _DEFAULT_HIRE_MIN_TURNS_LEFT)
+    turns_per_day_val = params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY)
+    max_hire_orders_per_turn = params.get(
+        "max_hire_orders_per_turn", _DEFAULT_MAX_HIRE_ORDERS_PER_TURN
+    )
     hires: list[list] = []
-    while hires_today + len(hires) < target_hires:
+    while hires_today + len(hires) < target_hires and len(hires) < max_hire_orders_per_turn:
+        if hires_today > 0 and (turns_per_day_val - current_hour) < hire_min_turns_left:
+            break
         hires.append(["HIRE"])
 
     tail: list[list] = []

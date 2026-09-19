@@ -939,6 +939,141 @@ def test_hires_per_day_workload_forecast_free_tile_weight_ignored_without_tile_c
     assert hires_per_day(params, free_tiles=50) == 4  # falls through to the static value, as always
 
 
+# --- hires_per_day: day_plan_hiring_aware (T8.44) -----------------------
+
+
+def test_hires_per_day_day_plan_hiring_aware_off_by_default():
+    # Bit-identical - maintenance_actions_today given but the flag isn't
+    # set, so this falls straight through to workload_forecast_hiring_
+    # aware's own default-on branch (which ignores maintenance_actions_
+    # today entirely) rather than the new one.
+    params = {"dynamic_hiring": True}
+    with_day_plan_fields = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        animal_tile_counts={"COW": 1}, crop_tile_counts={"MELON": 5},
+        maintenance_actions_today=999, planned_new_crop_tiles=999, planned_new_animals=99,
+    )
+    without_day_plan_fields = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        animal_tile_counts={"COW": 1}, crop_tile_counts={"MELON": 5},
+    )
+    assert with_day_plan_fields == without_day_plan_fields
+
+
+def test_hires_per_day_day_plan_hiring_aware_matches_a_hand_computed_target():
+    # 5 already-placed crop tiles needing 2 actions/day each (10) + 1
+    # animal tile needing 1 action/day (1) = 11 maintenance actions, plus
+    # a freshly-decided 25-tile crop planting (25 * 2.0 = 50) and 1 new
+    # animal acquisition (1 * 4.0 = 4): total_actions = 11 + 50 + 4 = 65.
+    params = {"dynamic_hiring": True, "day_plan_hiring_aware": True}
+    total_actions = 11 + 25 * 2.0 + 1 * 4.0
+    total_turns = total_actions * 2.0  # turns_per_task_estimate default
+    expected = min(max(math.ceil(total_turns / 24) - 1, 8), 8)  # min/max_hires_per_day defaults: 8
+    got = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        maintenance_actions_today=11, planned_new_crop_tiles=25, planned_new_animals=1,
+    )
+    assert got == expected
+
+
+def test_hires_per_day_day_plan_hiring_aware_is_hour_independent():
+    params = {"dynamic_hiring": True, "day_plan_hiring_aware": True, "max_hires_per_day": 20}
+    at_hour_0 = hires_per_day(
+        params, hour=0, turns_per_day=24, maintenance_actions_today=40,
+        planned_new_crop_tiles=25, planned_new_animals=1,
+    )
+    at_hour_20 = hires_per_day(
+        params, hour=20, turns_per_day=24, maintenance_actions_today=40,
+        planned_new_crop_tiles=25, planned_new_animals=1,
+    )
+    assert at_hour_0 == at_hour_20
+
+
+def test_hires_per_day_day_plan_hiring_aware_takes_priority_over_workload_forecast():
+    # Both flags on: the day-plan branch wins (checked first) - proven by
+    # giving each branch inputs that would produce a different target,
+    # and confirming the day-plan one's is what comes back.
+    params = {
+        "dynamic_hiring": True,
+        "day_plan_hiring_aware": True,
+        "workload_forecast_hiring_aware": True,
+        "min_hires_per_day": 0,
+        "max_hires_per_day": 20,
+    }
+    got = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        animal_tile_counts={"COW": 1}, crop_tile_counts={"MELON": 5},  # would drive the old branch
+        maintenance_actions_today=0, planned_new_crop_tiles=0, planned_new_animals=0,  # drives new branch to 0
+    )
+    assert got == 0  # the day-plan branch's own (near-zero) target, not workload_forecast's
+
+
+def test_hires_per_day_day_plan_hiring_aware_can_exceed_the_old_forecasts_ceiling():
+    # T8.43 Stage 3's own mechanical proof: workload_forecast_hiring_
+    # aware's formula needs total_turns > 216 to clip above 8, unreachable
+    # from a 100-tile board at any realistic weight. This scenario (a
+    # full 25-tile quadrant all needing PLANT+WATER today, e.g. a
+    # harvest+replant burst) reaches well past that under the new
+    # formula, proving it's a real structural fix, not a relabeling.
+    params = {
+        "dynamic_hiring": True, "day_plan_hiring_aware": True,
+        "min_hires_per_day": 0, "max_hires_per_day": 100,
+    }
+    got = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        maintenance_actions_today=120,  # e.g. a full-board harvest+replant burst day
+        planned_new_crop_tiles=0, planned_new_animals=0,
+    )
+    assert got > 8
+
+
+def test_hires_per_day_day_plan_hiring_aware_respects_the_clip():
+    params = {
+        "dynamic_hiring": True, "day_plan_hiring_aware": True,
+        "min_hires_per_day": 2, "max_hires_per_day": 5,
+    }
+    got = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        maintenance_actions_today=0, planned_new_crop_tiles=0, planned_new_animals=0,
+    )
+    assert got == 2  # floored at min_hires_per_day
+    got_high = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        maintenance_actions_today=1000, planned_new_crop_tiles=0, planned_new_animals=0,
+    )
+    assert got_high == 5  # capped at max_hires_per_day
+
+
+def test_hires_per_day_day_plan_new_crop_tile_actions_default_matches_hand_derivation():
+    # This session's own hand-verified per-tile cost: a fresh crop tile
+    # costs PLANT+WATER=2 actions on planting day.
+    params = {
+        "dynamic_hiring": True, "day_plan_hiring_aware": True,
+        "min_hires_per_day": 0, "max_hires_per_day": 100,
+    }
+    got = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        maintenance_actions_today=0, planned_new_crop_tiles=1, planned_new_animals=0,
+    )
+    expected = min(max(math.ceil(2.0 * 2.0 / 24) - 1, 0), 100)
+    assert got == expected
+
+
+def test_hires_per_day_day_plan_new_animal_actions_default_matches_hand_derivation():
+    # This session's own hand-verified per-tile cost: a fresh animal
+    # costs BUILD+PICKUP+PLACE+FEED=4 actions on acquisition day.
+    params = {
+        "dynamic_hiring": True, "day_plan_hiring_aware": True,
+        "min_hires_per_day": 0, "max_hires_per_day": 100,
+    }
+    got = hires_per_day(
+        params, hour=0, turns_per_day=24,
+        maintenance_actions_today=0, planned_new_crop_tiles=0, planned_new_animals=1,
+    )
+    expected = min(max(math.ceil(4.0 * 2.0 / 24) - 1, 0), 100)
+    assert got == expected
+
+
 def test_animal_revenue_per_tile_day_fertilizer_income_matches_independent_calculation():
     # T8.3q: kaggriculture.py's _daily_refresh_animals sets
     # fertilizer_available=True every surviving day regardless of

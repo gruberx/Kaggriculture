@@ -1076,6 +1076,30 @@ def should_buy_land(
     return nearest_free_shed_distance is not None and nearest_free_shed_distance >= min_frontier
 
 
+# T8.44, the user's own follow-up after T8.43 Stage 3 mechanically proved
+# `workload_forecast_hiring_aware`'s own `total_turns > 216` ceiling is
+# unreachable from a 100-tile board even at its most aggressive weight
+# (see `_DEFAULT_WORKLOAD_FORECAST_FREE_TILE_WEIGHT`'s own comment): a
+# *burst-day-aware* alternative, built from real per-tile-today action
+# counts (`kagg.policy.tasks.crop_tile_day_actions`/`animal_tile_day_
+# actions` - a fresh planting/harvest day's true cost, not a lifetime-
+# averaged rate) instead of `_crop_actions_per_tile_day`'s smoothed one.
+# Default `False`, bit-identical for every caller that doesn't set it -
+# see `hires_per_day`'s own docstring for the full formula and
+# `tools/measure_t844.py` for the sweep.
+_DEFAULT_DAY_PLAN_HIRING_AWARE = False
+# Real, hand-verified per-tile action costs this session derived directly
+# (matches `day_plan_new_crop_tile_actions`/`day_plan_new_animal_actions`'s
+# own docstring in `hires_per_day` below): a newly-planted crop tile costs
+# PLANT+WATER=2 actions its first day; a newly-acquired animal costs
+# BUILD+PICKUP+PLACE+FEED=4 (PICKUP/PLACE must be the same unit - PLACE
+# consumes the acting unit's own inventory, no "handoff" mechanic exists).
+# Named, swept parameters rather than literals baked into the formula,
+# per SPEC-policy.md's own rule against unswept intuition constants.
+_DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS = 2.0
+_DEFAULT_DAY_PLAN_NEW_ANIMAL_ACTIONS = 4.0
+
+
 def hires_per_day(
     params: dict | None = None,
     pending_task_count: int | None = None,
@@ -1086,6 +1110,9 @@ def hires_per_day(
     crop_tile_counts: dict[str, int] | None = None,
     days_remaining: int | None = None,
     free_tiles: int | None = None,
+    maintenance_actions_today: int | None = None,
+    planned_new_crop_tiles: int | None = None,
+    planned_new_animals: int | None = None,
 ) -> int:
     """How many farm hands to hire right now.
 
@@ -1193,6 +1220,33 @@ def hires_per_day(
     are actually turned on for the episode - a farm not doing CARE
     shouldn't be staffed as if it were.
 
+    `day_plan_hiring_aware`/`maintenance_actions_today`/`planned_new_
+    crop_tiles`/`planned_new_animals` (T8.44, the user's own follow-up
+    after T8.43 Stage 3's mechanical proof that `workload_forecast_
+    hiring_aware`'s own formula can never exceed 8 hires from a
+    realistic board): checked *before* the `workload_forecast_hiring_
+    aware` branch above, and takes priority over it whenever both engage
+    (`workload_forecast_*` stays exactly as-is as the fallback for every
+    caller that doesn't turn this on). `decide()` computes `maintenance_
+    actions_today` by summing `kagg.policy.tasks.crop_tile_day_actions`/
+    `animal_tile_day_actions` over every already-placed tile (the tile's
+    *real* cost today - WATER/FEED plus whatever one-off HARVEST/CARE/
+    FERTILIZE is actually due right now - not a lifetime-averaged rate),
+    plus `planned_new_crop_tiles * day_plan_new_crop_tile_actions` and
+    `planned_new_animals * day_plan_new_animal_actions` for whatever new
+    planting/acquisition is already decided this turn (`plant_crop`/
+    `acquisition_animal`, both final by the time `decide()` calls this).
+    `total_turns = total_actions * turns_per_task_estimate`, then the
+    same `ceil(.../turns_per_day) - 1`, buffer, and `[min_hires_per_day,
+    max_hires_per_day]` clip every other path already uses - full reuse
+    of already-swept machinery, no separate multiplier. Divided by the
+    full `turns_per_day`, matching `workload_forecast_hiring_aware`'s own
+    documented hour-independence (a fixed whole-day forecast known in
+    full at hour 0, not a shrinking backlog). Engages only when the flag
+    is on AND `maintenance_actions_today` is given (`None` falls through
+    to the branches below, same "real signal or graceful fallback"
+    convention as `workload_forecast_hiring_aware`'s own two-dict gate).
+
     Falls back to the `pending_task_count` path (or the plain static
     value) whenever the flag is off, or on but either tile-count dict is
     `None`/`days_remaining` is `None` - bit-identical for every existing
@@ -1239,6 +1293,25 @@ def hires_per_day(
         return min_hires
     turns_per_task = params.get("turns_per_task_estimate", _DEFAULT_TURNS_PER_TASK_ESTIMATE)
     buffer_fraction = params.get("hire_buffer_fraction", _DEFAULT_HIRE_BUFFER_FRACTION)
+    if (
+        params.get("day_plan_hiring_aware", _DEFAULT_DAY_PLAN_HIRING_AWARE)
+        and maintenance_actions_today is not None
+    ):
+        new_crop_actions = params.get(
+            "day_plan_new_crop_tile_actions", _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS
+        )
+        new_animal_actions = params.get(
+            "day_plan_new_animal_actions", _DEFAULT_DAY_PLAN_NEW_ANIMAL_ACTIONS
+        )
+        total_actions = (
+            maintenance_actions_today
+            + (planned_new_crop_tiles or 0) * new_crop_actions
+            + (planned_new_animals or 0) * new_animal_actions
+        )
+        total_turns = total_actions * turns_per_task
+        target = math.ceil(total_turns / turns_per_day) - 1
+        target = math.ceil(target * (1 + buffer_fraction))
+        return min(max(target, min_hires), max_hires)
     workload_forecast_aware = params.get(
         "workload_forecast_hiring_aware", _DEFAULT_WORKLOAD_FORECAST_HIRING_AWARE
     )

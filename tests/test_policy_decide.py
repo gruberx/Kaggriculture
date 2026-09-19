@@ -358,6 +358,249 @@ def test_decide_labor_units_reflects_free_tiles_via_the_workload_forecast(monkey
     assert captured.get("plant_qty") == 5
 
 
+# --- day_plan_hiring_aware (T8.44) --------------------------------------
+
+
+def test_day_plan_hiring_aware_defaults_to_off():
+    assert DEFAULT_PARAMS.get("day_plan_hiring_aware") is False
+
+
+def test_decide_passes_maintenance_actions_today_to_hires_per_day(monkeypatch):
+    # A single fed WHEAT tile (not yet harvestable - yield_units=0) costs
+    # just its recurring WATER (1); a single fed, uncared-for COW tile
+    # costs just its recurring FEED (1) - animal_care_aware defaults off.
+    # maintenance_actions_today must be their sum (2), reaching hires_per_
+    # day regardless of whether day_plan_hiring_aware is actually on -
+    # matches this module's own "always pass the real signal, let the
+    # callee's flag decide" convention (e.g. animal_tile_counts above).
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    tiles[3][3] = {
+        "kind": "PASTURE", "animal": "COW", "placed_day": 0, "yield_units": 0,
+        "consecutive_unfed": 0, "fed_today": True, "cared_today": False,
+        "fertilizer_available": False, "pending_care_bonus": 0,
+    }
+    tiles[0][0] = {
+        "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": False,
+        "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+        "fertilized_until_day": -1,
+    }
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "maintenance_actions_today" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+
+    assert captured.get("maintenance_actions_today") == 2
+
+
+def test_decide_planned_new_animals_is_one_when_pursuing_an_animal(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_animals" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    # A totally fresh farm with always_pursue_one_animal (default True)
+    # pursues an animal via that path even though MELON dominates the
+    # crop ranking at a fresh market - see decide.py's own comment on
+    # always_pursue_one_animal for why the plain ranking alone never
+    # picks one.
+    decide(_obs(), DEFAULT_PARAMS)
+    assert captured.get("planned_new_animals") == 1
+
+
+def test_decide_planned_new_animals_is_zero_without_an_acquisition(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_animals" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(_obs(), dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("planned_new_animals") == 0
+
+
+def test_decide_planned_new_crop_tiles_capped_by_free_tiles(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    tiles = obs["farms"][0]["tiles"]
+    for y in range(10):
+        for x in range(10):
+            if y * 10 + x < 97:  # leaves exactly 3 tiles free
+                tiles[y][x] = {"kind": "PASTURE"}
+    obs["market"]["inventory"]["MELON"] = 1  # scarce -> highest price -> ranks first
+    obs["private"]["seeds"] = {"MELON": 100}
+    obs["farms"][0]["money"] = 1_000_000  # affordability must not be the binding cap here
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("planned_new_crop_tiles") == 3
+
+
+def test_decide_planned_new_crop_tiles_capped_by_day_plan_max_new_tiles_per_day(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()  # fresh farm - free_tiles=100
+    obs["market"]["inventory"]["MELON"] = 1
+    obs["private"]["seeds"] = {"MELON": 100}
+    obs["farms"][0]["money"] = 1_000_000
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False, day_plan_max_new_tiles_per_day=5))
+    assert captured.get("planned_new_crop_tiles") == 5
+
+
+def test_decide_planned_new_crop_tiles_is_cash_aware_by_default(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()  # fresh farm - free_tiles=100
+    obs["market"]["inventory"]["MELON"] = 1
+    obs["private"]["seeds"] = {"MELON": 1}  # only 1 seed held
+    obs["farms"][0]["money"] = 0  # nothing affordable beyond what's held
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert captured.get("planned_new_crop_tiles") == 1  # seeds_held(1) + affordable(0)
+
+
+def test_decide_planned_new_crop_tiles_cash_aware_can_be_disabled(monkeypatch):
+    import kagg.policy.decide as decide_module
+
+    obs = _obs()
+    obs["market"]["inventory"]["MELON"] = 1
+    obs["private"]["seeds"] = {"MELON": 1}
+    obs["farms"][0]["money"] = 0
+
+    captured = {}
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(*args, **kwargs):
+        if "planned_new_crop_tiles" in kwargs:
+            captured.update(kwargs)
+        return original_hire(*args, **kwargs)
+
+    monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
+    decide(
+        obs,
+        dict(DEFAULT_PARAMS, always_pursue_one_animal=False, day_plan_new_tiles_cash_aware=False),
+    )
+    # Uncapped by affordability - just free_tiles(100)/day_plan_max_new_
+    # tiles_per_day(25 default) instead.
+    assert captured.get("planned_new_crop_tiles") == 25
+
+
+def test_decide_hire_min_turns_left_escape_hatch_still_hires_the_first_hand_of_the_day():
+    # hires_today == 0 is a deliberate escape hatch - late in the day, a
+    # gate that blocked the day's very first hire would leave the farm
+    # with zero labor for the rest of the day, a worse regression than
+    # one slightly-late hire.
+    obs = _obs()
+    obs["hour"] = 20  # only 4 turns left in a 24-turn day
+    obs["farms"][0]["hires_today"] = 0
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3, hire_min_turns_left=6)
+    action = decide(obs, params)
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 3
+
+
+def test_decide_hire_min_turns_left_blocks_a_late_top_up_once_something_was_already_hired():
+    obs = _obs()
+    obs["hour"] = 20  # only 4 turns left
+    obs["farms"][0]["hires_today"] = 2  # already hired twice today
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3, hire_min_turns_left=6)
+    action = decide(obs, params)
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 0
+
+
+def test_decide_hire_min_turns_left_allows_a_top_up_with_enough_turns_remaining():
+    obs = _obs()
+    obs["hour"] = 10  # 14 turns left - clears hire_min_turns_left=6
+    obs["farms"][0]["hires_today"] = 2
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3, hire_min_turns_left=6)
+    action = decide(obs, params)
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 1
+
+
+def test_decide_hire_min_turns_left_defaults_to_zero_and_is_a_no_op():
+    obs = _obs()
+    obs["hour"] = 23  # 1 turn left
+    obs["farms"][0]["hires_today"] = 2
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3)
+    action = decide(obs, params)
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 1  # gate never engages
+
+
+def test_decide_max_hire_orders_per_turn_caps_hire_orders_this_turn():
+    obs = _obs()
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=20, max_hire_orders_per_turn=3)
+    action = decide(obs, params)
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 3
+
+
+def test_decide_max_hire_orders_per_turn_defaults_to_max_market_orders():
+    from kagg.policy.decide import _MAX_MARKET_ORDERS
+
+    assert DEFAULT_PARAMS.get("max_hire_orders_per_turn") == _MAX_MARKET_ORDERS
+
+
+def test_decide_max_hire_orders_per_turn_leaves_room_for_sell_orders():
+    # Without the cap, hires_per_day=20 (dynamic_hiring off) would queue
+    # 20 HIRE orders, crowding out every SELL/tail order despite the
+    # 10-order market cap - max_hire_orders_per_turn=3 leaves room.
+    obs = _obs()
+    obs["private"]["shed"] = {p: 20 for p in PRODUCTS}  # every sellable product
+    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=20, max_hire_orders_per_turn=3)
+    action = decide(obs, params)
+    hire_orders = [o for o in action["market"] if o == ["HIRE"]]
+    sell_orders_ = [o for o in action["market"] if o[0] == "SELL"]
+    assert len(hire_orders) == 3
+    assert sell_orders_  # not crowded out entirely
+    assert len(action["market"]) <= 10
+
+
 def test_investment_buys_keep_a_reserved_slot_and_are_emitted_after_the_sells():
     # T8.5: BUY_SEED (part of `tail`) must still get a slot even when 9
     # sellable products alone would otherwise fill all 10, and must be
