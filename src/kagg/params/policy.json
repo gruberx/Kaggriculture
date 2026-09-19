@@ -63,5 +63,6 @@
   "bulk_animal_purchase": false,
   "bulk_animal_buffer_fraction": 0.0,
   "bulk_purchase_max_new_tiles": 25,
-  "plant_while_animal_pending": false
+  "plant_while_animal_pending": false,
+  "defer_seed_purchase_on_crop_sale": 0
 }

@@ -692,6 +692,9 @@ DEFAULT_PARAMS = {
     "bulk_animal_buffer_fraction": 0.0,
     "bulk_purchase_max_new_tiles": 25,
     "plant_while_animal_pending": False,
+    # T8.46: two-step "sell everything, buy seeds on the real new prices" -
+    # see kagg.policy.decide._DEFAULT_DEFER_SEED_PURCHASE_ON_CROP_SALE. 0 = off.
+    "defer_seed_purchase_on_crop_sale": 0,
 }
 
 

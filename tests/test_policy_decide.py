@@ -2625,3 +2625,73 @@ def test_plant_while_animal_pending_reaches_build_task_list_as_plant_alongside_a
 
     assert run(False) is False
     assert run(True) is True
+
+
+# --- defer_seed_purchase_on_crop_sale (T8.46) ---------------------------
+
+
+def _harvest_day_obs(melons=89):
+    obs = _fresh_melon_obs()
+    obs["private"]["shed"]["MELON"] = melons  # last night's harvest, dropped into the shed
+    return obs
+
+
+def _dump_params(**kw):
+    return dict(DEFAULT_PARAMS, drip_sell_max_per_turn=1000, always_pursue_one_animal=False, **kw)
+
+
+def test_defer_seed_purchase_on_crop_sale_defaults_off():
+    assert DEFAULT_PARAMS["defer_seed_purchase_on_crop_sale"] == 0
+
+
+def test_dump_sells_the_whole_premium_stock_in_one_order():
+    orders = _orders(decide(_harvest_day_obs(), _dump_params()), "SELL")
+    assert ["SELL", "MELON", 89] in orders
+
+
+def test_a_big_crop_sale_defers_the_seed_purchase_this_turn():
+    obs = _harvest_day_obs()
+    off = _orders(decide(obs, _dump_params(bulk_seed_purchase=True)), "BUY_SEED")
+    on = _orders(
+        decide(_harvest_day_obs(), _dump_params(bulk_seed_purchase=True, defer_seed_purchase_on_crop_sale=10)),
+        "BUY_SEED",
+    )
+    assert off != [] and on == []
+
+
+def test_deferral_covers_the_legacy_seed_path_too():
+    on = _orders(
+        decide(_harvest_day_obs(), _dump_params(defer_seed_purchase_on_crop_sale=10)), "BUY_SEED"
+    )
+    assert on == []
+
+
+def test_the_sale_itself_still_goes_out_when_the_seed_purchase_is_deferred():
+    orders = _orders(
+        decide(_harvest_day_obs(), _dump_params(defer_seed_purchase_on_crop_sale=10)), "SELL"
+    )
+    assert ["SELL", "MELON", 89] in orders
+
+
+def test_a_sale_below_the_threshold_does_not_defer():
+    obs = _harvest_day_obs(melons=8)
+    params = _dump_params(bulk_seed_purchase=True, defer_seed_purchase_on_crop_sale=10)
+    assert _orders(decide(obs, params), "BUY_SEED") != []
+
+
+def test_selling_non_crop_products_does_not_defer():
+    obs = _fresh_melon_obs()
+    obs["private"]["shed"]["EGG"] = 50  # animal product: does not move the crop ranking
+    params = _dump_params(bulk_seed_purchase=True, defer_seed_purchase_on_crop_sale=10)
+    assert _orders(decide(obs, params), "BUY_SEED") != []
+
+
+def test_deferral_off_by_default_keeps_the_purchase_even_with_a_big_sale():
+    obs = _harvest_day_obs()
+    assert _orders(decide(obs, _dump_params(bulk_seed_purchase=True)), "BUY_SEED") != []
+
+
+def test_the_next_turn_buys_seeds_again_once_the_shed_is_empty():
+    obs = _fresh_melon_obs()  # the sale went out last turn: shed empty now
+    params = _dump_params(bulk_seed_purchase=True, defer_seed_purchase_on_crop_sale=10)
+    assert _orders(decide(obs, params), "BUY_SEED") != []

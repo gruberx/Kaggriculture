@@ -923,6 +923,20 @@ _DEFAULT_BULK_ANIMAL_PURCHASE = False
 _DEFAULT_BULK_ANIMAL_BUFFER_FRACTION = 0.0
 _DEFAULT_BULK_PURCHASE_MAX_NEW_TILES = 25
 _DEFAULT_PLANT_WHILE_ANIMAL_PENDING = False
+# T8.46 (the user's own idea, after T8.45's trace showed 17 MELON seeds
+# bought at price 260 and stranded because the agent's own drip-sale of the
+# 89 harvested melons on the shed dragged MELON to ~190 - level with
+# STRAWBERRY - eight turns later): the ranking is computed from the market
+# *before* this turn's own sale is priced in, and an agent cannot query
+# prices mid-turn (`decide()` returns every order at once; the engine
+# settles them afterwards and the new prices appear in the *next*
+# observation). Two-step fix: when this turn's sale of crop products
+# (WHEAT/CARROT/TOMATO/STRAWBERRY/MELON) is at least this many units, send
+# no BUY_SEED this turn - the following turn's observation already carries
+# the real post-sale prices, and the ranking/bulk plan run on those.
+# 0 = off (bit-identical). Meant to be paired with a large
+# `drip_sell_max_per_turn` (the sell-everything-at-once half of the idea).
+_DEFAULT_DEFER_SEED_PURCHASE_ON_CROP_SALE = 0
 
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
@@ -2045,6 +2059,33 @@ def decide(obs: dict, params: dict) -> dict:
             break
         hires.append(["HIRE"])
 
+    # T8.46: does this turn's own sale of crop products move the market
+    # enough that a seed bought on today's ranking could be stale next turn?
+    # Preview the sells (pure function, same inputs as the final call below;
+    # only the order-slot cap differs and one order per product never hits it).
+    defer_seed_units = params.get(
+        "defer_seed_purchase_on_crop_sale", _DEFAULT_DEFER_SEED_PURCHASE_ON_CROP_SALE
+    )
+    defer_seed_purchase = False
+    if defer_seed_units > 0:
+        preview_wheat_reserve = wheat_reserve
+        if feed_needed and not liquidate:
+            preview_wheat_reserve = max(
+                wheat_reserve,
+                params.get("wheat_restock_threshold", _DEFAULT_WHEAT_RESTOCK_THRESHOLD),
+            )
+        preview_sells = sell_orders(
+            shed, obs["market"]["inventory"], params,
+            max_orders=_MAX_MARKET_ORDERS,
+            wheat_reserve=preview_wheat_reserve,
+            liquidate=liquidate,
+            use_fertilizer=use_fertilizer,
+            liquidate_wheat_reserve=liquidate_wheat_reserve,
+        )
+        defer_seed_purchase = (
+            sum(o[2] for o in preview_sells if o[1] in CROPS) >= defer_seed_units
+        )
+
     tail: list[list] = []
     # Seed/animal purchase: arrives next turn (market orders resolve
     # after this turn's unit actions) - the PLANT/PLACE task above
@@ -2117,7 +2158,7 @@ def decide(obs: dict, params: dict) -> dict:
         )
         bulk_animal_cost = bulk_animal_qty * animal_unit_cost
 
-    if not animal_blocks_planting and fallback_crops and has_empty_tile:
+    if not animal_blocks_planting and fallback_crops and has_empty_tile and not defer_seed_purchase:
         if bulk_seed_purchase:
             # Tiles about to be planted: every free tile not reserved for
             # a planned animal's structure (the same land accounting the
