@@ -934,7 +934,8 @@ def crop_tile_day_actions(
     *,
     use_fertilizer: bool = False,
     defer_one_time_harvest_to_max_yield: bool = False,
-) -> int:
+    harvest_replant_actions: float = 0,
+) -> float:
     """T8.44: how many real actions a single already-planted PLANT tile
     costs *today* - the per-tile "today" term the day-plan hiring forecast
     (`kagg.policy.strategy.hires_per_day`'s new `day_plan_hiring_aware`
@@ -961,12 +962,21 @@ def crop_tile_day_actions(
     forecast of the day's total workload, not an emittable task, so
     whether a unit happens to be holding FERTILIZER this turn is beside
     the point (the point is whether the *tile* has work pending).
+
+    `harvest_replant_actions` (default 0, bit-identical): extra actions
+    added when this tile is a one-time crop being harvested today - the
+    real HARVEST handler clears such a tile to `None`, so keeping it
+    productive needs a follow-up PLANT+WATER, which the free-tile term
+    cannot see yet at the hour the forecast is made (the tile is still
+    occupied). Same reasoning as the WEED replant term in `decide`.
     """
     actions = 1  # WATER
     if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
         tile, current_day, defer_one_time_harvest_to_max_yield
     ):
         actions += 1
+        if not CROPS[tile["crop"]]["ongoing"]:
+            actions += harvest_replant_actions
     if use_fertilizer and tile.get("fertilized_until_day", -1) < current_day:
         actions += 1
     return actions

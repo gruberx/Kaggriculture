@@ -2798,6 +2798,24 @@ project's own established finding, a fresh submission's score is volatile for it
       `plant_while_animal_pending=False`, keep `drip_sell_max_per_turn=1000` (and `wheat_urgency_reserve=3` is harmless)
       - then the golden table needs a 22nd re-record. No Kaggle submission.
 
+- [x] T8.47 - day-plan forecast counts the replant of harvested one-time crops (the user's request after the day-10
+      analysis, 2026-09-20). Traced (seed 900, day 10, hours 0-12): at hour 0 the forecast was 51 actions (24 HARVEST +
+      upkeep, 0 free tiles) vs ~99 real, because the 24 melon tiles the HARVEST handler clears to `None` (and that then
+      need PLANT+WATER) were still occupied -> 4 hands instead of 8. Also seen, NOT fixed: the forecast divides by 24
+      turns all day, not the turns left; `planned_new_crop_tiles` is capped by seeds held + affordable cash (harvested
+      melons sit in unit inventories until the nightly shed drop and are sold at hour 0 of day 11, so day 10 cash is ~$50
+      after 14 early BUY_SEEDs); `PRIORITY_HARVEST` < `PRIORITY_PLANT` means no PLANT until the whole harvest is done
+      (first PLANT at hour 14). Forcing hires (`cf.py`): 8 hands from hour 0 = +2.5k..+5.0k final money in all 3 seeds
+      (only -5..0 free tiles at the end of the day - cash-limited), 8 hands from hour 9 / 6 from hour 5 = no gain.
+      Built `day_plan_harvest_replant_aware` (default **False**): `crop_tile_day_actions(..., harvest_replant_actions)`
+      adds `day_plan_new_crop_tile_actions` (2.0) to a harvestable one-time tile. Day-10 forecast 51 -> 99, hands 4 -> 8.
+      Tests: +2 (tasks, decide). Measured (`tools/measure_t847.py`, flag on vs shipped defaults): vs `starter` 20 seeds
+      `+6.1%` (better on 15/20); vs `pass` `+2.5%` (13/20); vs old-default mirror `-5.2%` (10/20); arena vs shipped
+      defaults `0.500` (25W/25L, 50 working seeds); arena vs OLD default `0.560` (shipped defaults: `0.360`). Per-seed
+      table (900/901/902): 32689 -> 32060, 44823 -> 41583, 46545 -> 50329 (opponent is coupled through the market).
+      Verdict: helps against external opponents, neutral in self-play - not flipped (standing rule: default flips only on
+      explicit request). Enable with `day_plan_harvest_replant_aware=True`.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

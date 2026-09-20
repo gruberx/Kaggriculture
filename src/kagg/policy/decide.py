@@ -849,6 +849,13 @@ _DEFAULT_DAY_PLAN_NEW_TILES_CASH_AWARE = True
 _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS = 2.0
 _DEFAULT_DAY_PLAN_WEED_REPLANT_AWARE = True
 
+# T8.47: same idea for a one-time crop harvested today (the HARVEST handler
+# clears the tile to None). Traced on day 10 of the shipped defaults: at
+# hour 0 the forecast was 51 actions (24 HARVEST + upkeep, 0 free tiles)
+# against ~99 real, because the 24 tiles about to be replanted were still
+# occupied. Off by default (shipped-default flips need an explicit request).
+_DEFAULT_DAY_PLAN_HARVEST_REPLANT_AWARE = False
+
 # T8.44: a same-day quadrant top-up hire is only worth emitting if enough
 # turns remain today for the new hand to be productive - `hire_min_turns_
 # left` gates the HIRE-emission loop below on `turns_per_day -
@@ -1561,6 +1568,11 @@ def decide(obs: dict, params: dict) -> dict:
         if weed_replant_aware
         else 0
     )
+    harvest_replant_actions = (
+        params.get("day_plan_new_crop_tile_actions", _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS)
+        if params.get("day_plan_harvest_replant_aware", _DEFAULT_DAY_PLAN_HARVEST_REPLANT_AWARE)
+        else 0
+    )
     placed_animal_type_counts: dict[str, int] = {}
     free_tiles = 0
     unlocked_tiles = 0
@@ -1594,6 +1606,7 @@ def decide(obs: dict, params: dict) -> dict:
                         current_day,
                         use_fertilizer=use_fertilizer,
                         defer_one_time_harvest_to_max_yield=defer_one_time_harvest_to_max_yield,
+                        harvest_replant_actions=harvest_replant_actions,
                     )
                 elif tile.get("kind") == "WEED":
                     n_weed_tiles += 1

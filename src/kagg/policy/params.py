@@ -248,6 +248,9 @@ DEFAULT_PARAMS = {
     # actions_today, which is itself unused unless day_plan_hiring_aware
     # is also on.
     "day_plan_weed_replant_aware": True,
+    # T8.47: count the PLANT+WATER follow-up of every one-time crop tile
+    # harvested today in the day-plan forecast. Off until measured/accepted.
+    "day_plan_harvest_replant_aware": False,
     "sell_margin": 0,
     # 2026-09-20, the user's explicit decision after T8.46: premium goods
     # (MELON/STRAWBERRY/MILK/WOOL) are sold in one order instead of 5 per

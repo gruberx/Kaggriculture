@@ -2721,3 +2721,32 @@ def test_the_next_turn_buys_seeds_again_once_the_shed_is_empty():
     obs = _fresh_melon_obs()  # the sale went out last turn: shed empty now
     params = _dump_params(bulk_seed_purchase=True, defer_seed_purchase_on_crop_sale=10)
     assert _orders(decide(obs, params), "BUY_SEED") != []
+
+
+def test_day_plan_harvest_replant_aware_adds_replant_actions_for_ripe_one_time_tiles(monkeypatch):
+    # T8.47: a ripe one-time tile is forecast as WATER + HARVEST + PLANT +
+    # WATER (the harvest clears the tile). Flag off (default) = old count.
+    import kagg.policy.decide as decide_module
+
+    assert DEFAULT_PARAMS["day_plan_harvest_replant_aware"] is False
+
+    def maintenance(flag):
+        obs = _obs()
+        obs["day"] = 4  # WHEAT max_yield_day: harvest no longer deferred
+        obs["farms"][0]["tiles"][0][0] = {
+            "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": False,
+            "consecutive_unwatered": 0, "yield_units": 1, "max_lifespan_step": 120,
+            "fertilized_until_day": -1,
+        }
+        captured = {}
+        original = decide_module.hires_per_day
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(decide_module, "hires_per_day", spy)
+        decide(obs, dict(DEFAULT_PARAMS, day_plan_harvest_replant_aware=flag))
+        return captured["maintenance_actions_today"]
+
+    assert maintenance(True) - maintenance(False) == 2.0

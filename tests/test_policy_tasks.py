@@ -1446,3 +1446,17 @@ def test_build_task_list_plant_alongside_animal_is_inert_without_an_animal():
     assert [(t.op, t.pos) for t in build_task_list(_empty_tiles(), plant_alongside_animal=True, **kwargs)] == [
         (t.op, t.pos) for t in build_task_list(_empty_tiles(), **kwargs)
     ]
+
+
+def test_crop_tile_day_actions_harvest_replant_only_for_one_time_crops():
+    # WHEAT (one-time) harvestable at age 2: WATER + HARVEST, plus the
+    # follow-up PLANT+WATER the cleared tile will need.
+    tile = _plant_tile(planted_day=0, yield_units=1)
+    assert crop_tile_day_actions(tile, current_day=2, harvest_replant_actions=2.0) == 4
+    # Not harvestable yet -> no replant term.
+    assert crop_tile_day_actions(
+        _plant_tile(planted_day=0, yield_units=0), current_day=5, harvest_replant_actions=2.0
+    ) == 1
+    # Ongoing crop (harvest doesn't clear the tile) -> no replant term.
+    tomato = dict(_plant_tile(planted_day=0, yield_units=1), crop="TOMATO")
+    assert crop_tile_day_actions(tomato, current_day=20, harvest_replant_actions=2.0) == 2
