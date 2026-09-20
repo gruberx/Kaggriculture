@@ -88,6 +88,7 @@ def sell_orders(
     liquidate: bool = False,
     use_fertilizer: bool = True,
     liquidate_wheat_reserve: bool = True,
+    force_sell: dict | None = None,
 ) -> list[list]:
     """Sell orders for this turn, one per sellable item with stock and a
     price that clears its margin, capped at `max_orders` (kept as an
@@ -118,6 +119,12 @@ def sell_orders(
     episode end just like any other stock T8.3d already fixed for.
     Defaults to True (ignore the reserve during liquidation); kept
     overridable to isolate it in self-play.
+
+    `force_sell` (T8.51): {item: units} that must go out this turn even
+    when the price does not clear the item's margin - the capacity-aware
+    override for stock the margin rule would otherwise hold in a shed that
+    is about to overflow (see `kagg.policy.decide`). For an item whose price
+    clears the margin this changes nothing.
 
     `liquidate` (T8.3d, the user's own observed defect): both the margin
     check and the premium-goods drip cap exist to protect *future*
@@ -159,6 +166,9 @@ def sell_orders(
         if not liquidate:
             current_price = price(item, market_inventory.get(item, MARKET_I0))
             if current_price <= _cost_basis(item) + margin:
+                forced = min(count, (force_sell or {}).get(item, 0))
+                if forced > 0:
+                    orders.append(["SELL", item, forced])
                 continue
         qty = count if liquidate or item not in PREMIUM_GOODS else min(count, drip_cap)
         if qty > 0:

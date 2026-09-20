@@ -423,3 +423,17 @@ def test_sale_revenue_walks_the_price_down_per_unit():
     expected = sum(price("MELON", 120 + k) for k in range(3))
     assert sale_revenue([["SELL", "MELON", 3], ["BUY_SEED", "MELON", 9]], inv) == expected
     assert sale_revenue([], inv) == 0
+
+
+def test_sell_orders_force_sell_overrides_the_price_rule_only_for_the_forced_units():
+    # MELON at a glut price (below its $80 seed cost) is normally held.
+    inv = {"MELON": MARKET_I0 + 150}
+    from kagg.gamelib.market import price
+
+    assert price("MELON", inv["MELON"]) <= 80
+    shed = {"MELON": 50}
+    assert sell_orders(shed, inv, {}) == []
+    assert sell_orders(shed, inv, {}, force_sell={"MELON": 20}) == [["SELL", "MELON", 20]]
+    # capped by what the shed holds, and a normally-clearing item is unaffected
+    assert sell_orders({"MELON": 5}, inv, {}, force_sell={"MELON": 20}) == [["SELL", "MELON", 5]]
+    assert sell_orders({"CARROT": 4}, {}, {}, force_sell={"CARROT": 1}) == [["SELL", "CARROT", 4]]

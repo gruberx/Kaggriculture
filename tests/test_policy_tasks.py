@@ -1589,3 +1589,14 @@ def test_harvestable_units_today():
     assert harvestable_units_today(melon, 9) == 0
     assert harvestable_units_today({"animal": "COW", "yield_units": 3}, 5) == 3
     assert harvestable_units_today({"animal": "COW", "yield_units": 0}, 5) == 0
+
+
+def test_deadline_drop_room_now_versus_room_after_sales():
+    kw = _deadline_kwargs(shed_used=90, shed_stay=10, shed_room_after_sales=90)
+    # standing on the shed tile: this turn's sales settle after the unit acts -> only 10 fit now
+    tasks = goods_deadline_drop_tasks([{"MELON": 130}], [(4, 4)], 10, **kw)
+    assert tasks[0].qty == 10
+    # arriving a turn later (one move away): the sales have cleared the shed by then
+    tasks = goods_deadline_drop_tasks([{"MELON": 130}], [(4, 3)], 10, **_deadline_kwargs(
+        hour=20, shed_used=90, shed_stay=10, shed_room_after_sales=90))
+    assert tasks[0].qty == 90

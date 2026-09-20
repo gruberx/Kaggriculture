@@ -33,7 +33,8 @@ Standard library only - ships inside the submission bundle.
 
 from __future__ import annotations
 
-from kagg.gamelib.constants import ANIMALS, CROPS
+from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0
+from kagg.gamelib.market import price
 from kagg.gamelib.farm import shed_distance
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
@@ -980,6 +981,14 @@ _DEFAULT_DROP_GOODS_TO_SHED = True
 # Replaces the immediate `drop_goods_overflow_fraction` trigger when on.
 _DEFAULT_DROP_GOODS_DEADLINE_MODE = True
 _DEFAULT_DROP_GOODS_DEADLINE_MARGIN_TURNS = 2
+
+# T8.51 (the user's request after the day-21..28 shed jam trace): when the
+# projected midnight shed content exceeds the shed capacity, sell the stock
+# already in the shed first - cheapest per unit first, even below the price
+# (cost-basis) rule that normally holds it - and only then send units to carry
+# the rest. In the trace 80 unsold melons (price $60 < seed cost $80) filled the
+# shed for a week and ~100 strawberries ($215 each) were discarded at midnight.
+_DEFAULT_CAPACITY_AWARE_SELLING = True
 
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
@@ -2006,6 +2015,77 @@ def decide(obs: dict, params: dict) -> dict:
             "plant_while_animal_pending", _DEFAULT_PLANT_WHILE_ANIMAL_PENDING
         ),
     )
+    # Reserve WHEAT from routine selling once any animal exists on the
+    # farm - see market.sell_orders's own docstring for the real deadlock
+    # this avoids (found during T6.4: selling everything emptied the shed
+    # before a PICKUP for feeding could ever complete, starving a placed
+    # COW to escape). Matches tasks._WHEAT_PICKUP_BATCH's batch size, not
+    # by import (tasks.py has no dependency on this module) - keep the
+    # two in sync by hand if either changes.
+    wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_type_counts else 0
+
+    # T8.3l: feed is only worth restocking when there's an animal placed
+    # or currently being pursued (acquisition_animal) - see
+    # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED's own comment for the real
+    # ping-pong this fixes.
+    feed_needed = (
+        bool(placed_animal_type_counts) or acquisition_animal is not None
+        if params.get("wheat_buy_only_when_feed_needed", _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED)
+        else True
+    )
+
+    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+    liquidation_days_before_end = params.get(
+        "liquidation_days_before_end", _DEFAULT_LIQUIDATION_DAYS_BEFORE_END
+    )
+    liquidate = current_day >= season_length_days - liquidation_days_before_end
+    liquidate_wheat_reserve = params.get(
+        "liquidate_wheat_reserve", _DEFAULT_LIQUIDATE_WHEAT_RESERVE
+    )
+
+    # T8.51: capacity-aware selling. Project the midnight shed content = what
+    # this turn's ordinary sale leaves in the shed + everything the units carry
+    # + what today's HARVEST tasks will still bring. Above the shed capacity
+    # (the engine discards the overflow at midnight) the stock already lying in
+    # the shed is sold first - cheapest per unit first, even below the price
+    # rule that would otherwise hold it - and only the rest of the excess is
+    # left for units to carry to the shed (below).
+    market_inv = obs["market"]["inventory"]
+    early_wheat_reserve = wheat_reserve
+    if feed_needed and not liquidate:
+        early_wheat_reserve = max(
+            wheat_reserve, params.get("wheat_restock_threshold", _DEFAULT_WHEAT_RESTOCK_THRESHOLD)
+        )
+    routine_preview = sell_orders(
+        shed, market_inv, params, max_orders=_MAX_MARKET_ORDERS,
+        wheat_reserve=early_wheat_reserve, liquidate=liquidate,
+        use_fertilizer=use_fertilizer, liquidate_wheat_reserve=liquidate_wheat_reserve,
+    )
+    shed_left = dict(shed)
+    for o in routine_preview:
+        shed_left[o[1]] = shed_left.get(o[1], 0) - o[2]
+    shed_stay_after_sales = sum(n for n in shed_left.values() if n > 0)
+    force_sell: dict[str, int] = {}
+    if params.get("capacity_aware_selling", _DEFAULT_CAPACITY_AWARE_SELLING):
+        carried_all = sum(
+            v for inv in (private.get("inventories") or []) for v in inv.values() if v > 0
+        )
+        excess = (
+            shed_stay_after_sales + carried_all + remaining_harvest_units
+            - params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
+        )
+        held = sorted(
+            (price(item, market_inv.get(item, MARKET_I0)), item, shed_left[item])
+            for item in _DROP_GOODS if shed_left.get(item, 0) > 0
+        )
+        for _, item, n in held:
+            if excess <= 0:
+                break
+            q = min(n, excess)
+            force_sell[item] = q
+            excess -= q
+            shed_stay_after_sales -= q
+
     # T8.49: carry goods to the shed for a same-turn sale (see the defaults'
     # comment). The cash need is a rough spend estimate for the tiles about to
     # be planted (+ a planned animal): what the bulk plans below would try to
@@ -2037,7 +2117,8 @@ def decide(obs: dict, params: dict) -> dict:
                 hour=current_hour,
                 turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY),
                 shed_used=sum(shed.values()),
-                shed_stay=sum(n for item, n in shed.items() if item not in _DROP_GOODS),
+                shed_stay=shed_stay_after_sales,
+                shed_room_after_sales=shed_capacity_now - shed_stay_after_sales,
                 shed_capacity=shed_capacity_now,
                 remaining_harvest_units=remaining_harvest_units,
                 margin_turns=params.get(
@@ -2075,34 +2156,6 @@ def decide(obs: dict, params: dict) -> dict:
         action_for_unit(unit_positions[i], assignment[i])
         for i in range(1, len(unit_positions))
     ]
-
-    # Reserve WHEAT from routine selling once any animal exists on the
-    # farm - see market.sell_orders's own docstring for the real deadlock
-    # this avoids (found during T6.4: selling everything emptied the shed
-    # before a PICKUP for feeding could ever complete, starving a placed
-    # COW to escape). Matches tasks._WHEAT_PICKUP_BATCH's batch size, not
-    # by import (tasks.py has no dependency on this module) - keep the
-    # two in sync by hand if either changes.
-    wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_type_counts else 0
-
-    # T8.3l: feed is only worth restocking when there's an animal placed
-    # or currently being pursued (acquisition_animal) - see
-    # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED's own comment for the real
-    # ping-pong this fixes.
-    feed_needed = (
-        bool(placed_animal_type_counts) or acquisition_animal is not None
-        if params.get("wheat_buy_only_when_feed_needed", _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED)
-        else True
-    )
-
-    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    liquidation_days_before_end = params.get(
-        "liquidation_days_before_end", _DEFAULT_LIQUIDATION_DAYS_BEFORE_END
-    )
-    liquidate = current_day >= season_length_days - liquidation_days_before_end
-    liquidate_wheat_reserve = params.get(
-        "liquidate_wheat_reserve", _DEFAULT_LIQUIDATE_WHEAT_RESERVE
-    )
 
     # T8.5: assembled as `hires + sells + tail`, not "sells first, buys
     # after" (the pre-T8.5 order) - two deliberate properties, both real,
@@ -2223,6 +2276,7 @@ def decide(obs: dict, params: dict) -> dict:
             liquidate=liquidate,
             use_fertilizer=use_fertilizer,
             liquidate_wheat_reserve=liquidate_wheat_reserve,
+            force_sell=force_sell,
         )
         defer_seed_purchase = (
             sum(o[2] for o in preview_sells if o[1] in CROPS) >= defer_seed_units
@@ -2288,6 +2342,7 @@ def decide(obs: dict, params: dict) -> dict:
         preview_kwargs = dict(
             max_orders=_MAX_MARKET_ORDERS, wheat_reserve=wheat_reserve, liquidate=liquidate,
             use_fertilizer=use_fertilizer, liquidate_wheat_reserve=liquidate_wheat_reserve,
+            force_sell=force_sell,
         )
         buy_money += (
             sale_revenue(
@@ -2476,6 +2531,7 @@ def decide(obs: dict, params: dict) -> dict:
         liquidate=liquidate,
         use_fertilizer=use_fertilizer,
         liquidate_wheat_reserve=liquidate_wheat_reserve,
+        force_sell=force_sell,
     )
 
     if params.get("sell_orders_first_by_revenue", _DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE):

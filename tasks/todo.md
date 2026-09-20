@@ -2928,6 +2928,27 @@ project's own established finding, a fresh submission's score is volatile for it
       59095/56230/65866, pass 47962/62881/72078 -> 49190/62657/67359 (mixed, within +-7%). Table (seeds 900-902, defaults): day 10
       free tiles at the end 8/13/8, later days `lost` (night overflow) 0-29 units, unwatered 0-15 (was 8-35 with the 4th
       quadrant); finals vs the old-default opponent 16597/56901/36330. Revert D: `drop_goods_deadline_mode` False.
+- [x] T8.51 - capacity-aware selling + honest overflow projection (the user's request, 2026-09-20, after the "why 29 units lost
+      per night" analysis). Traced with an engine hook on `_drop_inventories_to_shed` (`lost.py`): in seeds 900/902 days 21-28
+      the shed held 70-80 unsold MELON all week (day-11 dump crashed the price $202 -> $34, it recovers ~$3/day; the day-20/21
+      harvest arrived at $57-60 < seed cost $80, so `sell_orders`' cost-basis rule held all of it) + 10 feed WHEAT = 90 of 100
+      slots, so the daily strawberry harvest ($215-230 each, 10-29 units) overflowed at midnight: 102 strawberries + 16 wheat lost
+      in seed 900 (~$22k at list price), 51 + 8 in seed 902 (~$11k), none in seed 901 (its melon price never fell below the
+      cost). The T8.50 deadline drop did not help because it counted only non-droppable shed stock as "staying" (melons were
+      assumed sold) and, even if it had seen it, only ~10 units fit into the jammed shed. Built (`capacity_aware_selling`):
+      decide previews this turn's ordinary sale, projects the midnight content = shed left after it + everything the units
+      carry + `remaining_harvest_units`, and above the capacity **sells the stock lying in the shed first - cheapest per unit
+      first, even below the price rule** (`sell_orders(..., force_sell={item: units})`, forced units bypass the margin check only
+      for items the rule would hold); only the remaining excess is left to the units (deadline drop, now with
+      `shed_stay` = the honest post-sale content and `shed_room_after_sales`: a unit already on the shed tile drops into the room
+      left NOW because this turn's sales settle after unit actions, a unit arriving later into the room after the sales). The
+      wheat/liquidation definitions were moved ahead of the drop block for the preview. Tests +7 (market 1, tasks 1, decide 3,
+      + the existing ones adapted). **Measured** (`tools/measure_t851.py`, 40 external seeds vs `starter`/`pass`; arena 50 working
+      seeds): capacity-aware `-0.0%` / `-0.0%` (it almost never fires against them: the melon price does not crash without the
+      mirror dump), arena **49W/1L**; with the deadline drop off `-1.7%` / `-1.2%`, arena 49W/1L. Traces (defaults, seed:
+      before -> after final vs the old-default opponent): 900 `16597 -> 38286`, 902 `36330 -> 49925`, 901 `56901 -> 53834`; night
+      losses 900: 102 strawberries -> 0, 902: 51 -> 0. **Enabled by default** (explicit request; neutral vs external, decisive
+      in self-play). Golden unchanged (the six golden pairs are external opponents). Revert: `capacity_aware_selling` False.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

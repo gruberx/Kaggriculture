@@ -1272,6 +1272,7 @@ def goods_deadline_drop_tasks(
     shed_capacity: int,
     remaining_harvest_units: int,
     margin_turns: int = 2,
+    shed_room_after_sales: int | None = None,
     priority: float = PRIORITY_HARVEST,
 ) -> list[Task]:
     """T8.50: end-of-day version of the overflow drop - one pinned
@@ -1312,7 +1313,8 @@ def goods_deadline_drop_tasks(
         covered += sum(stocks[i].values())
         if covered >= excess:
             break
-    room = max(0, shed_capacity - shed_used)
+    room_now = max(0, shed_capacity - shed_used)
+    room_later = room_now if shed_room_after_sales is None else max(0, shed_room_after_sales)
     last_turn = turns_per_day - 1
     tasks = []
     for i in chosen:
@@ -1321,9 +1323,11 @@ def goods_deadline_drop_tasks(
         if hour + moves + (len(stocks[i]) - 1) < last_turn - margin_turns:
             continue
         item = max(stocks[i], key=lambda g: (stocks[i][g], -_DROPPABLE_GOODS.index(g)))
-        qty = min(stocks[i][item], room)
+        qty = min(stocks[i][item], room_now if moves == 0 else room_later)
         if qty <= 0:
             continue
-        room -= qty
+        if moves == 0:
+            room_now -= qty
+        room_later = max(0, room_later - qty)
         tasks.append(Task(priority, pos, "DROP_GOODS", item=item, qty=qty, unit_index=i))
     return tasks

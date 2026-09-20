@@ -753,6 +753,10 @@ DEFAULT_PARAMS = {
     # the 4th quadrant - the top-5 opponents practically never open it"): 2 = never open
     # the 4th quadrant. Old value: None (no cap).
     "max_extra_quadrants": 2,
+    # T8.51 (enabled 2026-09-20 on the user's request; old value False): sell held shed
+    # stock first (even below the price rule) when the projected midnight shed content
+    # exceeds the capacity (kagg.policy.decide._DEFAULT_CAPACITY_AWARE_SELLING).
+    "capacity_aware_selling": True,
 }
 
 

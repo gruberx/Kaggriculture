@@ -2960,3 +2960,39 @@ def test_deadline_mode_counts_the_harvest_still_in_the_field():
     obs["day"] = 10
     act = decide(obs, _deadline_params())
     assert act["farmer"] == ["PLACE", "MELON", 60]
+
+
+# --- capacity_aware_selling (T8.51) ---------------------------------------
+
+
+def _jammed_shed_obs():
+    """80 melons held in the shed below their seed cost, 30 strawberries on the units."""
+    obs = _obs()
+    obs["market"]["inventory"]["MELON"] = 10150  # glut: price well below the $80 seed cost
+    obs["private"]["shed"]["MELON"] = 80
+    obs["private"]["inventories"] = [{"STRAWBERRY": 30}]
+    obs["hour"] = 12
+    return obs
+
+
+def _ca_params(**kw):
+    return dict(DEFAULT_PARAMS, always_pursue_one_animal=False, **dict({"capacity_aware_selling": True}, **kw))
+
+
+def test_capacity_aware_selling_default_and_off_switch():
+    assert DEFAULT_PARAMS["capacity_aware_selling"] is True
+    off = decide(_jammed_shed_obs(), _ca_params(capacity_aware_selling=False))
+    assert _orders(off, "SELL") == []  # held below the cost-basis rule
+
+
+def test_capacity_aware_selling_sells_the_held_shed_stock_first_when_overflow_is_projected():
+    action = decide(_jammed_shed_obs(), _ca_params())
+    sells = _orders(action, "SELL")
+    # 80 held + 30 carried = 110 > 100: sell just the 10 excess of the held melons
+    assert sells == [["SELL", "MELON", 10]]
+
+
+def test_capacity_aware_selling_does_nothing_when_the_midnight_total_fits():
+    obs = _jammed_shed_obs()
+    obs["private"]["inventories"] = [{"STRAWBERRY": 10}]
+    assert _orders(decide(obs, _ca_params()), "SELL") == []
