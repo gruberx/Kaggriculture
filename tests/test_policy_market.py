@@ -189,7 +189,10 @@ def test_buy_wheat_order_returns_none_when_stock_is_sufficient():
 
 
 def test_buy_wheat_order_returns_none_when_price_is_too_high():
-    assert buy_wheat_order(wheat_on_hand=0, wheat_price=1000, params={"wheat_max_buy_price": 40}) is None
+    # urgency override pinned off: this test is about the plain price cap (shipped default is 3 since 2026-09-20)
+    assert buy_wheat_order(
+        wheat_on_hand=0, wheat_price=1000, params={"wheat_max_buy_price": 40, "wheat_urgency_reserve": 0}
+    ) is None
 
 
 def test_buy_wheat_order_restocks_when_low_and_affordable():
@@ -222,14 +225,14 @@ def test_buy_wheat_order_urgency_override_is_inactive_above_the_reserve():
     assert order is None
 
 
-def test_buy_wheat_order_urgency_override_defaults_to_disabled():
-    # Bit-identical to pre-T8.25 behavior for every existing caller that
-    # doesn't pass wheat_urgency_reserve - the price cap alone still
-    # blocks the purchase even at wheat_on_hand=0.
-    order = buy_wheat_order(
-        wheat_on_hand=0, wheat_price=1000, params={"wheat_max_buy_price": 40, "wheat_restock_threshold": 5}
-    )
-    assert order is None
+def test_buy_wheat_order_urgency_override_defaults_to_three_and_can_be_disabled():
+    # 2026-09-20: the shipped default is now 3 (needed to keep the T8.38 golden escape
+    # guardrail green under the new hiring/purchase defaults - tasks/todo.md T8.46), so a
+    # caller that doesn't pass wheat_urgency_reserve gets the override; 0 disables it and
+    # restores the pre-T8.25 behavior where the price cap alone blocks the purchase.
+    base = {"wheat_max_buy_price": 40, "wheat_restock_threshold": 5}
+    assert buy_wheat_order(wheat_on_hand=0, wheat_price=1000, params=base) is not None
+    assert buy_wheat_order(wheat_on_hand=0, wheat_price=1000, params={**base, "wheat_urgency_reserve": 0}) is None
 
 
 def test_market_orders_never_emits_buy_product_for_anything_but_wheat():

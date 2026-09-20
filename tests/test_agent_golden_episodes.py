@@ -378,13 +378,21 @@ AGENT_MAIN_PATH = os.path.join(
 # seeds (T8.38's own never-re-recordable guardrail) still passes
 # unchanged - zero escapes, confirming this change is safe by that
 # guardrail's own standard even without a full self-play accept.
+# Re-recorded a 21st time on 2026-09-20, the user's explicit decision to move the
+# shipped defaults to day-plan hiring min=2/max=12 + the T8.45 purchase flags +
+# drip_sell_max_per_turn=1000 (tasks/todo.md T8.46), plus wheat_urgency_reserve=3 as the
+# companion that keeps the T8.38 escape guardrail green (without it starter/seed 2 loses a
+# COW on day 28 - WHEAT trades above wheat_max_buy_price=40 so the restock is refused).
+# Every one of the six moved DOWN against these external opponents: starter 54893/64798/
+# 67716 -> 46396/58953/54065 and pass 56320/61973/69306 -> 43540/58587/57699 (mean -15%).
+# Kept visible on purpose - see T8.46 for the numbers and how to revert.
 _GOLDEN = {
-    ("starter", 1): (54893.0, 4294.0),
-    ("starter", 2): (64798.0, 3506.0),
-    ("starter", 3): (67716.0, 3647.0),
-    ("pass", 1): (56320.0, 3000.0),
-    ("pass", 2): (61973.0, 3000.0),
-    ("pass", 3): (69306.0, 3000.0),
+    ("starter", 1): (46396.0, 3967.0),
+    ("starter", 2): (58953.0, 3550.0),
+    ("starter", 3): (54065.0, 3635.0),
+    ("pass", 1): (43540.0, 3000.0),
+    ("pass", 2): (58587.0, 3000.0),
+    ("pass", 3): (57699.0, 3000.0),
 }
 
 

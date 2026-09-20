@@ -438,8 +438,8 @@ def test_hires_per_day_dynamic_hiring_defaults_to_true():
     # T8.16(d): dynamic_hiring is now ON by default (superseding T8.12's
     # own rejection - see _DEFAULT_DYNAMIC_HIRING's own comment for the
     # full measured story) - a huge pending backlog now scales hiring up
-    # to max_hires_per_day (default 8), not the plain static value.
-    assert hires_per_day({}, pending_task_count=1000) == 8
+    # to max_hires_per_day (default 12 since 2026-09-20; was 8), not the plain static value.
+    assert hires_per_day({}, pending_task_count=1000) == 12
 
 
 def test_hires_per_day_dynamic_hiring_off_falls_back_to_the_static_value():
@@ -479,11 +479,11 @@ def test_hires_per_day_dynamic_hiring_scales_with_pending_task_count():
 def test_hires_per_day_dynamic_hiring_accounts_for_hours_already_spent_today():
     # Same 48-task backlog, but only 4 turns left today (hour=20):
     # needed=96, turns_left=4, target=ceil(96/4)-1=23, clipped to
-    # max_hires_per_day (default 8) - fewer turns left means more hands
+    # max_hires_per_day (default 12 since 2026-09-20) - fewer turns left means more hands
     # needed to clear the same backlog before the day resets.
     params = {"dynamic_hiring": True}
     got = hires_per_day(params, pending_task_count=48, hour=20, turns_per_day=24)
-    assert got == 8
+    assert got == 12
 
 
 def test_hires_per_day_dynamic_hiring_never_drops_below_min_hires_per_day():
@@ -498,7 +498,9 @@ def test_hires_per_day_dynamic_hiring_never_drops_below_min_hires_per_day():
     assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 1
 
 
-def test_hires_per_day_dynamic_hiring_min_hires_per_day_defaults_to_eight():
+def test_hires_per_day_dynamic_hiring_min_hires_per_day_defaults_to_two():
+    # 2026-09-20, the user's decision (tasks/todo.md T8.46): the floor went 8 -> 2 (max 8 -> 12).
+    # History kept below: T8.16(d) 2, T8.42 2 -> 8.
     # T8.16(d) first accepted 2 (swept jointly with the other three
     # dynamic_hiring knobs - 2, and 3 tied, decisively beat the old flat
     # constant's value of 1 on the working block: 0.94 vs 0.62; held-out
@@ -515,7 +517,7 @@ def test_hires_per_day_dynamic_hiring_min_hires_per_day_defaults_to_eight():
     # (tools/measure_t842.py: 96% working, 89.5% confirmed on a 200-seed
     # holdout).
     params = {"dynamic_hiring": True}
-    assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 8
+    assert hires_per_day(params, pending_task_count=0, hour=0, turns_per_day=24) == 2
 
 
 def test_hires_per_day_dynamic_hiring_respects_a_custom_min_and_max():
@@ -717,7 +719,7 @@ def test_hires_per_day_workload_forecast_hiring_aware_matches_a_hand_computed_ta
     )
     melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
     total_turns = (cow_actions * 1 + melon_actions * 10) * 2.0  # turns_per_task_estimate
-    expected = min(max(math.ceil(total_turns / 24) - 1, 8), 8)  # min/max_hires_per_day defaults (T8.42: 8)
+    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 12)  # min/max_hires_per_day defaults (2026-09-20: 2/12)
     params = {"dynamic_hiring": True, "workload_forecast_hiring_aware": True}
     got = hires_per_day(
         params,
@@ -755,7 +757,7 @@ def test_hires_per_day_workload_forecast_hiring_aware_defaults_to_on():
     )
     melon_actions = _crop_actions_per_tile_day("MELON", 30, use_fertilizer=False, scaling_only=True)
     total_turns = (cow_actions * 2 + melon_actions * 5) * 2.0  # turns_per_task_estimate
-    expected = min(max(math.ceil(total_turns / 24) - 1, 8), 8)  # min/max_hires_per_day defaults (T8.42: 8)
+    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 12)  # min/max_hires_per_day defaults (2026-09-20: 2/12)
     params = {"dynamic_hiring": True}
     got = hires_per_day(
         params, hour=0, turns_per_day=24, animal_tile_counts={"COW": 2}, crop_tile_counts={"MELON": 5}
@@ -946,8 +948,9 @@ def test_hires_per_day_day_plan_hiring_aware_off_by_default():
     # Bit-identical - maintenance_actions_today given but the flag isn't
     # set, so this falls straight through to workload_forecast_hiring_
     # aware's own default-on branch (which ignores maintenance_actions_
-    # today entirely) rather than the new one.
-    params = {"dynamic_hiring": True}
+    # today entirely) rather than the new one. (day_plan_hiring_aware defaults to
+    # True since 2026-09-20, so "off" is now the explicit setting.)
+    params = {"dynamic_hiring": True, "day_plan_hiring_aware": False}
     with_day_plan_fields = hires_per_day(
         params, hour=0, turns_per_day=24,
         animal_tile_counts={"COW": 1}, crop_tile_counts={"MELON": 5},
@@ -968,7 +971,7 @@ def test_hires_per_day_day_plan_hiring_aware_matches_a_hand_computed_target():
     params = {"dynamic_hiring": True, "day_plan_hiring_aware": True}
     total_actions = 11 + 25 * 2.0 + 1 * 4.0
     total_turns = total_actions * 2.0  # turns_per_task_estimate default
-    expected = min(max(math.ceil(total_turns / 24) - 1, 8), 8)  # min/max_hires_per_day defaults: 8
+    expected = min(max(math.ceil(total_turns / 24) - 1, 2), 12)  # min/max_hires_per_day defaults: 2/12
     got = hires_per_day(
         params, hour=0, turns_per_day=24,
         maintenance_actions_today=11, planned_new_crop_tiles=25, planned_new_animals=1,

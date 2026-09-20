@@ -54,7 +54,7 @@ PREMIUM_GOODS = frozenset({"MILK", "WOOL", "MELON", "STRAWBERRY"})
 _NEVER_ROUTINELY_SOLD = frozenset({"FERTILIZER"})
 
 _DEFAULT_SELL_MARGIN = 0
-_DEFAULT_DRIP_SELL_MAX_PER_TURN = 5
+_DEFAULT_DRIP_SELL_MAX_PER_TURN = 1000
 
 
 def _cost_basis(item: str) -> int:
@@ -173,7 +173,7 @@ _DEFAULT_WHEAT_MAX_BUY_PRICE = 40
 # measured: 0 means no urgency buffer is configured, i.e. the override
 # below never fires and every existing caller keeps the plain price-cap
 # behavior it had before this param existed.
-_DEFAULT_WHEAT_URGENCY_RESERVE = 0
+_DEFAULT_WHEAT_URGENCY_RESERVE = 3
 
 
 def buy_wheat_order(

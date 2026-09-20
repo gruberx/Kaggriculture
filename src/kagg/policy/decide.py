@@ -917,12 +917,12 @@ _DEFAULT_SEED_CASH_RESERVE = 0
 # buying until it is placed - the traced cause of the day-0 morning
 # stall (4 hands PASSing for hours 2-3 while one farmer built/picked up/
 # placed a single animal).
-_DEFAULT_BULK_SEED_PURCHASE = False
+_DEFAULT_BULK_SEED_PURCHASE = True
 _DEFAULT_BULK_SEED_BUFFER_FRACTION = 0.10
-_DEFAULT_BULK_ANIMAL_PURCHASE = False
+_DEFAULT_BULK_ANIMAL_PURCHASE = True
 _DEFAULT_BULK_ANIMAL_BUFFER_FRACTION = 0.0
 _DEFAULT_BULK_PURCHASE_MAX_NEW_TILES = 25
-_DEFAULT_PLANT_WHILE_ANIMAL_PENDING = False
+_DEFAULT_PLANT_WHILE_ANIMAL_PENDING = True
 # T8.46 (the user's own idea, after T8.45's trace showed 17 MELON seeds
 # bought at price 260 and stranded because the agent's own drip-sale of the
 # 89 harvested melons on the shed dragged MELON to ~190 - level with

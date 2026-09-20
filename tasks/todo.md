@@ -2769,6 +2769,35 @@ project's own established finding, a fresh submission's score is volatile for it
       dump alone), so the day-plan line is less dead in the arena than T8.44 concluded - but the external check
       says it is still not a gain in absolute money.
 
+      **Defaults moved, the user's explicit decision, 2026-09-20** ("Включи dump по умолчанию и пересчитай golden,
+      и включи min=2 + флаги T8.45"): `drip_sell_max_per_turn` 5 -> 1000, `day_plan_hiring_aware` False -> True,
+      `min_hires_per_day` 8 -> 2, `max_hires_per_day` 8 -> 12, `bulk_seed_purchase` / `bulk_animal_purchase` /
+      `plant_while_animal_pending` False -> True (params.py, policy.json and every module-level "belt and braces"
+      default kept matching; `defer_seed_purchase_on_crop_sale` stays 0 - it showed no effect anywhere).
+      **One addition the request did not name, forced by an invariant**: with these defaults the T8.38 escape
+      guardrail (never re-recordable) FAILED - starter/seed 2, day 28, a COW. Traced (`escape.py`, `wheat.py`): from
+      day 25 WHEAT trades at 48-50 > `wheat_max_buy_price=40`, `buy_wheat_order` silently refuses the restock, the
+      shed's last WHEAT is gone and the COW goes unfed on days 26 and 27 (2 misses = escape). This is the T8.25
+      price-ceiling failure the existing `wheat_urgency_reserve` override exists for, so it is now 3 (was 0);
+      `wheat_max_buy_price=70` gave the identical result, the targeted override was chosen over a blanket raise.
+      All six golden pairs then have zero escapes for -0.7% mean money. Also found: at max=12 a burst day's 10
+      HIRE orders (cap = `_MAX_MARKET_ORDERS`) fill the whole hour-0 order list, so that turn's SELL/BUY orders are
+      dropped (one turn, not fixed - `max_hire_orders_per_turn` was measured at 6 in T8.44 but is not part of this).
+      Tests: 18 default-dependent tests updated (mechanism tests pin the old values via `_OLD_HIRING` /
+      `_LEGACY_PURCHASE`, default-assertion tests renamed to the new values), suite 645 passed, `boundary_check` clean.
+      Golden money table re-recorded a 21st time: starter 54893/64798/67716 -> 46396/58953/54065, pass
+      56320/61973/69306 -> 43540/58587/57699.
+
+      **What these defaults cost, measured right after (`final_compare.py`, 20 seeds each vs the external golden
+      opponents; arena 50 seeds)**: vs `starter` NEW default `47743` vs old `58362` (**-18.2%**, better on 0/20); vs
+      `pass` `48703` vs `56635` (**-14.0%**, better on 2/20); self-play NEW vs OLD default `0.360` (18W/32L).
+      The dump alone on the old hiring was `+0.9%` (starter, 12/20) / `+5.5%` (pass, 13/20) and 200W/0L in self-play -
+      so of the three pieces the user asked for, dump is the one that helps; day-plan min=2 + the T8.45 bundle is what
+      costs 14-18% against non-competing opponents. **To revert to dump-only**: `day_plan_hiring_aware=False`,
+      `min_hires_per_day=8`, `max_hires_per_day=8`, `bulk_seed_purchase=False`, `bulk_animal_purchase=False`,
+      `plant_while_animal_pending=False`, keep `drip_sell_max_per_turn=1000` (and `wheat_urgency_reserve=3` is harmless)
+      - then the golden table needs a 22nd re-record. No Kaggle submission.
+
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

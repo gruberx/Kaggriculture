@@ -49,6 +49,15 @@ _BASE_OBS = {
 }
 
 
+# 2026-09-20: the shipped defaults moved (min=2/max=12 day-plan hiring, T8.45
+# purchase flags on, drip cap 1000 - the user's decision, tasks/todo.md T8.46).
+# Tests about an *older* mechanism pin that mechanism's old values with these.
+_OLD_HIRING = dict(day_plan_hiring_aware=False, min_hires_per_day=8, max_hires_per_day=8)
+_LEGACY_PURCHASE = dict(
+    bulk_seed_purchase=False, bulk_animal_purchase=False, plant_while_animal_pending=False
+)
+
+
 def _obs():
     import copy
 
@@ -139,7 +148,7 @@ def test_decide_does_not_rebuy_a_seed_already_on_hand():
 
     top_crop = next(name for name in rank_portfolio(obs["market"]["inventory"]) if name in CROPS)
     obs["private"]["seeds"][top_crop] = 2
-    action = decide(obs, dict(DEFAULT_PARAMS, dynamic_hiring=False))
+    action = decide(obs, dict(DEFAULT_PARAMS, dynamic_hiring=False, **_LEGACY_PURCHASE))
     assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
 
 
@@ -313,7 +322,7 @@ def test_decide_labor_units_reflects_the_real_dynamic_hiring_forecast_not_the_st
     # about the real forecast (3) clearing a floor it's actually above,
     # not T8.42's now-higher default floor of 8, which would otherwise
     # swallow the forecast value this test exists to confirm.
-    decide(obs, dict(DEFAULT_PARAMS, min_hires_per_day=2))
+    decide(obs, dict(DEFAULT_PARAMS, **{**_OLD_HIRING, "min_hires_per_day": 2}))
 
     assert captured.get("plant_crop") == "MELON"
     assert captured.get("plant_qty") == 4
@@ -348,7 +357,7 @@ def test_decide_labor_units_reflects_free_tiles_via_the_workload_forecast(monkey
     # as the sibling test above - keeps the hand-verified 3/5 values
     # meaningful instead of both clipping to T8.42's now-higher default
     # floor of 8.
-    base_params = dict(DEFAULT_PARAMS, min_hires_per_day=2)
+    base_params = dict(DEFAULT_PARAMS, **{**_OLD_HIRING, 'min_hires_per_day': 2})
     decide(obs, base_params)
     assert captured.get("plant_qty") == 3
 
@@ -361,8 +370,10 @@ def test_decide_labor_units_reflects_free_tiles_via_the_workload_forecast(monkey
 # --- day_plan_hiring_aware (T8.44) --------------------------------------
 
 
-def test_day_plan_hiring_aware_defaults_to_off():
-    assert DEFAULT_PARAMS.get("day_plan_hiring_aware") is False
+def test_day_plan_hiring_aware_defaults_to_on():
+    # 2026-09-20, the user's decision (tasks/todo.md T8.46): min=2/max=12 day-plan hiring is the default.
+    assert DEFAULT_PARAMS.get("day_plan_hiring_aware") is True
+    assert (DEFAULT_PARAMS["min_hires_per_day"], DEFAULT_PARAMS["max_hires_per_day"]) == (2, 12)
 
 
 def test_decide_passes_maintenance_actions_today_to_hires_per_day(monkeypatch):
@@ -795,7 +806,7 @@ def test_decide_planned_new_crop_tiles_is_zero_while_finishing_a_stuck_animal(mo
         return original_hire(*args, **kwargs)
 
     monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
-    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False, plant_while_animal_pending=False))
     assert captured.get("planned_new_crop_tiles") == 0
 
 
@@ -924,9 +935,20 @@ def test_decide_does_not_liquidate_early_in_the_season():
     obs["day"] = 0
     obs["farms"][0]["hires_today"] = 8
     obs["private"]["shed"]["MELON"] = 50
-    action = decide(obs, DEFAULT_PARAMS)
+    # The shipped cap is now 1000 (2026-09-20); pin the old 5 so this test still
+    # checks that a *finite* drip cap applies before the liquidation window.
+    action = decide(obs, dict(DEFAULT_PARAMS, drip_sell_max_per_turn=5, **_OLD_HIRING))
     sell_melon = [o for o in action["market"] if o[0] == "SELL" and o[1] == "MELON"]
-    assert sell_melon == [["SELL", "MELON", 5]]  # default drip_sell_max_per_turn still applies
+    assert sell_melon == [["SELL", "MELON", 5]]
+
+
+def test_decide_sells_the_whole_premium_stock_at_once_by_default():
+    obs = _obs()
+    obs["day"] = 0
+    obs["farms"][0]["hires_today"] = 8  # already staffed: no HIRE orders crowd out the SELL slot
+    obs["private"]["shed"]["MELON"] = 50
+    action = decide(obs, dict(DEFAULT_PARAMS, **_OLD_HIRING))
+    assert [o for o in action["market"] if o[0] == "SELL" and o[1] == "MELON"] == [["SELL", "MELON", 50]]
 
 
 def test_crop_tile_counts_counts_plant_tiles_by_crop():
@@ -1657,7 +1679,7 @@ def test_decide_finishes_a_stuck_animal_before_starting_anything_new():
     # only 18 PLACEs in one real episode).
     obs = _obs()
     obs["private"]["shed"]["COW"] = 1
-    action = decide(obs, DEFAULT_PARAMS)
+    action = decide(obs, dict(DEFAULT_PARAMS, **_LEGACY_PURCHASE))
     assert action["farmer"] == ["BUILD_PASTURE"]  # not PLANT MELON
     assert [o for o in action["market"] if o[0] == "BUY_SEED"] == []
 
@@ -1792,7 +1814,9 @@ def test_decide_still_buys_an_animal_when_a_matching_empty_structure_exists():
     obs = _fill_all_tiles(_obs())
     obs["farms"][0]["tiles"][0][0] = {"kind": "PASTURE"}
     obs["market"]["inventory"] = {"MELON": MARKET_I0 + 100_000}  # COW is the top choice
-    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False)
+    # dynamic_hiring off: on a board of 99 WEEDs the day-plan forecast asks for 10+ HIREs,
+    # which (listed first, capped at 10 orders) truncate every `tail` order this turn.
+    params = dict(DEFAULT_PARAMS, animal_net_of_cost=False, dynamic_hiring=False)
     action = decide(obs, params)
     assert [o for o in action["market"] if o[0] == "BUY_ANIMAL"] == [["BUY_ANIMAL", "COW", 1]]
 
@@ -2296,6 +2320,7 @@ def test_decide_batches_seed_purchase_into_one_order_when_labor_allows_more_than
     obs = _obs()
     params = dict(
         DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3, seed_buffer_per_unit=2,
+        **_LEGACY_PURCHASE,
     )  # labor_units=4, target=8
     action = decide(obs, params)
     buy_seed_orders = [o for o in action["market"] if o[0] == "BUY_SEED"]
@@ -2451,9 +2476,10 @@ def _orders(action, op):
     return [o for o in action["market"] if o[0] == op]
 
 
-def test_bulk_purchase_params_default_off():
+def test_bulk_purchase_params_default_on():
+    # 2026-09-20: turned on by the user's decision (tasks/todo.md T8.46).
     for key in ("bulk_seed_purchase", "bulk_animal_purchase", "plant_while_animal_pending"):
-        assert DEFAULT_PARAMS[key] is False
+        assert DEFAULT_PARAMS[key] is True
     assert DEFAULT_PARAMS["bulk_seed_buffer_fraction"] == 0.10
     assert DEFAULT_PARAMS["bulk_animal_buffer_fraction"] == 0.0
 
@@ -2532,9 +2558,9 @@ def test_bulk_seed_purchase_reserves_the_animal_cost_out_of_the_seed_budget():
 
 def test_bulk_seed_purchase_off_keeps_the_legacy_labor_units_sizing():
     obs = _fresh_melon_obs()
-    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False)
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False, **_OLD_HIRING, **_LEGACY_PURCHASE)
     qty = _orders(decide(obs, params), "BUY_SEED")[0][2]
-    assert qty == 9  # 1 farmer + 8 shipped hires, seed_buffer_per_unit=1
+    assert qty == 9  # 1 farmer + 8 old-default hires, seed_buffer_per_unit=1
 
 
 def test_bulk_animal_purchase_scales_with_a_raised_target_count():

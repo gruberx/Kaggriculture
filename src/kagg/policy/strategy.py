@@ -725,12 +725,12 @@ _DEFAULT_DYNAMIC_HIRING = True
 # ceiling, jointly with land_purchase_threshold_money=0 (above) - see
 # _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY's own comment for the measured
 # story.
-_DEFAULT_MIN_HIRES_PER_DAY = 8
+_DEFAULT_MIN_HIRES_PER_DAY = 2
 # The edge this stays comfortably clear of: fib-priced hire #8 costs $21
 # (the 8th hire that day), $54 cumulative for the day - negligible next
 # to a season's ~$30k of money (see hire_cost's own fib curve), so 8 is a
 # real ceiling on wasted labor, not yet a binding cost constraint.
-_DEFAULT_MAX_HIRES_PER_DAY = 8
+_DEFAULT_MAX_HIRES_PER_DAY = 12
 # Derived from a real measurement, not a guess: one traced episode showed
 # 405 movement actions across 313 productive farmer actions (~2.3 turns
 # spent per unit of real work) - 2.0 is a deliberately conservative
@@ -1087,7 +1087,7 @@ def should_buy_land(
 # Default `False`, bit-identical for every caller that doesn't set it -
 # see `hires_per_day`'s own docstring for the full formula and
 # `tools/measure_t844.py` for the sweep.
-_DEFAULT_DAY_PLAN_HIRING_AWARE = False
+_DEFAULT_DAY_PLAN_HIRING_AWARE = True
 # Real, hand-verified per-tile action costs this session derived directly
 # (matches `day_plan_new_crop_tile_actions`/`day_plan_new_animal_actions`'s
 # own docstring in `hires_per_day` below): a newly-planted crop tile costs

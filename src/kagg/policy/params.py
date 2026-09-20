@@ -81,8 +81,17 @@ DEFAULT_PARAMS = {
     # non-reactive target from day 0, jointly with land_purchase_
     # threshold_money=0 above. See that param's own comment for the
     # measured story.
-    "min_hires_per_day": 8,
-    "max_hires_per_day": 8,  # fib hire #8 costs $21 - still negligible
+    # 2026-09-20, the user's explicit decision (T8.46 follow-up): min=2/max=12
+    # together with day_plan_hiring_aware (below) and the T8.45 purchase flags
+    # replace the T8.42 flat 8/8 floor. **Measured against the previous
+    # default before flipping, and worse there**: min=2 + T8.45 bundle + dump
+    # scored 0.400 (20W/30L, n=50) against the old flat-8 default in self-
+    # play (tools/measure_t846.py); dump alone on the old hiring scored
+    # 1.000 (200W/0L holdout). The old values were min_hires_per_day=8,
+    # max_hires_per_day=8, day_plan_hiring_aware=False, bulk_*=False,
+    # plant_while_animal_pending=False, drip_sell_max_per_turn=5.
+    "min_hires_per_day": 2,
+    "max_hires_per_day": 12,
     "turns_per_task_estimate": 2.0,  # T8.16(d): swept, stayed at this value
     "hire_cash_reserve": 0,  # the user's own "protect starting capital" ask
     # T8.16, the user's own explicit ask ("небольшой запас рабочей силы
@@ -181,7 +190,7 @@ DEFAULT_PARAMS = {
     # kagg.policy.strategy.hires_per_day's own docstring for the formula.
     # Default False (bit-identical) - see tasks/todo.md's T8.44 entry for
     # the measured sweep and accept/reject verdict.
-    "day_plan_hiring_aware": False,
+    "day_plan_hiring_aware": True,  # see min_hires_per_day above
     # Real, hand-verified per-tile action costs (this session's own
     # derivation, checked directly against kaggriculture.py): a fresh
     # crop tile costs PLANT+WATER=2 actions its first day; a fresh animal
@@ -240,7 +249,13 @@ DEFAULT_PARAMS = {
     # is also on.
     "day_plan_weed_replant_aware": True,
     "sell_margin": 0,
-    "drip_sell_max_per_turn": 5,
+    # 2026-09-20, the user's explicit decision after T8.46: premium goods
+    # (MELON/STRAWBERRY/MILK/WOOL) are sold in one order instead of 5 per
+    # turn (the old default). Self-play vs the shipped drip-seller 200W/0L
+    # (a same-market race - see tasks/todo.md T8.46); vs the external
+    # golden opponents +551 (starter) / +3120 (pass) mean money over 20
+    # seeds, mixed per seed.
+    "drip_sell_max_per_turn": 1000,
     "wheat_restock_threshold": 5,
     "wheat_restock_qty": 10,
     # T8.25 Part 1: found to be a real, previously undiscovered bug rather
@@ -273,7 +288,16 @@ DEFAULT_PARAMS = {
     # today's shipped max_animals_per_type=1 (the same single-animal
     # buffer-already-survives effect). Kept available (tested) for a
     # future combination once max_animals_per_type itself is revisited.
-    "wheat_urgency_reserve": 0,
+    # 2026-09-20, enabled as a *required companion* to the user's decision to move the
+    # defaults to day-plan min=2/max=12 + T8.45 flags + dump (tasks/todo.md T8.46): under
+    # the new defaults the T8.38 golden escape guardrail failed (starter/seed 2, day 28,
+    # a COW). Traced: from day 25 WHEAT trades at 48-50, above wheat_max_buy_price=40,
+    # so buy_wheat_order silently refuses to restock, the shed's last WHEAT runs out and
+    # the COW goes unfed two days in a row. This override (below) is exactly the T8.25
+    # Part 2 fix for that; with it all six golden pairs have zero escapes for -0.7% mean
+    # money. wheat_max_buy_price=70 gave the identical result; the targeted override was
+    # chosen over a blanket cap raise.
+    "wheat_urgency_reserve": 3,
     # T8.1: "SHED" (shed-anchored placement) is implemented and tested,
     # but T8.3b's clean, isolated re-measurement (on top of T8.2+T8.3)
     # found it a real net loss even combined with the fallback below.
@@ -686,12 +710,12 @@ DEFAULT_PARAMS = {
     # of 24 planned tiles planted despite 33 idle unit-turns): see
     # kagg.policy.decide._DEFAULT_BULK_SEED_PURCHASE's own comment. All
     # default off/bit-identical - measured in tools/measure_t845.py.
-    "bulk_seed_purchase": False,
+    "bulk_seed_purchase": True,  # T8.45 flags on by the user's decision, 2026-09-20
     "bulk_seed_buffer_fraction": 0.10,
-    "bulk_animal_purchase": False,
+    "bulk_animal_purchase": True,
     "bulk_animal_buffer_fraction": 0.0,
     "bulk_purchase_max_new_tiles": 25,
-    "plant_while_animal_pending": False,
+    "plant_while_animal_pending": True,
     # T8.46: two-step "sell everything, buy seeds on the real new prices" -
     # see kagg.policy.decide._DEFAULT_DEFER_SEED_PURCHASE_ON_CROP_SALE. 0 = off.
     "defer_seed_purchase_on_crop_sale": 0,
