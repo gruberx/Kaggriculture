@@ -725,6 +725,11 @@ DEFAULT_PARAMS = {
     # T8.46: two-step "sell everything, buy seeds on the real new prices" -
     # see kagg.policy.decide._DEFAULT_DEFER_SEED_PURCHASE_ON_CROP_SALE. 0 = off.
     "defer_seed_purchase_on_crop_sale": 0,
+    # T8.48: no BUY_SEED while >= this many HARVEST (resp. WATER above PLANT's
+    # tier) tasks are still queued - they outrank PLANT, so the seeds would sit
+    # idle and lock cash. None = off.
+    "seed_purchase_max_pending_harvest": None,
+    "seed_purchase_max_pending_water": None,
 }
 
 

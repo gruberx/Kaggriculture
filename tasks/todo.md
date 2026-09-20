@@ -2828,6 +2828,22 @@ project's own established finding, a fresh submission's score is volatile for it
       49879/58430/56789, pass 43540/58587/57699 -> 56732/62026/58144; T8.38 escape guardrail passes unchanged.
       Revert: `day_plan_harvest_replant_aware=False` + one more golden re-record.
 
+- [x] T8.48 - hold BUY_SEED while HARVEST / WATER tasks (which outrank PLANT) are queued (the user's request, 2026-09-20;
+      option (a) of the day-10 follow-up, plus the same rule for watering). Params `seed_purchase_max_pending_harvest` /
+      `seed_purchase_max_pending_water` (None = off, bit-identical): BUY_SEED is skipped while >= N `HARVEST` tasks
+      (resp. `WATER` tasks ranked above PLANT) are queued. Tests +3. **Measured and REFUTED - defaults stay None.**
+      `tools/measure_t848.py`, shipped defaults as baseline, final money vs `starter`/`pass` (20 seeds) and arena on the
+      50 working seeds: H<4 and H<8 `-3.8%` / `-2.3%`, arena `7W/23L` and `3W/23L` (the rest ties); W<4 `-3.2%` /
+      `-0.8%`, `0.40`; W<8 `-3.2%` / `-0.3%`, `0.44`; W<12 `-3.4%` / `-1.9%`, `0.46`; every combination is subsumed by
+      its water half (`0.44`-`0.46`). Not one point is >= baseline. Traced cause (`d10h.py`, seed 900, day 10, H<4):
+      the gate released at hour 11 (seeds bought then, arrive hour 12), the 8 hands sat at PASS for ~10 hours, and the day
+      ended with 10 free tiles and 0 seeds - **cash, not timing, is the limit**: the harvest (120 melons in unit
+      inventories) is only sold at hour 0 of day 11, so the same ~$900 buys the same ~12-14 seeds whether at hour 5 or
+      hour 11; delaying only removes the chance to plant them as soon as a unit frees up. Conclusion: seed timing is not
+      the lever on harvest days; money is. Untested ideas that follow from this: keep the unit-carried harvest sellable
+      (impossible - engine drops inventories to the shed only at night), or plan the previous day's purchases so the
+      seed stock for the harvest day's replant is already on hand (buy for tomorrow's freed tiles while today's cash
+      exists).
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

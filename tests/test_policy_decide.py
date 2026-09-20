@@ -2755,3 +2755,46 @@ def test_day_plan_harvest_replant_aware_adds_replant_actions_for_ripe_one_time_t
     assert maintenance(True, day=2) == maintenance(False, day=2)
     # Late in the season nothing is worth planting, so no replant is forecast.
     assert maintenance(True, day=29) == maintenance(False, day=29)
+
+
+# --- seed_purchase_max_pending_harvest / _water (T8.48) -----------------
+
+
+def _obs_with_queued_work(n_unwatered=0, n_ripe_melons=0):
+    obs = _fresh_melon_obs()
+    obs["day"] = 10
+    tiles = obs["farms"][0]["tiles"]
+    cells = [(r, c) for r in range(5) for c in range(5)]
+    for r, c in cells[:n_unwatered]:
+        tiles[r][c] = {
+            "kind": "PLANT", "crop": "WHEAT", "planted_day": 9, "watered_today": False,
+            "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+            "fertilized_until_day": -1,
+        }
+    for r, c in cells[n_unwatered:n_unwatered + n_ripe_melons]:
+        tiles[r][c] = {
+            "kind": "PLANT", "crop": "MELON", "planted_day": 0, "watered_today": True,
+            "consecutive_unwatered": 0, "yield_units": 5, "max_lifespan_step": 312,
+            "fertilized_until_day": -1,
+        }
+    return obs
+
+
+def test_seed_purchase_pending_work_gates_default_off():
+    assert DEFAULT_PARAMS["seed_purchase_max_pending_harvest"] is None
+    assert DEFAULT_PARAMS["seed_purchase_max_pending_water"] is None
+    assert _orders(decide(_obs_with_queued_work(12, 12), DEFAULT_PARAMS), "BUY_SEED") != []
+
+
+def test_seed_purchase_waits_while_harvest_tasks_are_queued():
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False)
+    obs = lambda: _obs_with_queued_work(0, 6)  # noqa: E731
+    assert _orders(decide(obs(), dict(params, seed_purchase_max_pending_harvest=6)), "BUY_SEED") == []
+    assert _orders(decide(obs(), dict(params, seed_purchase_max_pending_harvest=7)), "BUY_SEED") != []
+
+
+def test_seed_purchase_waits_while_watering_outranks_planting():
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False)
+    obs = lambda: _obs_with_queued_work(12, 0)  # noqa: E731
+    assert _orders(decide(obs(), dict(params, seed_purchase_max_pending_water=12)), "BUY_SEED") == []
+    assert _orders(decide(obs(), dict(params, seed_purchase_max_pending_water=13)), "BUY_SEED") != []

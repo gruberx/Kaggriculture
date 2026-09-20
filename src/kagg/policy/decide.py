@@ -40,6 +40,7 @@ from kagg.gamelib.shed import shed_room
 from kagg.policy.market import buy_wheat_order, bulk_purchase_plan, sell_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, score_portfolio, should_buy_land
 from kagg.policy.tasks import (
+    PRIORITY_PLANT,
     action_for_unit,
     animal_tile_day_actions,
     assign_units,
@@ -47,6 +48,7 @@ from kagg.policy.tasks import (
     crop_tile_day_actions,
     harvest_clears_tile_today,
 )
+
 
 _MAX_MARKET_ORDERS = 10
 
@@ -945,6 +947,15 @@ _DEFAULT_PLANT_WHILE_ANIMAL_PENDING = True
 # 0 = off (bit-identical). Meant to be paired with a large
 # `drip_sell_max_per_turn` (the sell-everything-at-once half of the idea).
 _DEFAULT_DEFER_SEED_PURCHASE_ON_CROP_SALE = 0
+
+# T8.48: HARVEST (tier 1) and WATER (tier 0/2) outrank PLANT (tier 3) in
+# `assign_units`, so a seed bought while many such tasks are still queued
+# just sits in the shed (traced: day 10, seed 900 - 14 melon seeds bought at
+# hours 5-9, first PLANT at hour 14, cash left $53). When set, BUY_SEED is
+# skipped until fewer than this many HARVEST tasks (resp. WATER tasks
+# ranked above PLANT) are pending. None = off (bit-identical).
+_DEFAULT_SEED_PURCHASE_MAX_PENDING_HARVEST = None
+_DEFAULT_SEED_PURCHASE_MAX_PENDING_WATER = None
 
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
@@ -2108,6 +2119,24 @@ def decide(obs: dict, params: dict) -> dict:
         defer_seed_purchase = (
             sum(o[2] for o in preview_sells if o[1] in CROPS) >= defer_seed_units
         )
+
+    # T8.48: hold the seed purchase while harvest/watering still monopolize the
+    # units (see _DEFAULT_SEED_PURCHASE_MAX_PENDING_HARVEST).
+    max_pending_harvest = params.get(
+        "seed_purchase_max_pending_harvest", _DEFAULT_SEED_PURCHASE_MAX_PENDING_HARVEST
+    )
+    max_pending_water = params.get(
+        "seed_purchase_max_pending_water", _DEFAULT_SEED_PURCHASE_MAX_PENDING_WATER
+    )
+    if max_pending_harvest is not None and (
+        sum(1 for t in tasks if t.op == "HARVEST") >= max_pending_harvest
+    ):
+        defer_seed_purchase = True
+    if max_pending_water is not None and (
+        sum(1 for t in tasks if t.op == "WATER" and t.priority < PRIORITY_PLANT)
+        >= max_pending_water
+    ):
+        defer_seed_purchase = True
 
     tail: list[list] = []
     # Seed/animal purchase: arrives next turn (market orders resolve
