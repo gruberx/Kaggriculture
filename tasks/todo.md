@@ -2840,8 +2840,12 @@ project's own established finding, a fresh submission's score is volatile for it
       ended with 10 free tiles and 0 seeds - **cash, not timing, is the limit**: the harvest (120 melons in unit
       inventories) is only sold at hour 0 of day 11, so the same ~$900 buys the same ~12-14 seeds whether at hour 5 or
       hour 11; delaying only removes the chance to plant them as soon as a unit frees up. Conclusion: seed timing is not
-      the lever on harvest days; money is. Untested ideas that follow from this: keep the unit-carried harvest sellable
-      (impossible - engine drops inventories to the shed only at night), or plan the previous day's purchases so the
+      the lever on harvest days; money is. Untested ideas that follow from this: make the unit-carried harvest sellable
+      mid-day (**correction, 2026-09-20: NOT impossible** - the engine has a `DROP` op (shed-adjacent tile, moves the
+      unit's whole inventory to the shed) and unit actions resolve before market orders, so DROP + SELL works in one
+      turn; the agent never emits `DROP`. Also verified in the same check: the nightly drop is capped by
+      `shedCapacity` 100 and DISCARDS the overflow - day 10 carries 120 melons, 88-90 reach the shed in seeds
+      900/901/902, i.e. ~30 melons lost per harvest), or plan the previous day's purchases so the
       seed stock for the harvest day's replant is already on hand (buy for tomorrow's freed tiles while today's cash
       exists).
 ## Not planned yet (see plan.md)
