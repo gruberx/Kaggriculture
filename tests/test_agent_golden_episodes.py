@@ -413,13 +413,18 @@ AGENT_MAIN_PATH = os.path.join(
 # land_buy_affordability=True (tasks/todo.md T8.52): starter 59095/56230/65866 ->
 # 59813/57212/72234 and pass 49190/62657/67359 -> 67546/62552/78380 (five of six up, pass/seed 2
 # -0.2%). T8.38 escape guardrail re-checked, not re-recorded. Revert = land_buy_affordability False.
+# Re-recorded a 28th time on 2026-09-20, the user's explicit decision to default
+# day_plan_remaining_turns_aware=True (tasks/todo.md T8.53): starter 59813/57212/72234 ->
+# 59002/63636/66386 and pass 67546/62552/78380 -> 66160/67947/75368 (mixed: +11%/+8.6% on
+# starter/2 and pass/2, -8% on starter/3; measured +5.0%/+4.2% on 40 external seeds).
+# T8.38 escape guardrail re-checked, not re-recorded. Revert = day_plan_remaining_turns_aware False.
 _GOLDEN = {
-    ("starter", 1): (59813.0, 4043.0),
-    ("starter", 2): (57212.0, 3578.0),
-    ("starter", 3): (72234.0, 3581.0),
-    ("pass", 1): (67546.0, 3000.0),
-    ("pass", 2): (62552.0, 3000.0),
-    ("pass", 3): (78380.0, 3000.0),
+    ("starter", 1): (59002.0, 4240.0),
+    ("starter", 2): (63636.0, 3510.0),
+    ("starter", 3): (66386.0, 3569.0),
+    ("pass", 1): (66160.0, 3000.0),
+    ("pass", 2): (67947.0, 3000.0),
+    ("pass", 3): (75368.0, 3000.0),
 }
 
 

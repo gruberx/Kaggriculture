@@ -762,6 +762,10 @@ DEFAULT_PARAMS = {
     # seeds/animals/extra hires to develop it + land_purchase_buffer.
     "land_buy_affordability": True,
     "land_purchase_buffer": 500,
+    # T8.53 (enabled 2026-09-20 on the user's request; old value False): the day-plan hire
+    # forecast divides the work still to be done by the turns left today (24 - hour) instead
+    # of 24.
+    "day_plan_remaining_turns_aware": True,
 }
 
 

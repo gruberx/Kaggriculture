@@ -1600,3 +1600,14 @@ def test_deadline_drop_room_now_versus_room_after_sales():
     tasks = goods_deadline_drop_tasks([{"MELON": 130}], [(4, 3)], 10, **_deadline_kwargs(
         hour=20, shed_used=90, shed_stay=10, shed_room_after_sales=90))
     assert tasks[0].qty == 90
+
+
+def test_tile_day_actions_remaining_only_skips_work_already_done_today():
+    done = dict(_plant_tile(watered_today=True), watered_today=True)
+    assert crop_tile_day_actions(done, current_day=1) == 1  # whole-day count: WATER regardless
+    assert crop_tile_day_actions(done, current_day=1, remaining_only=True) == 0
+    assert crop_tile_day_actions(_plant_tile(), current_day=1, remaining_only=True) == 1  # hour 0: same
+    fed = {"animal": "COW", "fed_today": True, "yield_units": 0}
+    assert animal_tile_day_actions(fed) == 1
+    assert animal_tile_day_actions(fed, remaining_only=True) == 0
+    assert animal_tile_day_actions({"animal": "COW", "fed_today": False}, remaining_only=True) == 1

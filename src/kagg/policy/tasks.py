@@ -953,6 +953,7 @@ def crop_tile_day_actions(
     use_fertilizer: bool = False,
     defer_one_time_harvest_to_max_yield: bool = False,
     harvest_replant_actions: float = 0,
+    remaining_only: bool = False,
 ) -> float:
     """T8.44: how many real actions a single already-planted PLANT tile
     costs *today* - the per-tile "today" term the day-plan hiring forecast
@@ -988,7 +989,10 @@ def crop_tile_day_actions(
     cannot see yet at the hour the forecast is made (the tile is still
     occupied). Same reasoning as the WEED replant term in `decide`.
     """
-    actions = 1  # WATER
+    # `remaining_only` (T8.53): count the WATER only while it is still to be done
+    # today - for a forecast made mid-day and divided by the turns left. At hour 0
+    # nothing is watered yet, so it is identical there.
+    actions = 0 if (remaining_only and tile.get("watered_today", False)) else 1  # WATER
     if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
         tile, current_day, defer_one_time_harvest_to_max_yield
     ):
@@ -1000,7 +1004,9 @@ def crop_tile_day_actions(
     return actions
 
 
-def animal_tile_day_actions(tile: dict, *, care_aware: bool = False) -> int:
+def animal_tile_day_actions(
+    tile: dict, *, care_aware: bool = False, remaining_only: bool = False
+) -> int:
     """T8.44: `crop_tile_day_actions`'s counterpart for a placed animal
     tile - mirrors `_animal_tile_tasks` exactly (same four possible
     actions), but unconditionally (not gated on `wheat_units`/eligible-
@@ -1011,7 +1017,7 @@ def animal_tile_day_actions(tile: dict, *, care_aware: bool = False) -> int:
     ready to HARVEST), `+ 1` if `fertilizer_available` (ready to
     COLLECT_FERTILIZER), `+ 1` if `care_aware` and not yet `cared_today`.
     """
-    actions = 1  # FEED
+    actions = 0 if (remaining_only and tile.get("fed_today", False)) else 1  # FEED
     if tile.get("yield_units", 0) > 0:
         actions += 1
     if tile.get("fertilizer_available", False):

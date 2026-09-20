@@ -1360,7 +1360,14 @@ def hires_per_day(
             + (planned_new_animals or 0) * new_animal_actions
         )
         total_turns = total_actions * turns_per_task
-        target = math.ceil(total_turns / turns_per_day) - 1
+        # T8.53: divide by the turns that are left today, not by the whole day - the
+        # work counted is what is still to be done (see decide's tile scan), so at hour
+        # 12 it has to fit into 12 turns, not 24. Identical at hour 0.
+        if params.get("day_plan_remaining_turns_aware", False):
+            horizon = max(1, turns_per_day - hour)
+        else:
+            horizon = turns_per_day
+        target = math.ceil(total_turns / horizon) - 1
         target = math.ceil(target * (1 + buffer_fraction))
         return min(max(target, min_hires), max_hires)
     workload_forecast_aware = params.get(

@@ -2966,6 +2966,21 @@ project's own established finding, a fresh submission's score is volatile for it
       72234`. **Enabled by default with the cap** (neutral-to-positive external, decisive in self-play). Golden re-recorded a 27th
       time: starter 59095/56230/65866 -> 59813/57212/72234, pass 49190/62657/67359 -> 67546/62552/78380 (five of six up). Revert:
       `land_buy_affordability` False.
+- [x] T8.53 - day-plan hire forecast divides by the turns left today (the user's request, 2026-09-20; item from the day-10
+      analysis). `strategy.hires_per_day` (day-plan branch) divided total forecast turns by the whole day (24) at every hour, so
+      mid-day the target fell as the harvest progressed although the remaining work still had to fit into fewer turns (day 10 hour 9:
+      100 turns of work / 24 -> 4 hands, but / 15 remaining turns -> 6). New `day_plan_remaining_turns_aware`: divisor
+      `max(1, turns_per_day - hour)`, and the counted work is only what is still to be done - `crop_tile_day_actions(...,
+      remaining_only)` skips the WATER of a tile with `watered_today`, `animal_tile_day_actions(..., remaining_only)` skips the FEED
+      of a `fed_today` animal (identical at hour 0, where nothing is done yet). Tests +3. Traced side effect (`hires.py`, starter seed
+      3): the plain flag hires 12/day from day 10 on and adds useless late hires (hours 18-21, several per day), final 72234 ->
+      66386 on that seed; `hire_min_turns_left` (already existed, default 0) stops hires late in the day. **Measured**
+      (`tools/measure_t853.py`, 40 external seeds; arena 50 working seeds; base = defaults before this entry): plain `+5.0%`
+      (starter, better 26/40) / `+4.2%` (pass, 23/40), arena **33W/17L**; + `hire_min_turns_left` 6 `+7.6%` / `+6.3%`
+      (31/40, 28/40), arena 34W/16L; + 12 `+7.4%` / `+4.8%`, arena **44W/6L**. **Enabled by default: the divisor only** (what was
+      asked); `hire_min_turns_left` stays 0 - the guard is better in every measure and is the natural next flip. Golden
+      re-recorded a 28th time: starter 59813/57212/72234 -> 59002/63636/66386, pass 67546/62552/78380 -> 66160/67947/75368
+      (mixed). Revert: `day_plan_remaining_turns_aware` False.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

@@ -1490,3 +1490,20 @@ def test_land_buy_affordability_replaces_the_occupancy_gate_with_a_money_rule():
     # the old rule is untouched while the flag is off, and the quadrant cap still wins
     assert should_buy_land(10**6, 0, {"land_buy_affordability": False}, development_cost=3000, **occupancy) is False
     assert should_buy_land(10**6, 2, dict(params, max_extra_quadrants=2), development_cost=3000, **occupancy) is False
+
+
+def test_day_plan_remaining_turns_divides_by_the_turns_left_today():
+    from kagg.policy.params import DEFAULT_PARAMS as DEFAULT_PARAMS_FOR_T853
+    from kagg.policy.strategy import hires_per_day
+
+    assert DEFAULT_PARAMS_FOR_T853["day_plan_remaining_turns_aware"] is True
+    base = {"day_plan_hiring_aware": True, "min_hires_per_day": 0, "max_hires_per_day": 12}
+    kw = dict(turns_per_day=24, maintenance_actions_today=30, planned_new_crop_tiles=0, planned_new_animals=0)
+    # 30 actions * 2 turns = 60 turns: ceil(60/24) - 1 = 2 units at hour 0 ...
+    assert hires_per_day(dict(base, day_plan_remaining_turns_aware=False), hour=0, **kw) == 2
+    assert hires_per_day(dict(base, day_plan_remaining_turns_aware=True), hour=0, **kw) == 2  # identical at hour 0
+    # ... but at hour 12, 60 turns of work must fit into 12: ceil(60/12) - 1 = 4
+    assert hires_per_day(dict(base, day_plan_remaining_turns_aware=False), hour=12, **kw) == 2
+    assert hires_per_day(dict(base, day_plan_remaining_turns_aware=True), hour=12, **kw) == 4
+    # the last turn never divides by zero
+    assert hires_per_day(dict(base, day_plan_remaining_turns_aware=True), hour=23, **kw) == 12

@@ -1648,6 +1648,9 @@ def decide(obs: dict, params: dict) -> dict:
     n_plant_tiles = 0
     n_weed_tiles = 0
     maintenance_actions_today = 0
+    # T8.53: forecast only the work still to be done (matches hires_per_day's
+    # remaining-turns divisor).
+    remaining_turns_aware = bool(params.get("day_plan_remaining_turns_aware", False))
     harvest_cleared_tiles = 0
     remaining_harvest_units = 0
     board_size = len(me["tiles"])
@@ -1665,7 +1668,9 @@ def decide(obs: dict, params: dict) -> dict:
                     placed_animal_type_counts[tile["animal"]] = (
                         placed_animal_type_counts.get(tile["animal"], 0) + 1
                     )
-                    maintenance_actions_today += animal_tile_day_actions(tile, care_aware=care_aware)
+                    maintenance_actions_today += animal_tile_day_actions(
+                        tile, care_aware=care_aware, remaining_only=remaining_turns_aware
+                    )
                     remaining_harvest_units += harvestable_units_today(tile, current_day)
                 elif tile.get("kind") in ("COOP", "PASTURE"):
                     empty_structure_kinds.add(tile["kind"])
@@ -1676,6 +1681,7 @@ def decide(obs: dict, params: dict) -> dict:
                         current_day,
                         use_fertilizer=use_fertilizer,
                         defer_one_time_harvest_to_max_yield=defer_one_time_harvest_to_max_yield,
+                        remaining_only=remaining_turns_aware,
                     )
                     if harvest_clears_tile_today(
                         tile, current_day, defer_one_time_harvest_to_max_yield

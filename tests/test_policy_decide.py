@@ -421,9 +421,13 @@ def test_decide_passes_maintenance_actions_today_to_hires_per_day(monkeypatch):
         return original_hire(*args, **kwargs)
 
     monkeypatch.setattr(decide_module, "hires_per_day", hire_spy)
-    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    # whole-day counting (the remaining-work variant skips the fed COW - T8.53)
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False, day_plan_remaining_turns_aware=False))
 
     assert captured.get("maintenance_actions_today") == 2
+    captured.clear()
+    decide(obs, dict(DEFAULT_PARAMS, always_pursue_one_animal=False, day_plan_remaining_turns_aware=True))
+    assert captured.get("maintenance_actions_today") == 1  # the already-fed COW's FEED is done
 
 
 def test_decide_weed_tiles_count_replant_cost_in_maintenance_actions_today_by_default(monkeypatch):
@@ -2929,7 +2933,9 @@ def test_drop_goods_cash_trigger_waits_for_an_empty_sellable_shed():
 def _deadline_params(**kw):
     return dict(
         DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True,
-        drop_goods_deadline_mode=True, drop_goods_cash_min_units=None, **kw,
+        drop_goods_deadline_mode=True, drop_goods_cash_min_units=None,
+        # a late-day hire flood (remaining-turns forecast) would crowd the SELL out of the cap
+        day_plan_remaining_turns_aware=False, **kw,
     )
 
 
