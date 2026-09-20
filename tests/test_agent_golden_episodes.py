@@ -405,13 +405,17 @@ AGENT_MAIN_PATH = os.path.join(
 # (max_extra_quadrants=2, tasks/todo.md T8.50): starter 52867/51470/65073 -> 61199/55910/65088
 # and pass 43354/62881/69958 -> 47962/62881/72078 (none down). T8.38 escape guardrail re-checked,
 # not re-recorded. Revert = max_extra_quadrants None (restores the 24th table).
+# Re-recorded a 26th time on 2026-09-20, the user's explicit decision to default
+# drop_goods_deadline_mode=True (tasks/todo.md T8.50): starter 61199/55910/65088 ->
+# 59095/56230/65866 and pass 47962/62881/72078 -> 49190/62657/67359 (mixed, within +-7%).
+# T8.38 escape guardrail re-checked, not re-recorded. Revert = drop_goods_deadline_mode False.
 _GOLDEN = {
-    ("starter", 1): (61199.0, 4334.0),
-    ("starter", 2): (55910.0, 3484.0),
-    ("starter", 3): (65088.0, 3571.0),
-    ("pass", 1): (47962.0, 3000.0),
-    ("pass", 2): (62881.0, 3000.0),
-    ("pass", 3): (72078.0, 3000.0),
+    ("starter", 1): (59095.0, 4431.0),
+    ("starter", 2): (56230.0, 3484.0),
+    ("starter", 3): (65866.0, 3571.0),
+    ("pass", 1): (49190.0, 3000.0),
+    ("pass", 2): (62657.0, 3000.0),
+    ("pass", 3): (67359.0, 3000.0),
 }
 
 

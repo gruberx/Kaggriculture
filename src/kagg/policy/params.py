@@ -745,8 +745,9 @@ DEFAULT_PARAMS = {
     # kagg.policy.decide._DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE).
     "sell_orders_first_by_revenue": True,
     # T8.50: end-of-day overflow drop (kagg.policy.decide._DEFAULT_DROP_GOODS_DEADLINE_MODE;
-    # measured mixed, left off) ...
-    "drop_goods_deadline_mode": False,
+    # enabled 2026-09-20 on the user's explicit request; measured +0.9%/+1.7% vs external
+    # opponents but 7W/42L in self-play; old value False) ...
+    "drop_goods_deadline_mode": True,
     "drop_goods_deadline_margin_turns": 2,
     # ... and a cap on bought quadrants. 2026-09-20, the user's request ("temporarily block
     # the 4th quadrant - the top-5 opponents practically never open it"): 2 = never open

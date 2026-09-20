@@ -73,7 +73,7 @@
   "drop_goods_cash_min_units": 5,
   "bulk_purchase_counts_harvest_tiles": true,
   "sell_orders_first_by_revenue": true,
-  "drop_goods_deadline_mode": false,
+  "drop_goods_deadline_mode": true,
   "drop_goods_deadline_margin_turns": 2,
   "max_extra_quadrants": 2
 }

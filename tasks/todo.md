@@ -2923,6 +2923,11 @@ project's own established finding, a fresh submission's score is volatile for it
       against - not traced; the end-of-day sale lands after the opponent's mid-day sales, which is a real possibility against
       similar strategies). Golden re-recorded a 25th time: starter 52867/51470/65073 -> 61199/55910/65088, pass
       43354/62881/69958 -> 47962/62881/72078 (none down). Revert Q: `max_extra_quadrants` = None (params.py, policy.json).
+      **D enabled (the user's explicit request, same day)**: `drop_goods_deadline_mode` default True (params.py, policy.json,
+      module default), against the measured self-play result above. Golden re-recorded a 26th time: starter 61199/55910/65088 ->
+      59095/56230/65866, pass 47962/62881/72078 -> 49190/62657/67359 (mixed, within +-7%). Table (seeds 900-902, defaults): day 10
+      free tiles at the end 8/13/8, later days `lost` (night overflow) 0-29 units, unwatered 0-15 (was 8-35 with the 4th
+      quadrant); finals vs the old-default opponent 16597/56901/36330. Revert D: `drop_goods_deadline_mode` False.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

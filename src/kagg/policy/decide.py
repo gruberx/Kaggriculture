@@ -978,7 +978,7 @@ _DEFAULT_DROP_GOODS_TO_SHED = True
 # shed capacity, send just enough loaded units on the last turns of the day,
 # early enough to arrive and sell (moves + item types + a margin of turns).
 # Replaces the immediate `drop_goods_overflow_fraction` trigger when on.
-_DEFAULT_DROP_GOODS_DEADLINE_MODE = False
+_DEFAULT_DROP_GOODS_DEADLINE_MODE = True
 _DEFAULT_DROP_GOODS_DEADLINE_MARGIN_TURNS = 2
 
 # T8.49 follow-up: the engine settles the two players' market orders in
