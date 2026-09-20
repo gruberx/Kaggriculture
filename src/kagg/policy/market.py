@@ -166,6 +166,24 @@ def sell_orders(
     return orders[:max_orders]
 
 
+def sale_revenue(orders: list[list], market_inventory: dict) -> int:
+    """Money the SELL orders bring in, walking each item's price down one
+    unit at a time exactly like the engine's per-unit settlement (a sale at
+    price > 1 also raises the market stock by one)."""
+    total = 0
+    for order in orders:
+        if order[0] != "SELL":
+            continue
+        item, qty = order[1], order[2]
+        stock = market_inventory.get(item, MARKET_I0)
+        for _ in range(qty):
+            p = price(item, stock)
+            total += p
+            if p > 1:
+                stock += 1
+    return total
+
+
 _DEFAULT_WHEAT_RESTOCK_THRESHOLD = 5
 _DEFAULT_WHEAT_RESTOCK_QTY = 10
 _DEFAULT_WHEAT_MAX_BUY_PRICE = 40

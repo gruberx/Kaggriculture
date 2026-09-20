@@ -413,3 +413,13 @@ def test_bulk_purchase_plan_empty_inputs():
 
     assert bulk_purchase_plan([], {}, {}, 5, 100) == {}
     assert bulk_purchase_plan(["MELON"], {}, {"MELON": 80}, 0, 100) == {}
+
+
+def test_sale_revenue_walks_the_price_down_per_unit():
+    from kagg.gamelib.market import price
+    from kagg.policy.market import sale_revenue
+
+    inv = {"MELON": 120}
+    expected = sum(price("MELON", 120 + k) for k in range(3))
+    assert sale_revenue([["SELL", "MELON", 3], ["BUY_SEED", "MELON", 9]], inv) == expected
+    assert sale_revenue([], inv) == 0

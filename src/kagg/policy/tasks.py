@@ -149,7 +149,8 @@ class Task:
     priority: int
     pos: tuple[int, int]
     # "WATER"|"HARVEST"|"FEED"|"FERTILIZE"|"PLANT"|"DIG"|"CARE"|
-    # "COLLECT_FERTILIZER"|"BUILD_COOP"|"BUILD_PASTURE"|"PLACE"|"PICKUP"
+    # "COLLECT_FERTILIZER"|"BUILD_COOP"|"BUILD_PASTURE"|"PLACE"|"PICKUP"|
+    # "DROP_GOODS" (T8.49: carry `qty` of `item` to a shed-access tile)
     op: str
     crop: str | None = None  # only set for PLANT tasks
     animal: str | None = None  # only set for PLACE tasks
@@ -1151,6 +1152,11 @@ def action_for_unit(unit_pos: tuple[int, int], task: Task | None) -> list:
             return ["PLACE", task.animal]
         if task.op == "PICKUP":
             return ["PICKUP", task.item, task.qty]
+        if task.op == "DROP_GOODS":
+            # The engine's PLACE on a shed-access tile moves `qty` of one
+            # item from the unit's inventory to the shed (unlike DROP, which
+            # empties the whole inventory, feed WHEAT included).
+            return ["PLACE", task.item, task.qty]
         return [task.op]
     x, y = unit_pos
     tx, ty = task.pos
@@ -1162,3 +1168,71 @@ def action_for_unit(unit_pos: tuple[int, int], task: Task | None) -> list:
     if dx != 0:
         return ["EAST" if dx > 0 else "WEST"]
     return ["SOUTH" if dy > 0 else "NORTH"]
+
+
+# T8.49: goods a unit may carry to the shed for an early sale. WHEAT stays on
+# the unit (it is feed for the placed animals) and FERTILIZER follows its own
+# sell rules in `market.sell_orders`.
+_DROPPABLE_GOODS = ("MELON", "STRAWBERRY", "TOMATO", "CARROT", "MILK", "WOOL", "EGG")
+
+
+def goods_drop_task(
+    inventories: list[dict],
+    unit_positions: list[tuple[int, int]],
+    board_size: int,
+    *,
+    shed_used: int,
+    shed_capacity: int,
+    money: float,
+    cash_needed: float,
+    overflow_fraction: float | None,
+    cash_min_units: int | None,
+    priority: float = PRIORITY_HARVEST,
+) -> Task | None:
+    """T8.49: the one "carry goods to the shed" task for this turn, or None.
+
+    The engine only empties unit inventories into the shed at midnight, up to
+    `shed_capacity` - the overflow is discarded (a 120-melon harvest keeps
+    ~90) - and the goods can only be sold from the shed, so a harvest sits
+    unsold and unspendable until the next morning. This picks the item with
+    the largest total stock among the units, and as its carrier the unit
+    holding most of it (ties: nearest a shed-access tile, then lowest index),
+    when either trigger fires:
+      * overflow: goods on units + shed contents reach `overflow_fraction` of
+        the shed capacity (None = trigger off);
+      * cash: `money < cash_needed` and the unit holds at least
+        `cash_min_units` of the item (None = trigger off).
+    The task is pinned to that unit and sits on the shed-access tile nearest
+    to it; `action_for_unit` turns it into `PLACE item qty` there.
+    """
+    n = min(len(inventories), len(unit_positions))
+    stock = {g: sum(inventories[i].get(g, 0) for i in range(n)) for g in _DROPPABLE_GOODS}
+    stock = {g: c for g, c in stock.items() if c > 0}
+    if not stock:
+        return None
+    item = max(stock, key=lambda g: (stock[g], -_DROPPABLE_GOODS.index(g)))
+    owner = min(
+        (i for i in range(n) if inventories[i].get(item, 0) > 0),
+        key=lambda i: (-inventories[i][item], shed_distance(unit_positions[i], board_size), i),
+    )
+    carried_total = sum(sum(v for v in inventories[i].values() if v > 0) for i in range(n))
+    overflow = (
+        overflow_fraction is not None
+        and shed_used + carried_total >= overflow_fraction * shed_capacity
+    )
+    cash_short = (
+        cash_min_units is not None
+        and money < cash_needed
+        and inventories[owner][item] >= cash_min_units
+    )
+    if not (overflow or cash_short):
+        return None
+    room = max(0, shed_capacity - shed_used)
+    qty = min(inventories[owner][item], room)
+    if qty <= 0:
+        return None
+    pos = min(
+        shed_access_tiles(board_size),
+        key=lambda t: (tile_distance(unit_positions[owner], t), t),
+    )
+    return Task(priority, pos, "DROP_GOODS", item=item, qty=qty, unit_index=owner)

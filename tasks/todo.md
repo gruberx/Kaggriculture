@@ -2848,6 +2848,38 @@ project's own established finding, a fresh submission's score is volatile for it
       900/901/902, i.e. ~30 melons lost per harvest), or plan the previous day's purchases so the
       seed stock for the harvest day's replant is already on hand (buy for tomorrow's freed tiles while today's cash
       exists).
+- [x] T8.49 - carry harvested goods to the shed mid-day and sell them the same turn; bulk purchases count the tiles the
+      harvest is about to free (the user's design, 2026-09-20). Two findings first (`shed.py`, seeds 900-902): (1) the
+      engine has `DROP` and `PLACE item n` on a shed-access tile, unit actions resolve before market orders, so a
+      same-turn drop + SELL works (the agent never emitted either); (2) the nightly drop into the shed is capped at
+      `shedCapacity` 100 and DISCARDS the overflow: 120 melons harvested on day 10, 88-90 reach the shed (~30 lost).
+      Built: `tasks.goods_drop_task` (item = largest total stock; carrier = the unit holding most of it, ties nearest a
+      shed-access tile, then index; task `DROP_GOODS` pinned to it, `action_for_unit` -> `PLACE item qty`, never `DROP`
+      because that would also empty the feed WHEAT), `market.sale_revenue` (per-unit price walk = engine settlement),
+      decide wiring: when the carrier already stands on the shed tile, the dropped stock is added to the sells and the
+      incremental sale revenue is added to the money the BUY_SEED/BUY_ANIMAL plans may spend (sells settle before the
+      tail). Triggers: overflow (`drop_goods_overflow_fraction`, goods on units + shed >= fraction * capacity) and cash
+      (`drop_goods_cash_min_units`: money < estimated seed/animal spend and the carrier holds >= N; the user's
+      proposal); `bulk_purchase_counts_harvest_tiles` adds `harvest_cleared_tiles` to the tiles the seed plan covers
+      and lets the animal plan run while land is about to be freed (animals: only changes anything when more than one
+      animal is wanted - shipped `max_animals_per_type=1`, target count 1 - so it is inert for animals by default).
+      All params default off (bit-identical). Tests +7 (tasks 4, market 1, decide 4 - incl. same-turn drop+sell+buy).
+      **Measured** (`tools/measure_t849b.py`, external `starter`/`pass`, seeds 1-40, final money vs shipped defaults):
+      overflow only `+6.1%` / `+3.8%` (better 29/40, 27/40); cash only `+4.4%` / `+0.6%`; both triggers `+3.1%` / `-1.1%`;
+      both + harvest tiles `+6.4%` / `+2.0%`; **overflow + harvest tiles `+10.1%` / `+7.4%` (better 30/40, 29/40)**. The
+      cash trigger adds nothing on top of the overflow trigger and is worse in combination (probably small mid-day
+      trips on non-harvest days; not traced). Day-10 trace (seed 900, drop on): first drop at hour 4 (money 885 -> 2155),
+      free tiles at the end of day 10 6 instead of 15, money at the end of the day 8078 instead of 17.
+      **Arena (self-play) is NOT usable for this change and was discarded**: cash-only vs shipped scored 1W/49L (9-11k vs
+      ~50k) while +2.9% vs `starter`. Traced (`arena2.py`, seed 100): the engine settles market orders in per-order-index
+      lockstep between the two players, so a player whose SELL MELON has the lower list index sells its 88 melons alone
+      on a fresh market ($214 avg) and the other player then sells into the crashed market ($89 avg, price $4 at the end).
+      The candidate had 'SELL WHEAT' ahead of MELON, the opponent did not. This is the same effect that made the dump
+      look like 200W/0L in T8.46. Idea not tried: order the SELL orders by revenue, biggest first, so a collision with a
+      same-item opponent is won by us.
+      Verdict: mechanism works, overflow trigger + harvest-tile counting is a clear external gain; defaults NOT flipped
+      (standing rule). Enable with `drop_goods_to_shed=True`, `drop_goods_cash_min_units=None`,
+      `bulk_purchase_counts_harvest_tiles=True`.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

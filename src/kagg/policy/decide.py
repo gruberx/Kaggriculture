@@ -37,7 +37,7 @@ from kagg.gamelib.constants import ANIMALS, CROPS
 from kagg.gamelib.farm import shed_distance
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
-from kagg.policy.market import buy_wheat_order, bulk_purchase_plan, sell_orders
+from kagg.policy.market import buy_wheat_order, bulk_purchase_plan, sale_revenue, sell_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, score_portfolio, should_buy_land
 from kagg.policy.tasks import (
     PRIORITY_PLANT,
@@ -46,6 +46,7 @@ from kagg.policy.tasks import (
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    goods_drop_task,
     harvest_clears_tile_today,
 )
 
@@ -955,6 +956,23 @@ _DEFAULT_DEFER_SEED_PURCHASE_ON_CROP_SALE = 0
 # skipped until fewer than this many HARVEST tasks (resp. WATER tasks
 # ranked above PLANT) are pending. None = off (bit-identical).
 _DEFAULT_SEED_PURCHASE_MAX_PENDING_HARVEST = None
+
+# T8.49 (the user's design, 2026-09-20): carry harvested goods to the shed in
+# mid-day and sell them the same turn. Units only empty their inventories into
+# the shed at midnight, capped at the shed capacity (overflow is discarded:
+# 120 melons harvested on day 10, 88-90 kept), so a harvest day is cash-starved
+# and loses ~30 melons. `drop_goods_to_shed` turns the mechanism on; the
+# overflow trigger fires when goods on units + shed contents reach this
+# fraction of the shed capacity, the cash trigger when money is below the
+# estimated seed/animal spend and the carrier holds at least
+# `drop_goods_cash_min_units` of the item. None disables a trigger.
+_DEFAULT_DROP_GOODS_TO_SHED = False
+_DEFAULT_DROP_GOODS_OVERFLOW_FRACTION = 0.6
+_DEFAULT_DROP_GOODS_CASH_MIN_UNITS = 5
+
+# T8.49 (same request): bulk seed/animal purchases also count the tiles this
+# turn's own HARVEST will empty, so the replant stock is bought in advance.
+_DEFAULT_BULK_PURCHASE_COUNTS_HARVEST_TILES = False
 _DEFAULT_SEED_PURCHASE_MAX_PENDING_WATER = None
 
 # T8.1: anchors new-investment tile placement to the shed rather than the
@@ -1960,7 +1978,43 @@ def decide(obs: dict, params: dict) -> dict:
             "plant_while_animal_pending", _DEFAULT_PLANT_WHILE_ANIMAL_PENDING
         ),
     )
+    # T8.49: carry goods to the shed for a same-turn sale (see the defaults'
+    # comment). The cash need is a rough spend estimate for the tiles about to
+    # be planted (+ a planned animal): what the bulk plans below would try to
+    # buy if money were no object.
+    drop_task = None
+    if params.get("drop_goods_to_shed", _DEFAULT_DROP_GOODS_TO_SHED):
+        est_need = 0
+        if fallback_crop is not None and not animal_blocks_planting:
+            est_tiles = min(
+                free_tiles + harvest_cleared_tiles,
+                params.get("bulk_purchase_max_new_tiles", _DEFAULT_BULK_PURCHASE_MAX_NEW_TILES),
+            )
+            est_need += max(0, est_tiles - seeds.get(fallback_crop, 0)) * CROPS[fallback_crop]["seed"]
+        if acquisition_animal is not None:
+            est_need += planned_new_animals * ANIMALS[acquisition_animal]["cost"]
+        drop_task = goods_drop_task(
+            private.get("inventories") or [], unit_positions, board_size,
+            shed_used=sum(shed.values()),
+            shed_capacity=params.get("shed_capacity", _DEFAULT_SHED_CAPACITY),
+            money=me["money"], cash_needed=est_need,
+            overflow_fraction=params.get(
+                "drop_goods_overflow_fraction", _DEFAULT_DROP_GOODS_OVERFLOW_FRACTION
+            ),
+            cash_min_units=params.get(
+                "drop_goods_cash_min_units", _DEFAULT_DROP_GOODS_CASH_MIN_UNITS
+            ),
+        )
+        if drop_task is not None:
+            tasks = sorted([*tasks, drop_task], key=lambda t: (t.priority, t.pos))
     assignment = assign_units(tasks, unit_positions)
+    # What the carrier really drops this turn (only when it already stands on
+    # the shed-access tile, i.e. its action below is the PLACE itself).
+    dropped_now: dict[str, int] = {}
+    if drop_task is not None:
+        u = drop_task.unit_index
+        if assignment[u] is drop_task and unit_positions[u] == drop_task.pos:
+            dropped_now[drop_task.item] = drop_task.qty
 
     farmer_action = action_for_unit(unit_positions[0], assignment[0])
     hand_actions = [
@@ -2170,6 +2224,35 @@ def decide(obs: dict, params: dict) -> dict:
     # list order against real money, and a big seed order placed ahead of
     # BUY_ANIMAL could otherwise starve it. Both are off by default (the
     # legacy branches below are unchanged, bit-identical).
+    # T8.49: sells settle before the tail's purchases, so what a same-turn
+    # drop brings in is spendable by the BUY orders below.
+    shed_for_sell = dict(shed)
+    buy_money = me["money"]
+    if dropped_now:
+        for item, qty in dropped_now.items():
+            shed_for_sell[item] = shed_for_sell.get(item, 0) + qty
+        preview_kwargs = dict(
+            max_orders=_MAX_MARKET_ORDERS, wheat_reserve=wheat_reserve, liquidate=liquidate,
+            use_fertilizer=use_fertilizer, liquidate_wheat_reserve=liquidate_wheat_reserve,
+        )
+        buy_money += (
+            sale_revenue(
+                sell_orders(shed_for_sell, obs["market"]["inventory"], params, **preview_kwargs),
+                obs["market"]["inventory"],
+            )
+            - sale_revenue(
+                sell_orders(shed, obs["market"]["inventory"], params, **preview_kwargs),
+                obs["market"]["inventory"],
+            )
+        )
+    harvest_tiles_for_purchase = (
+        harvest_cleared_tiles
+        if params.get(
+            "bulk_purchase_counts_harvest_tiles", _DEFAULT_BULK_PURCHASE_COUNTS_HARVEST_TILES
+        )
+        and plant_crop_intent is not None
+        else 0
+    )
     bulk_seed_purchase = params.get("bulk_seed_purchase", _DEFAULT_BULK_SEED_PURCHASE)
     bulk_animal_purchase = params.get("bulk_animal_purchase", _DEFAULT_BULK_ANIMAL_PURCHASE)
     bulk_animal_qty = 0
@@ -2177,7 +2260,11 @@ def decide(obs: dict, params: dict) -> dict:
     if (
         bulk_animal_purchase
         and acquisition_animal is not None
-        and (has_empty_tile or ANIMALS[acquisition_animal]["structure"] in empty_structure_kinds)
+        and (
+            has_empty_tile
+            or harvest_tiles_for_purchase > 0
+            or ANIMALS[acquisition_animal]["structure"] in empty_structure_kinds
+        )
     ):
         animal_unit_cost = ANIMALS[acquisition_animal]["cost"]
         animal_held = shed.get(acquisition_animal, 0) + sum(
@@ -2188,7 +2275,7 @@ def decide(obs: dict, params: dict) -> dict:
             {acquisition_animal: animal_held},
             {acquisition_animal: animal_unit_cost},
             planned_new_animals,
-            me["money"],
+            buy_money,
             buffer_fraction=params.get(
                 "bulk_animal_buffer_fraction", _DEFAULT_BULK_ANIMAL_BUFFER_FRACTION
             ),
@@ -2210,19 +2297,24 @@ def decide(obs: dict, params: dict) -> dict:
         )
         bulk_animal_cost = bulk_animal_qty * animal_unit_cost
 
-    if not animal_blocks_planting and fallback_crops and has_empty_tile and not defer_seed_purchase:
+    if (
+        not animal_blocks_planting
+        and fallback_crops
+        and (has_empty_tile or harvest_tiles_for_purchase > 0)
+        and not defer_seed_purchase
+    ):
         if bulk_seed_purchase:
             # Tiles about to be planted: every free tile not reserved for
             # a planned animal's structure (the same land accounting the
             # day-plan forecast uses), capped at one quadrant. All basket
             # crops together add up to this one total.
             tiles_to_plant = min(
-                max(0, free_tiles - animals_needing_new_tiles),
+                max(0, free_tiles + harvest_tiles_for_purchase - animals_needing_new_tiles),
                 params.get("bulk_purchase_max_new_tiles", _DEFAULT_BULK_PURCHASE_MAX_NEW_TILES),
             )
             seed_budget = max(
                 0,
-                me["money"] - params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
+                buy_money - params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
                 - bulk_animal_cost,
             )
             seed_plan = bulk_purchase_plan(
@@ -2252,7 +2344,7 @@ def decide(obs: dict, params: dict) -> dict:
             seed_buffer_per_unit = params.get("seed_buffer_per_unit", _DEFAULT_SEED_BUFFER_PER_UNIT)
             seed_target = labor_units * seed_buffer_per_unit
             seed_cash_reserve = params.get("seed_cash_reserve", _DEFAULT_SEED_CASH_RESERVE)
-            spendable = max(0, me["money"] - seed_cash_reserve)  # max(0, ...) before // - avoids
+            spendable = max(0, buy_money - seed_cash_reserve)  # max(0, ...) before // - avoids
             for crop in fallback_crops:  # negative-floor-division surprises
                 seed_cost = CROPS[crop]["seed"]
                 seeds_held = seeds.get(crop, 0)
@@ -2274,7 +2366,7 @@ def decide(obs: dict, params: dict) -> dict:
     ):
         animal_cost = ANIMALS[acquisition_animal]["cost"]
         shed_capacity = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
-        if me["money"] >= animal_cost and shed_room(shed, shed_capacity) > 0:
+        if buy_money >= animal_cost and shed_room(shed, shed_capacity) > 0:
             tail.append(["BUY_ANIMAL", acquisition_animal, 1])
 
     # Land purchase, per the strategic layer's tunable threshold
@@ -2322,7 +2414,7 @@ def decide(obs: dict, params: dict) -> dict:
         effective_wheat_reserve = max(wheat_reserve, threshold)
     sell_max_orders = max(0, _MAX_MARKET_ORDERS - len(hires) - len(tail))
     sells = sell_orders(
-        shed,
+        shed_for_sell,
         obs["market"]["inventory"],
         params,
         max_orders=sell_max_orders,

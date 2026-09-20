@@ -730,6 +730,12 @@ DEFAULT_PARAMS = {
     # idle and lock cash. None = off.
     "seed_purchase_max_pending_harvest": None,
     "seed_purchase_max_pending_water": None,
+    # T8.49: carry harvested goods to the shed mid-day and sell them the same
+    # turn (see kagg.policy.decide._DEFAULT_DROP_GOODS_TO_SHED). Off = old behavior.
+    "drop_goods_to_shed": False,
+    "drop_goods_overflow_fraction": 0.6,
+    "drop_goods_cash_min_units": 5,
+    "bulk_purchase_counts_harvest_tiles": False,
 }
 
 

@@ -26,6 +26,7 @@ from kagg.policy.tasks import (
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    goods_drop_task,
     harvest_clears_tile_today,
 )
 
@@ -1475,3 +1476,46 @@ def test_harvest_clears_tile_today_waits_for_last_ripening_day_when_deferring():
     melon = dict(_plant_tile(planted_day=0, yield_units=5), crop="MELON")
     assert not harvest_clears_tile_today(melon, 9, defer_one_time_harvest_to_max_yield=True)
     assert harvest_clears_tile_today(melon, 10, defer_one_time_harvest_to_max_yield=True)
+
+
+# --- goods_drop_task / DROP_GOODS (T8.49) -------------------------------
+
+
+def _drop_kwargs(**kw):
+    base = dict(
+        shed_used=0, shed_capacity=100, money=1000, cash_needed=0,
+        overflow_fraction=0.6, cash_min_units=5,
+    )
+    base.update(kw)
+    return base
+
+
+def test_goods_drop_task_none_without_goods_or_trigger():
+    assert goods_drop_task([{}], [(0, 0)], 10, **_drop_kwargs()) is None
+    # goods carried, but no overflow and cash is fine
+    assert goods_drop_task([{"MELON": 10}], [(0, 0)], 10, **_drop_kwargs()) is None
+
+
+def test_goods_drop_task_overflow_trigger_picks_largest_stock_owner_nearest_shed():
+    inventories = [{"MELON": 30}, {"MELON": 30, "WHEAT": 9}, {"MELON": 5}]
+    positions = [(0, 0), (4, 5), (5, 5)]
+    task = goods_drop_task(inventories, positions, 10, **_drop_kwargs())
+    # unit 0 and 1 tie on stock; unit 1 is nearer the shed
+    assert task.op == "DROP_GOODS" and task.item == "MELON" and task.unit_index == 1
+    assert task.qty == 30 and task.pos == (4, 5)
+    assert action_for_unit((4, 5), task) == ["PLACE", "MELON", 30]
+    assert action_for_unit((4, 6), task) == ["NORTH"]
+
+
+def test_goods_drop_task_cash_trigger_needs_shortfall_and_min_units():
+    inv = [{"MELON": 8}]
+    cash = dict(overflow_fraction=None, cash_needed=500)
+    assert goods_drop_task(inv, [(4, 4)], 10, **_drop_kwargs(money=100, **cash)) is not None
+    assert goods_drop_task(inv, [(4, 4)], 10, **_drop_kwargs(money=600, **cash)) is None
+    assert goods_drop_task([{"MELON": 4}], [(4, 4)], 10, **_drop_kwargs(money=100, **cash)) is None
+
+
+def test_goods_drop_task_never_drops_wheat_and_respects_shed_room():
+    assert goods_drop_task([{"WHEAT": 50}], [(4, 4)], 10, **_drop_kwargs()) is None
+    task = goods_drop_task([{"MELON": 50}], [(4, 4)], 10, **_drop_kwargs(shed_used=80))
+    assert task.qty == 20

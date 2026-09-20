@@ -2798,3 +2798,53 @@ def test_seed_purchase_waits_while_watering_outranks_planting():
     obs = lambda: _obs_with_queued_work(12, 0)  # noqa: E731
     assert _orders(decide(obs(), dict(params, seed_purchase_max_pending_water=12)), "BUY_SEED") == []
     assert _orders(decide(obs(), dict(params, seed_purchase_max_pending_water=13)), "BUY_SEED") != []
+
+
+# --- drop_goods_to_shed (T8.49) ----------------------------------------
+
+
+def _carrying_obs(melons=30, money=10, farmer=(4, 4)):
+    obs = _fresh_melon_obs()
+    obs["farms"][0]["money"] = money
+    obs["farms"][0]["farmer"] = list(farmer)
+    obs["private"]["inventories"] = [{"MELON": melons}]
+    return obs
+
+
+def test_drop_goods_to_shed_defaults_off_and_changes_nothing():
+    assert DEFAULT_PARAMS["drop_goods_to_shed"] is False
+    action = decide(_carrying_obs(), dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+    assert action["farmer"][0] != "PLACE"
+    assert _orders(action, "SELL") == []
+
+
+def test_drop_goods_drops_and_sells_in_the_same_turn_and_spends_the_proceeds():
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True)
+    action = decide(_carrying_obs(), params)
+    assert action["farmer"] == ["PLACE", "MELON", 30]
+    assert ["SELL", "MELON", 30] in action["market"]
+    # $10 alone buys nothing; the 30 melons' proceeds fund the seed order.
+    seeds = _orders(action, "BUY_SEED")
+    assert seeds and action["market"].index(seeds[0]) > action["market"].index(["SELL", "MELON", 30])
+    assert seeds[0][2] * 80 > 10
+
+
+def test_drop_goods_walks_to_the_shed_first_and_does_not_count_the_sale_yet():
+    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True)
+    action = decide(_carrying_obs(farmer=(4, 7)), params)
+    assert action["farmer"] == ["NORTH"]
+    assert _orders(action, "SELL") == [] and _orders(action, "BUY_SEED") == []
+
+
+def test_bulk_purchase_counts_harvest_tiles_buys_seeds_for_tiles_about_to_be_freed():
+    params = dict(
+        DEFAULT_PARAMS, always_pursue_one_animal=False, day_plan_hiring_aware=False,
+        bulk_purchase_max_new_tiles=200, day_plan_max_new_tiles_per_day=200,
+    )
+    obs = _obs_with_queued_work(0, 10)
+    obs["farms"][0]["money"] = 50000
+    base = _orders(decide(obs, params), "BUY_SEED")
+    obs2 = _obs_with_queued_work(0, 10)
+    obs2["farms"][0]["money"] = 50000
+    more = _orders(decide(obs2, dict(params, bulk_purchase_counts_harvest_tiles=True)), "BUY_SEED")
+    assert sum(o[2] for o in more) - sum(o[2] for o in base) >= 10
