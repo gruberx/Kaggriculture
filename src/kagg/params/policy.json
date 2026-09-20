@@ -15,7 +15,7 @@
   "day_plan_new_animal_actions": 4.0,
   "day_plan_max_new_tiles_per_day": 25,
   "day_plan_new_tiles_cash_aware": true,
-  "hire_min_turns_left": 0,
+  "hire_min_turns_left": 6,
   "max_hire_orders_per_turn": 10,
   "day_plan_weed_replant_aware": true,
   "day_plan_harvest_replant_aware": true,

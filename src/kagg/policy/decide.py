@@ -877,7 +877,7 @@ _DEFAULT_DAY_PLAN_HARVEST_REPLANT_AWARE = True
 # whole day just because the gate would otherwise block the day's very
 # first hire - see the loop's own comment). Default 0 (bit-identical -
 # the gate always passes).
-_DEFAULT_HIRE_MIN_TURNS_LEFT = 0
+_DEFAULT_HIRE_MIN_TURNS_LEFT = 6
 
 # T8.44: independently re-verified line-by-line against this module's own
 # order-construction code - `sell_max_orders` already reserves room

@@ -2981,6 +2981,10 @@ project's own established finding, a fresh submission's score is volatile for it
       asked); `hire_min_turns_left` stays 0 - the guard is better in every measure and is the natural next flip. Golden
       re-recorded a 28th time: starter 59813/57212/72234 -> 59002/63636/66386, pass 67546/62552/78380 -> 66160/67947/75368
       (mixed). Revert: `day_plan_remaining_turns_aware` False.
+      **`hire_min_turns_left` = 6 (the user's explicit request, same day)**: default 0 -> 6 (params.py, policy.json, module default).
+      Also found while measuring: with the divisor a late-day forecast (3-4 turns left) targets 12 hands and up to 10 HIRE orders
+      fill the market cap, crowding SELL/BUY orders out. Golden re-recorded a 29th time: starter 59002/63636/66386 ->
+      55880/70208/67773, pass 66160/67947/75368 -> 53161/69469/76756 (mixed, pass/1 -19.7%). Revert: `hire_min_turns_left` 0.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

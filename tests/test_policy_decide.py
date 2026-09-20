@@ -858,12 +858,16 @@ def test_decide_hire_min_turns_left_allows_a_top_up_with_enough_turns_remaining(
     assert sum(1 for o in action["market"] if o == ["HIRE"]) == 1
 
 
-def test_decide_hire_min_turns_left_defaults_to_zero_and_is_a_no_op():
+def test_decide_hire_min_turns_left_defaults_to_six_and_zero_is_a_no_op():
+    # 2026-09-20: the default moved 0 -> 6 on the user's request (tasks/todo.md T8.53).
+    assert DEFAULT_PARAMS["hire_min_turns_left"] == 6
     obs = _obs()
     obs["hour"] = 23  # 1 turn left
     obs["farms"][0]["hires_today"] = 2
     params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=3)
     action = decide(obs, params)
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 0  # 1 < 6 turns left: blocked
+    action = decide(obs, dict(params, hire_min_turns_left=0))
     assert sum(1 for o in action["market"] if o == ["HIRE"]) == 1  # gate never engages
 
 

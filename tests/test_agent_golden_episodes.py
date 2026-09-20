@@ -418,13 +418,18 @@ AGENT_MAIN_PATH = os.path.join(
 # 59002/63636/66386 and pass 67546/62552/78380 -> 66160/67947/75368 (mixed: +11%/+8.6% on
 # starter/2 and pass/2, -8% on starter/3; measured +5.0%/+4.2% on 40 external seeds).
 # T8.38 escape guardrail re-checked, not re-recorded. Revert = day_plan_remaining_turns_aware False.
+# Re-recorded a 29th time on 2026-09-20, the user's explicit decision to default
+# hire_min_turns_left=6 (tasks/todo.md T8.53): starter 59002/63636/66386 -> 55880/70208/67773
+# and pass 66160/67947/75368 -> 53161/69469/76756 (mixed: pass/1 -19.7%, starter/2 +10%; the
+# 40-seed external measurement was +7.6%/+6.3% vs the divisor-only defaults' +5.0%/+4.2%).
+# T8.38 escape guardrail re-checked, not re-recorded. Revert = hire_min_turns_left 0.
 _GOLDEN = {
-    ("starter", 1): (59002.0, 4240.0),
-    ("starter", 2): (63636.0, 3510.0),
-    ("starter", 3): (66386.0, 3569.0),
-    ("pass", 1): (66160.0, 3000.0),
-    ("pass", 2): (67947.0, 3000.0),
-    ("pass", 3): (75368.0, 3000.0),
+    ("starter", 1): (55880.0, 4163.0),
+    ("starter", 2): (70208.0, 3538.0),
+    ("starter", 3): (67773.0, 3569.0),
+    ("pass", 1): (53161.0, 3000.0),
+    ("pass", 2): (69469.0, 3000.0),
+    ("pass", 3): (76756.0, 3000.0),
 }
 
 

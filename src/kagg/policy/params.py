@@ -212,7 +212,9 @@ DEFAULT_PARAMS = {
     # turns remain today, unless zero hires have happened yet today (the
     # escape hatch - never leave the farm with zero labor for a whole
     # day). Default 0 (bit-identical - the gate always passes).
-    "hire_min_turns_left": 0,
+    # 2026-09-20, the user's explicit request (T8.53 follow-up): no further HIRE in the last 6
+    # turns of the day (an escape hatch still allows the day's first hire). Old value: 0.
+    "hire_min_turns_left": 6,
     # T8.44: caps how many HIRE orders the emission loop queues in one
     # turn - load-bearing once target_hires can exceed roughly
     # _MAX_MARKET_ORDERS=10 (day_plan_hiring_aware's whole point): hires
