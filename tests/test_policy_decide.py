@@ -2728,11 +2728,11 @@ def test_day_plan_harvest_replant_aware_adds_replant_actions_for_ripe_one_time_t
     # WATER (the harvest clears the tile). Flag off (default) = old count.
     import kagg.policy.decide as decide_module
 
-    assert DEFAULT_PARAMS["day_plan_harvest_replant_aware"] is False
+    assert DEFAULT_PARAMS["day_plan_harvest_replant_aware"] is True
 
-    def maintenance(flag):
+    def maintenance(flag, day=4):
         obs = _obs()
-        obs["day"] = 4  # WHEAT max_yield_day: harvest no longer deferred
+        obs["day"] = day  # day 4 = WHEAT max_yield_day: harvest no longer deferred
         obs["farms"][0]["tiles"][0][0] = {
             "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": False,
             "consecutive_unwatered": 0, "yield_units": 1, "max_lifespan_step": 120,
@@ -2750,3 +2750,8 @@ def test_day_plan_harvest_replant_aware_adds_replant_actions_for_ripe_one_time_t
         return captured["maintenance_actions_today"]
 
     assert maintenance(True) - maintenance(False) == 2.0
+    # Extra watering still adds yield on day 2 (harvest deferred to day 4):
+    # the tile does not free up today, so no replant work is forecast yet.
+    assert maintenance(True, day=2) == maintenance(False, day=2)
+    # Late in the season nothing is worth planting, so no replant is forecast.
+    assert maintenance(True, day=29) == maintenance(False, day=29)

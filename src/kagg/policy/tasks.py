@@ -928,6 +928,23 @@ def _animal_tile_tasks(
     return tasks, feed_priority
 
 
+def harvest_clears_tile_today(
+    tile: dict, current_day: int, defer_one_time_harvest_to_max_yield: bool = False
+) -> bool:
+    """T8.47: True if the HARVEST this tile gets today empties it - a
+    one-time crop that `_is_actually_harvestable` says is ready now. With
+    `defer_one_time_harvest_to_max_yield` a crop whose extra watering
+    still adds yield (WHEAT/CARROT) only qualifies on its last ripening
+    day (max_yield_day), so the replant work lands on the day the tile
+    really frees up, not earlier. Ongoing crops never clear.
+    """
+    return (
+        tile.get("yield_units", 0) > 0
+        and not CROPS[tile["crop"]]["ongoing"]
+        and _is_actually_harvestable(tile, current_day, defer_one_time_harvest_to_max_yield)
+    )
+
+
 def crop_tile_day_actions(
     tile: dict,
     current_day: int,
@@ -975,7 +992,7 @@ def crop_tile_day_actions(
         tile, current_day, defer_one_time_harvest_to_max_yield
     ):
         actions += 1
-        if not CROPS[tile["crop"]]["ongoing"]:
+        if harvest_clears_tile_today(tile, current_day, defer_one_time_harvest_to_max_yield):
             actions += harvest_replant_actions
     if use_fertilizer and tile.get("fertilized_until_day", -1) < current_day:
         actions += 1

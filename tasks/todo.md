@@ -2815,6 +2815,18 @@ project's own established finding, a fresh submission's score is volatile for it
       table (900/901/902): 32689 -> 32060, 44823 -> 41583, 46545 -> 50329 (opponent is coupled through the market).
       Verdict: helps against external opponents, neutral in self-play - not flipped (standing rule: default flips only on
       explicit request). Enable with `day_plan_harvest_replant_aware=True`.
+      **Refinement + default flip (the user's explicit request, same day)**: the replant term must land on the day
+      the tile actually frees up - for a crop whose extra watering still adds yield (WHEAT/CARROT) that is the last
+      ripening day (`max_yield_day`), not earlier. This is what `_is_actually_harvestable(defer_one_time_harvest_to_
+      max_yield=True)` already gives; factored out as `tasks.harvest_clears_tile_today` and pinned by tests (WHEAT: no
+      replant on days 2-3, yes on day 4; MELON, whose window starts before first_yield_day and is never deferred: day
+      10). One real fix found while checking: late in the season (days 27-29, `planned_new_crop_tiles` = 0) the term
+      still inflated the forecast (maintenance 161 on day 27, seed 900), so it is now added only while a crop is worth
+      planting (`plant_crop_intent is not None`). Re-measured with the refinement: vs `starter` `+6.5%` (15/20), vs `pass`
+      `+2.8%` (13/20), vs old-default mirror `-4.9%`, arena vs shipped `0.500`, vs OLD default `0.560`. Default flipped
+      to **True** (params.py, policy.json, module default). Golden re-recorded a 22nd time: starter 46396/58953/54065 ->
+      49879/58430/56789, pass 43540/58587/57699 -> 56732/62026/58144; T8.38 escape guardrail passes unchanged.
+      Revert: `day_plan_harvest_replant_aware=False` + one more golden re-record.
 
 ## Not planned yet (see plan.md)
 

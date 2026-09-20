@@ -18,7 +18,7 @@
   "hire_min_turns_left": 0,
   "max_hire_orders_per_turn": 10,
   "day_plan_weed_replant_aware": true,
-  "day_plan_harvest_replant_aware": false,
+  "day_plan_harvest_replant_aware": true,
   "sell_margin": 0,
   "drip_sell_max_per_turn": 1000,
   "wheat_restock_threshold": 5,

@@ -386,13 +386,17 @@ AGENT_MAIN_PATH = os.path.join(
 # Every one of the six moved DOWN against these external opponents: starter 54893/64798/
 # 67716 -> 46396/58953/54065 and pass 56320/61973/69306 -> 43540/58587/57699 (mean -15%).
 # Kept visible on purpose - see T8.46 for the numbers and how to revert.
+# Re-recorded a 22nd time on 2026-09-20, the user's explicit decision to default
+# day_plan_harvest_replant_aware=True (tasks/todo.md T8.47): starter 46396/58953/54065 ->
+# 49879/58430/56789 and pass 43540/58587/57699 -> 56732/62026/58144 (five of six up,
+# starter/seed 2 -0.9%). T8.38 escape guardrail re-checked, not re-recorded.
 _GOLDEN = {
-    ("starter", 1): (46396.0, 3967.0),
-    ("starter", 2): (58953.0, 3550.0),
-    ("starter", 3): (54065.0, 3635.0),
-    ("pass", 1): (43540.0, 3000.0),
-    ("pass", 2): (58587.0, 3000.0),
-    ("pass", 3): (57699.0, 3000.0),
+    ("starter", 1): (49879.0, 3996.0),
+    ("starter", 2): (58430.0, 3484.0),
+    ("starter", 3): (56789.0, 3637.0),
+    ("pass", 1): (56732.0, 3000.0),
+    ("pass", 2): (62026.0, 3000.0),
+    ("pass", 3): (58144.0, 3000.0),
 }
 
 

@@ -26,6 +26,7 @@ from kagg.policy.tasks import (
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    harvest_clears_tile_today,
 )
 
 
@@ -1460,3 +1461,17 @@ def test_crop_tile_day_actions_harvest_replant_only_for_one_time_crops():
     # Ongoing crop (harvest doesn't clear the tile) -> no replant term.
     tomato = dict(_plant_tile(planted_day=0, yield_units=1), crop="TOMATO")
     assert crop_tile_day_actions(tomato, current_day=20, harvest_replant_actions=2.0) == 2
+
+
+def test_harvest_clears_tile_today_waits_for_last_ripening_day_when_deferring():
+    # WHEAT: first_yield_day=2, max_yield_day=4; extra watering (window ages
+    # 2-4) still adds yield, so with deferral the tile frees up on day 4 only.
+    tile = _plant_tile(planted_day=0, yield_units=1)
+    assert not harvest_clears_tile_today(tile, 2, defer_one_time_harvest_to_max_yield=True)
+    assert not harvest_clears_tile_today(tile, 3, defer_one_time_harvest_to_max_yield=True)
+    assert harvest_clears_tile_today(tile, 4, defer_one_time_harvest_to_max_yield=True)
+    assert harvest_clears_tile_today(tile, 2, defer_one_time_harvest_to_max_yield=False)
+    # MELON is not deferred (its window starts before first_yield_day): day 10.
+    melon = dict(_plant_tile(planted_day=0, yield_units=5), crop="MELON")
+    assert not harvest_clears_tile_today(melon, 9, defer_one_time_harvest_to_max_yield=True)
+    assert harvest_clears_tile_today(melon, 10, defer_one_time_harvest_to_max_yield=True)

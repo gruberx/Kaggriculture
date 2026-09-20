@@ -45,6 +45,7 @@ from kagg.policy.tasks import (
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    harvest_clears_tile_today,
 )
 
 _MAX_MARKET_ORDERS = 10
@@ -854,7 +855,7 @@ _DEFAULT_DAY_PLAN_WEED_REPLANT_AWARE = True
 # hour 0 the forecast was 51 actions (24 HARVEST + upkeep, 0 free tiles)
 # against ~99 real, because the 24 tiles about to be replanted were still
 # occupied. Off by default (shipped-default flips need an explicit request).
-_DEFAULT_DAY_PLAN_HARVEST_REPLANT_AWARE = False
+_DEFAULT_DAY_PLAN_HARVEST_REPLANT_AWARE = True
 
 # T8.44: a same-day quadrant top-up hire is only worth emitting if enough
 # turns remain today for the new hand to be productive - `hire_min_turns_
@@ -1581,6 +1582,7 @@ def decide(obs: dict, params: dict) -> dict:
     n_plant_tiles = 0
     n_weed_tiles = 0
     maintenance_actions_today = 0
+    harvest_cleared_tiles = 0
     board_size = len(me["tiles"])
     for y, row in enumerate(me["tiles"]):
         for x, tile in enumerate(row):
@@ -1606,8 +1608,11 @@ def decide(obs: dict, params: dict) -> dict:
                         current_day,
                         use_fertilizer=use_fertilizer,
                         defer_one_time_harvest_to_max_yield=defer_one_time_harvest_to_max_yield,
-                        harvest_replant_actions=harvest_replant_actions,
                     )
+                    if harvest_clears_tile_today(
+                        tile, current_day, defer_one_time_harvest_to_max_yield
+                    ):
+                        harvest_cleared_tiles += 1
                 elif tile.get("kind") == "WEED":
                     n_weed_tiles += 1
                     # 1 (DIG) + the follow-up PLANT+WATER once it's clear
@@ -1734,6 +1739,11 @@ def decide(obs: dict, params: dict) -> dict:
     # planting while mid-acquisition would be wrong for the identical
     # reason.
     plant_crop_intent = fallback_crop if not animal_blocks_planting else None
+    # T8.47: the replant of tiles this turn's HARVEST clears is only real work
+    # while something is still worth planting (late in the season it is not:
+    # planned_new_crop_tiles is 0 there too), so it is added only then.
+    if plant_crop_intent is not None:
+        maintenance_actions_today += harvest_cleared_tiles * harvest_replant_actions
 
     # T8.44 second fix (2026-09-19, the user's own explicit request): a
     # real count instead of a hardcoded 0/1 boolean cast - `decide()`
