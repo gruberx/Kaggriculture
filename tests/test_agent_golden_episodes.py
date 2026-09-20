@@ -390,13 +390,18 @@ AGENT_MAIN_PATH = os.path.join(
 # day_plan_harvest_replant_aware=True (tasks/todo.md T8.47): starter 46396/58953/54065 ->
 # 49879/58430/56789 and pass 43540/58587/57699 -> 56732/62026/58144 (five of six up,
 # starter/seed 2 -0.9%). T8.38 escape guardrail re-checked, not re-recorded.
+# Re-recorded a 23rd time on 2026-09-20, the user's explicit decision to default the T8.49
+# bundle on (drop_goods_to_shed with the overflow trigger only, bulk_purchase_counts_harvest_
+# tiles, sell_orders_first_by_revenue; tasks/todo.md T8.49): starter 49879/58430/56789 ->
+# 56924/55756/72845 and pass 56732/62026/58144 -> 57488/59281/74637 (four of six up, seed 2
+# -4.6%/-4.4%). T8.38 escape guardrail re-checked, not re-recorded.
 _GOLDEN = {
-    ("starter", 1): (49879.0, 3996.0),
-    ("starter", 2): (58430.0, 3484.0),
-    ("starter", 3): (56789.0, 3637.0),
-    ("pass", 1): (56732.0, 3000.0),
-    ("pass", 2): (62026.0, 3000.0),
-    ("pass", 3): (58144.0, 3000.0),
+    ("starter", 1): (56924.0, 4313.0),
+    ("starter", 2): (55756.0, 3593.0),
+    ("starter", 3): (72845.0, 3605.0),
+    ("pass", 1): (57488.0, 3000.0),
+    ("pass", 2): (59281.0, 3000.0),
+    ("pass", 3): (74637.0, 3000.0),
 }
 
 

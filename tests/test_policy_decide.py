@@ -172,6 +172,12 @@ def test_decide_queues_hire_when_hires_per_day_is_positive():
     assert len(hire_orders) == 2
 
 
+def _hire_crowding_obs():
+    obs = _obs()
+    obs["private"]["shed"] = {p: 20 for p in PRODUCTS}
+    return obs
+
+
 def test_hire_is_never_crowded_out_by_sell_orders():
     # T8.5: the pre-T8.5 order (sells, then buys, HIRE emitted dead
     # last) could truncate HIRE entirely once enough sellable products
@@ -183,9 +189,16 @@ def test_hire_is_never_crowded_out_by_sell_orders():
     # dynamic_hiring explicitly off - this test is about order-list
     # construction/truncation priority (T8.5), not T8.16(d)'s backlog-
     # scaled hire count, so it pins the static value it actually asserts.
-    params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=4)
+    params = dict(
+        DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=4, sell_orders_first_by_revenue=False
+    )
     action = decide(obs, params)
     assert action["market"][:4] == [["HIRE"]] * 4
+    assert sum(1 for o in action["market"] if o == ["HIRE"]) == 4
+    assert len(action["market"]) <= 10
+    # T8.49 follow-up: with the sells-first order (now the default) the slot
+    # arithmetic still keeps every HIRE inside the cap.
+    action = decide(_hire_crowding_obs(), dict(params, sell_orders_first_by_revenue=True))
     assert sum(1 for o in action["market"] if o == ["HIRE"]) == 4
     assert len(action["market"]) <= 10
 
@@ -2811,15 +2824,25 @@ def _carrying_obs(melons=30, money=10, farmer=(4, 4)):
     return obs
 
 
-def test_drop_goods_to_shed_defaults_off_and_changes_nothing():
-    assert DEFAULT_PARAMS["drop_goods_to_shed"] is False
-    action = decide(_carrying_obs(), dict(DEFAULT_PARAMS, always_pursue_one_animal=False))
+def test_drop_goods_defaults_and_off_switch():
+    # 2026-09-20: turned on by the user's decision (tasks/todo.md T8.49); the
+    # cash trigger is off (measured no gain on top of the overflow trigger).
+    assert DEFAULT_PARAMS["drop_goods_to_shed"] is True
+    assert DEFAULT_PARAMS["drop_goods_cash_min_units"] is None
+    assert DEFAULT_PARAMS["bulk_purchase_counts_harvest_tiles"] is True
+    assert DEFAULT_PARAMS["sell_orders_first_by_revenue"] is True
+    action = decide(
+        _carrying_obs(), dict(DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=False)
+    )
     assert action["farmer"][0] != "PLACE"
     assert _orders(action, "SELL") == []
 
 
 def test_drop_goods_drops_and_sells_in_the_same_turn_and_spends_the_proceeds():
-    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True)
+    params = dict(
+        DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True,
+        drop_goods_overflow_fraction=None, drop_goods_cash_min_units=5,
+    )
     action = decide(_carrying_obs(), params)
     assert action["farmer"] == ["PLACE", "MELON", 30]
     assert ["SELL", "MELON", 30] in action["market"]
@@ -2830,7 +2853,10 @@ def test_drop_goods_drops_and_sells_in_the_same_turn_and_spends_the_proceeds():
 
 
 def test_drop_goods_walks_to_the_shed_first_and_does_not_count_the_sale_yet():
-    params = dict(DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True)
+    params = dict(
+        DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True,
+        drop_goods_overflow_fraction=None, drop_goods_cash_min_units=5,
+    )
     action = decide(_carrying_obs(farmer=(4, 7)), params)
     assert action["farmer"] == ["NORTH"]
     assert _orders(action, "SELL") == [] and _orders(action, "BUY_SEED") == []
@@ -2840,6 +2866,7 @@ def test_bulk_purchase_counts_harvest_tiles_buys_seeds_for_tiles_about_to_be_fre
     params = dict(
         DEFAULT_PARAMS, always_pursue_one_animal=False, day_plan_hiring_aware=False,
         bulk_purchase_max_new_tiles=200, day_plan_max_new_tiles_per_day=200,
+        bulk_purchase_counts_harvest_tiles=False,
     )
     obs = _obs_with_queued_work(0, 10)
     obs["farms"][0]["money"] = 50000
@@ -2848,3 +2875,27 @@ def test_bulk_purchase_counts_harvest_tiles_buys_seeds_for_tiles_about_to_be_fre
     obs2["farms"][0]["money"] = 50000
     more = _orders(decide(obs2, dict(params, bulk_purchase_counts_harvest_tiles=True)), "BUY_SEED")
     assert sum(o[2] for o in more) - sum(o[2] for o in base) >= 10
+
+
+# --- sell_orders_first_by_revenue (T8.49 follow-up) ---------------------
+
+
+def test_sell_orders_first_by_revenue_puts_the_biggest_sale_at_index_zero_ahead_of_hires():
+    obs = _harvest_day_obs()
+    obs["private"]["shed"]["WHEAT"] = 3
+    obs["private"]["shed"]["MILK"] = 2
+    params = _dump_params(sell_orders_first_by_revenue=True, dynamic_hiring=True, min_hires_per_day=3)
+    market = decide(obs, params)["market"]
+    assert market[0][0] == "SELL" and market[0][1] == "MELON"
+    ops = [o[0] for o in market]
+    assert "HIRE" in ops and ops.index("HIRE") > max(i for i, o in enumerate(ops) if o == "SELL" and i < ops.index("HIRE"))
+    sells = [o for o in market if o[0] == "SELL"]
+    from kagg.policy.market import sale_revenue
+    revenues = [sale_revenue([o], obs["market"]["inventory"]) for o in sells]
+    assert revenues == sorted(revenues, reverse=True)
+
+
+def test_sell_orders_first_by_revenue_off_keeps_hires_first():
+    obs = _harvest_day_obs()
+    params = _dump_params(sell_orders_first_by_revenue=False, dynamic_hiring=True, min_hires_per_day=3)
+    assert decide(obs, params)["market"][0] == ["HIRE"]

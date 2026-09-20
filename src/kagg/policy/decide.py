@@ -966,13 +966,23 @@ _DEFAULT_SEED_PURCHASE_MAX_PENDING_HARVEST = None
 # fraction of the shed capacity, the cash trigger when money is below the
 # estimated seed/animal spend and the carrier holds at least
 # `drop_goods_cash_min_units` of the item. None disables a trigger.
-_DEFAULT_DROP_GOODS_TO_SHED = False
+_DEFAULT_DROP_GOODS_TO_SHED = True
+
+# T8.49 follow-up: the engine settles the two players' market orders in
+# lockstep by list index (order i of one player against order i of the other,
+# one unit at a time), so when both sell the same good on the same turn the
+# player whose big SELL sits at the lower index sells it alone on a fresh
+# market and the other sells into the crash (traced: $214 vs $89 average for
+# 88 melons). When on, the SELL orders go first, largest revenue first, ahead
+# of the HIRE orders (which are atomic and unaffected by their index; the
+# order-slot arithmetic already keeps hires + sells + tail within the cap).
+_DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE = True
 _DEFAULT_DROP_GOODS_OVERFLOW_FRACTION = 0.6
-_DEFAULT_DROP_GOODS_CASH_MIN_UNITS = 5
+_DEFAULT_DROP_GOODS_CASH_MIN_UNITS = None
 
 # T8.49 (same request): bulk seed/animal purchases also count the tiles this
 # turn's own HARVEST will empty, so the replant stock is bought in advance.
-_DEFAULT_BULK_PURCHASE_COUNTS_HARVEST_TILES = False
+_DEFAULT_BULK_PURCHASE_COUNTS_HARVEST_TILES = True
 _DEFAULT_SEED_PURCHASE_MAX_PENDING_WATER = None
 
 # T8.1: anchors new-investment tile placement to the shed rather than the
@@ -2424,6 +2434,11 @@ def decide(obs: dict, params: dict) -> dict:
         liquidate_wheat_reserve=liquidate_wheat_reserve,
     )
 
-    market = (hires + sells + tail)[:_MAX_MARKET_ORDERS]
+    if params.get("sell_orders_first_by_revenue", _DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE):
+        market_inventory = obs["market"]["inventory"]
+        sells = sorted(sells, key=lambda o: -sale_revenue([o], market_inventory))
+        market = (sells + hires + tail)[:_MAX_MARKET_ORDERS]
+    else:
+        market = (hires + sells + tail)[:_MAX_MARKET_ORDERS]
 
     return {"farmer": farmer_action, "hands": hand_actions, "market": market[:_MAX_MARKET_ORDERS]}

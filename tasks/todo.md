@@ -2880,6 +2880,18 @@ project's own established finding, a fresh submission's score is volatile for it
       Verdict: mechanism works, overflow trigger + harvest-tile counting is a clear external gain; defaults NOT flipped
       (standing rule). Enable with `drop_goods_to_shed=True`, `drop_goods_cash_min_units=None`,
       `bulk_purchase_counts_harvest_tiles=True`.
+      **Sell-order sort + default flip (the user's explicit request, same day)**: `sell_orders_first_by_revenue` puts the
+      SELL orders first, largest revenue first (`sale_revenue` per order), ahead of the HIRE orders; hires are atomic so
+      their index does not matter, and `sells` is already capped at `10 - hires - tail` so nothing gets truncated. Test
+      `test_hire_is_never_crowded_out_by_sell_orders` now checks both orders. Measured (`tools/measure_t849c.py`, 40 seeds
+      vs `starter`/`pass`; arena 50 working seeds): A = drop(overflow) + harvest tiles `+10.1%` / `+7.4%`; **B = A + sort
+      `+10.4%` / `+7.6%`** (30/40, 29/40); sort alone `+4.3%` / `+3.4%`. Arena: B vs shipped **50W/0L**, B vs A 38W/12L,
+      A vs shipped 33W/17L, sort alone vs shipped 44W/6L - the sort removes the list-index artifact traced above (the
+      arena becomes usable again). **Defaults flipped to on**: `drop_goods_to_shed`, `bulk_purchase_counts_harvest_tiles`,
+      `sell_orders_first_by_revenue`; `drop_goods_cash_min_units` = None (the cash trigger stays available, off).
+      Golden re-recorded a 23rd time: starter 49879/58430/56789 -> 56924/55756/72845, pass 56732/62026/58144 ->
+      57488/59281/74637; T8.38 escape guardrail passes unchanged. Revert: the four params back to False/False/False/5 +
+      one more golden re-record.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
