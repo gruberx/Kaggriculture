@@ -2826,9 +2826,9 @@ def _carrying_obs(melons=30, money=10, farmer=(4, 4)):
 
 def test_drop_goods_defaults_and_off_switch():
     # 2026-09-20: turned on by the user's decision (tasks/todo.md T8.49); the
-    # cash trigger is off (measured no gain on top of the overflow trigger).
+    # cash trigger is on too, gated on an empty sellable shed.
     assert DEFAULT_PARAMS["drop_goods_to_shed"] is True
-    assert DEFAULT_PARAMS["drop_goods_cash_min_units"] is None
+    assert DEFAULT_PARAMS["drop_goods_cash_min_units"] == 5
     assert DEFAULT_PARAMS["bulk_purchase_counts_harvest_tiles"] is True
     assert DEFAULT_PARAMS["sell_orders_first_by_revenue"] is True
     action = decide(
@@ -2899,3 +2899,19 @@ def test_sell_orders_first_by_revenue_off_keeps_hires_first():
     obs = _harvest_day_obs()
     params = _dump_params(sell_orders_first_by_revenue=False, dynamic_hiring=True, min_hires_per_day=3)
     assert decide(obs, params)["market"][0] == ["HIRE"]
+
+
+def test_drop_goods_cash_trigger_waits_for_an_empty_sellable_shed():
+    params = dict(
+        DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True,
+        drop_goods_overflow_fraction=None, drop_goods_cash_min_units=5,
+    )
+    assert decide(_carrying_obs(), params)["farmer"] == ["PLACE", "MELON", 30]
+    # Feed WHEAT in the shed does not count as something to sell...
+    obs = _carrying_obs()
+    obs["private"]["shed"]["WHEAT"] = 10
+    assert decide(obs, params)["farmer"] == ["PLACE", "MELON", 30]
+    # ...any other product does: the ordinary sale brings the money in.
+    obs = _carrying_obs()
+    obs["private"]["shed"]["CARROT"] = 4
+    assert decide(obs, params)["farmer"][0] != "PLACE"

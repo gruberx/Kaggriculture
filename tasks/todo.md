@@ -2892,6 +2892,19 @@ project's own established finding, a fresh submission's score is volatile for it
       Golden re-recorded a 23rd time: starter 49879/58430/56789 -> 56924/55756/72845, pass 56732/62026/58144 ->
       57488/59281/74637; T8.38 escape guardrail passes unchanged. Revert: the four params back to False/False/False/5 +
       one more golden re-record.
+      **Cash trigger switched on with a shed gate (the user's explicit request, same day)**: `goods_drop_task(...,
+      shed_has_sellable_goods)` - the cash trigger fires only when money < the estimated seed/animal spend AND the shed holds
+      nothing to sell besides feed WHEAT (any other product, FERTILIZER only when it is not kept for use, blocks it; the
+      overflow trigger is unaffected). `drop_goods_cash_min_units` back to 5. Tests +2. **Measured NEGATIVE** (`tools/
+      measure_t849d.py`/`e.py`, 40 external seeds vs the previous defaults = cash trigger off): N=5 `-3.6%` (starter, better 13/40)
+      / `-4.9%` (pass, 16/40), arena 10W/40L; N=10 `-7.6%` / `-6.0%`; N=20 and N=40 identical to off (never fires - a carrier holds
+      <= ~15 of one item). Old shipped (T8.47) is `-9.4%` / `-7.1%` against the same baseline, so the bundle as a whole still wins. Traced
+      (`cashdrops.py`, starter seed 3): the trigger only adds one early 5-melon drop at hour 4 of the harvest day (money 885 ->
+      2155), which immediately funds ~20 melon seeds ahead of any possible planting (first PLANT is hours later) - that early
+      spend, not the sale, is the difference (65073 vs 72845). Enabled at N=5 because the user asked for it. Golden re-recorded a
+      24th time: starter 56924/55756/72845 -> 52867/51470/65073, pass 57488/59281/74637 -> 43354/62881/69958 (five of six down).
+      **Revert**: `drop_goods_cash_min_units` = None (params.py, policy.json, `_DEFAULT_DROP_GOODS_CASH_MIN_UNITS`) restores the
+      23rd golden table exactly.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

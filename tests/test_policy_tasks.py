@@ -1519,3 +1519,12 @@ def test_goods_drop_task_never_drops_wheat_and_respects_shed_room():
     assert goods_drop_task([{"WHEAT": 50}], [(4, 4)], 10, **_drop_kwargs()) is None
     task = goods_drop_task([{"MELON": 50}], [(4, 4)], 10, **_drop_kwargs(shed_used=80))
     assert task.qty == 20
+
+
+def test_goods_drop_task_cash_trigger_blocked_by_sellable_goods_in_the_shed():
+    kw = _drop_kwargs(overflow_fraction=None, cash_needed=500, money=100)
+    assert goods_drop_task([{"MELON": 8}], [(4, 4)], 10, **kw) is not None
+    assert goods_drop_task([{"MELON": 8}], [(4, 4)], 10, shed_has_sellable_goods=True, **kw) is None
+    # The overflow trigger does not care.
+    kw = _drop_kwargs(cash_min_units=None)
+    assert goods_drop_task([{"MELON": 70}], [(4, 4)], 10, shed_has_sellable_goods=True, **kw) is not None

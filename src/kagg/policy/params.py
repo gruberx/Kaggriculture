@@ -735,10 +735,11 @@ DEFAULT_PARAMS = {
     # bulk_purchase_counts_harvest_tiles False, sell_orders_first_by_revenue
     # False): carry harvested goods to the shed mid-day and sell them the same
     # turn (see kagg.policy.decide._DEFAULT_DROP_GOODS_TO_SHED). The cash trigger
-    # (drop_goods_cash_min_units) is off: measured no gain on top of overflow.
+    # (drop_goods_cash_min_units, back on 2026-09-20 at the user's request) fires only
+    # when money is short AND the shed has nothing to sell besides feed WHEAT.
     "drop_goods_to_shed": True,
     "drop_goods_overflow_fraction": 0.6,
-    "drop_goods_cash_min_units": None,
+    "drop_goods_cash_min_units": 5,
     "bulk_purchase_counts_harvest_tiles": True,
     # T8.49 follow-up: SELL orders first, largest revenue first (see
     # kagg.policy.decide._DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE).

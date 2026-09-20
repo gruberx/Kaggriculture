@@ -1187,6 +1187,7 @@ def goods_drop_task(
     cash_needed: float,
     overflow_fraction: float | None,
     cash_min_units: int | None,
+    shed_has_sellable_goods: bool = False,
     priority: float = PRIORITY_HARVEST,
 ) -> Task | None:
     """T8.49: the one "carry goods to the shed" task for this turn, or None.
@@ -1200,7 +1201,9 @@ def goods_drop_task(
     when either trigger fires:
       * overflow: goods on units + shed contents reach `overflow_fraction` of
         the shed capacity (None = trigger off);
-      * cash: `money < cash_needed` and the unit holds at least
+      * cash: `money < cash_needed`, the shed holds nothing to sell (feed
+        WHEAT aside - `shed_has_sellable_goods` False: this turn's ordinary
+        sale would already bring money in) and the unit holds at least
         `cash_min_units` of the item (None = trigger off).
     The task is pinned to that unit and sits on the shed-access tile nearest
     to it; `action_for_unit` turns it into `PLACE item qty` there.
@@ -1222,6 +1225,7 @@ def goods_drop_task(
     )
     cash_short = (
         cash_min_units is not None
+        and not shed_has_sellable_goods
         and money < cash_needed
         and inventories[owner][item] >= cash_min_units
     )

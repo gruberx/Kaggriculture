@@ -70,7 +70,7 @@
   "seed_purchase_max_pending_water": null,
   "drop_goods_to_shed": true,
   "drop_goods_overflow_fraction": 0.6,
-  "drop_goods_cash_min_units": null,
+  "drop_goods_cash_min_units": 5,
   "bulk_purchase_counts_harvest_tiles": true,
   "sell_orders_first_by_revenue": true
 }

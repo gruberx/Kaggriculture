@@ -978,7 +978,7 @@ _DEFAULT_DROP_GOODS_TO_SHED = True
 # order-slot arithmetic already keeps hires + sells + tail within the cap).
 _DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE = True
 _DEFAULT_DROP_GOODS_OVERFLOW_FRACTION = 0.6
-_DEFAULT_DROP_GOODS_CASH_MIN_UNITS = None
+_DEFAULT_DROP_GOODS_CASH_MIN_UNITS = 5
 
 # T8.49 (same request): bulk seed/animal purchases also count the tiles this
 # turn's own HARVEST will empty, so the replant stock is bought in advance.
@@ -2003,8 +2003,17 @@ def decide(obs: dict, params: dict) -> dict:
             est_need += max(0, est_tiles - seeds.get(fallback_crop, 0)) * CROPS[fallback_crop]["seed"]
         if acquisition_animal is not None:
             est_need += planned_new_animals * ANIMALS[acquisition_animal]["cost"]
+        # Cash trigger only when the shed has nothing to sell (feed WHEAT and, when
+        # it is used as fertilizer stock, FERTILIZER aside): otherwise this turn's
+        # ordinary sale already brings the money in.
+        shed_has_sellable_goods = any(
+            n > 0 and item != "WHEAT" and not (item == "FERTILIZER" and use_fertilizer)
+            for item, n in shed.items()
+            if item not in ANIMALS
+        )
         drop_task = goods_drop_task(
             private.get("inventories") or [], unit_positions, board_size,
+            shed_has_sellable_goods=shed_has_sellable_goods,
             shed_used=sum(shed.values()),
             shed_capacity=params.get("shed_capacity", _DEFAULT_SHED_CAPACITY),
             money=me["money"], cash_needed=est_need,

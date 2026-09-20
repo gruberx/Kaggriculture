@@ -395,13 +395,19 @@ AGENT_MAIN_PATH = os.path.join(
 # tiles, sell_orders_first_by_revenue; tasks/todo.md T8.49): starter 49879/58430/56789 ->
 # 56924/55756/72845 and pass 56732/62026/58144 -> 57488/59281/74637 (four of six up, seed 2
 # -4.6%/-4.4%). T8.38 escape guardrail re-checked, not re-recorded.
+# Re-recorded a 24th time on 2026-09-20, the user's explicit decision to switch the T8.49 cash
+# trigger on (drop_goods_cash_min_units=5, gated on a shed with nothing to sell besides feed
+# WHEAT): starter 56924/55756/72845 -> 52867/51470/65073 and pass 57488/59281/74637 ->
+# 43354/62881/69958 (five of six DOWN, pass/seed 1 -25%; measured -3.6%/-4.9% on 40 external
+# seeds, tasks/todo.md T8.49). Revert = drop_goods_cash_min_units None (restores the 23rd table).
+# T8.38 escape guardrail re-checked, not re-recorded.
 _GOLDEN = {
-    ("starter", 1): (56924.0, 4313.0),
-    ("starter", 2): (55756.0, 3593.0),
-    ("starter", 3): (72845.0, 3605.0),
-    ("pass", 1): (57488.0, 3000.0),
-    ("pass", 2): (59281.0, 3000.0),
-    ("pass", 3): (74637.0, 3000.0),
+    ("starter", 1): (52867.0, 4101.0),
+    ("starter", 2): (51470.0, 3484.0),
+    ("starter", 3): (65073.0, 3613.0),
+    ("pass", 1): (43354.0, 3000.0),
+    ("pass", 2): (62881.0, 3000.0),
+    ("pass", 3): (69958.0, 3000.0),
 }
 
 
