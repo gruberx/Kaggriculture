@@ -2985,6 +2985,11 @@ project's own established finding, a fresh submission's score is volatile for it
       Also found while measuring: with the divisor a late-day forecast (3-4 turns left) targets 12 hands and up to 10 HIRE orders
       fill the market cap, crowding SELL/BUY orders out. Golden re-recorded a 29th time: starter 59002/63636/66386 ->
       55880/70208/67773, pass 66160/67947/75368 -> 53161/69469/76756 (mixed, pass/1 -19.7%). Revert: `hire_min_turns_left` 0.
+- [x] Submission of the T8.44-T8.53 bundle (the user's explicit request, 2026-09-20): commit `b1bf9b4`, `build/submission.tar.gz`
+      (228314 bytes, audit + smoke passed), Kaggle ref **56383677** (team Gruberx, confirmed via `get_competition_submission`),
+      logged in `data/arena/submissions.jsonl` with `arena_win_rate` 0.68 (T8.53 arena vs its base). Public score not yet known -
+      re-check after ~20 minutes (early scores are volatile). Expectation to hold it against: the external-opponent measurements were
+      +5-10% per step, but the self-play-only wins (deadline drop, 4th-quadrant block) are unverified against real strong opponents.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
