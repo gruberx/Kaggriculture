@@ -1240,3 +1240,90 @@ def goods_drop_task(
         key=lambda t: (tile_distance(unit_positions[owner], t), t),
     )
     return Task(priority, pos, "DROP_GOODS", item=item, qty=qty, unit_index=owner)
+
+
+def harvestable_units_today(
+    tile: dict, current_day: int, defer_one_time_harvest_to_max_yield: bool = False
+) -> int:
+    """T8.50: goods a HARVEST of this tile would yield today - a PLANT tile
+    that `_is_actually_harvestable` says is ready, or an animal tile with
+    produce waiting; 0 otherwise."""
+    units = tile.get("yield_units", 0)
+    if units <= 0:
+        return 0
+    if "animal" in tile:
+        return units
+    if tile.get("kind") == "PLANT" and _is_actually_harvestable(
+        tile, current_day, defer_one_time_harvest_to_max_yield
+    ):
+        return units
+    return 0
+
+
+def goods_deadline_drop_tasks(
+    inventories: list[dict],
+    unit_positions: list[tuple[int, int]],
+    board_size: int,
+    *,
+    hour: int,
+    turns_per_day: int,
+    shed_used: int,
+    shed_stay: int,
+    shed_capacity: int,
+    remaining_harvest_units: int,
+    margin_turns: int = 2,
+    priority: float = PRIORITY_HARVEST,
+) -> list[Task]:
+    """T8.50: end-of-day version of the overflow drop - one pinned
+    `DROP_GOODS` task per unit that has to leave for the shed now.
+
+    At midnight every unit's inventory goes into the shed up to
+    `shed_capacity` and the rest is discarded. What will be there is the
+    non-sellable shed stock (`shed_stay`: feed WHEAT, animals ...) + all
+    goods on the units + what today's HARVEST tasks will still bring in
+    (`remaining_harvest_units`); the part above the capacity (`excess`) has
+    to be carried to the shed and sold before the day ends, by as many units
+    as it takes. Units are picked biggest droppable stock first (ties:
+    nearest the shed) until they cover `excess`; a picked unit leaves only
+    when the latest safe moment has come, i.e. when
+    `hour + moves + (extra item types) >= turns_per_day - 1 - margin_turns`
+    - so everything is delivered and sold on the last turns of the day, when
+    the units are loaded most and every trip carries the most. Each unit
+    drops its biggest stock of one item per turn; the shared shed room is
+    tracked across the units of the same turn.
+    """
+    n = min(len(inventories), len(unit_positions))
+    carried_total = sum(sum(v for v in inventories[i].values() if v > 0) for i in range(n))
+    excess = shed_stay + carried_total + remaining_harvest_units - shed_capacity
+    if excess <= 0:
+        return []
+    stocks = {}
+    for i in range(n):
+        goods = {g: inventories[i].get(g, 0) for g in _DROPPABLE_GOODS if inventories[i].get(g, 0) > 0}
+        if goods:
+            stocks[i] = goods
+    order = sorted(
+        stocks,
+        key=lambda i: (-sum(stocks[i].values()), shed_distance(unit_positions[i], board_size), i),
+    )
+    chosen, covered = [], 0
+    for i in order:
+        chosen.append(i)
+        covered += sum(stocks[i].values())
+        if covered >= excess:
+            break
+    room = max(0, shed_capacity - shed_used)
+    last_turn = turns_per_day - 1
+    tasks = []
+    for i in chosen:
+        pos = min(shed_access_tiles(board_size), key=lambda t: (tile_distance(unit_positions[i], t), t))
+        moves = tile_distance(unit_positions[i], pos)
+        if hour + moves + (len(stocks[i]) - 1) < last_turn - margin_turns:
+            continue
+        item = max(stocks[i], key=lambda g: (stocks[i][g], -_DROPPABLE_GOODS.index(g)))
+        qty = min(stocks[i][item], room)
+        if qty <= 0:
+            continue
+        room -= qty
+        tasks.append(Task(priority, pos, "DROP_GOODS", item=item, qty=qty, unit_index=i))
+    return tasks

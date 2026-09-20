@@ -401,13 +401,17 @@ AGENT_MAIN_PATH = os.path.join(
 # 43354/62881/69958 (five of six DOWN, pass/seed 1 -25%; measured -3.6%/-4.9% on 40 external
 # seeds, tasks/todo.md T8.49). Revert = drop_goods_cash_min_units None (restores the 23rd table).
 # T8.38 escape guardrail re-checked, not re-recorded.
+# Re-recorded a 25th time on 2026-09-20, the user's explicit decision to block the 4th quadrant
+# (max_extra_quadrants=2, tasks/todo.md T8.50): starter 52867/51470/65073 -> 61199/55910/65088
+# and pass 43354/62881/69958 -> 47962/62881/72078 (none down). T8.38 escape guardrail re-checked,
+# not re-recorded. Revert = max_extra_quadrants None (restores the 24th table).
 _GOLDEN = {
-    ("starter", 1): (52867.0, 4101.0),
-    ("starter", 2): (51470.0, 3484.0),
-    ("starter", 3): (65073.0, 3613.0),
-    ("pass", 1): (43354.0, 3000.0),
+    ("starter", 1): (61199.0, 4334.0),
+    ("starter", 2): (55910.0, 3484.0),
+    ("starter", 3): (65088.0, 3571.0),
+    ("pass", 1): (47962.0, 3000.0),
     ("pass", 2): (62881.0, 3000.0),
-    ("pass", 3): (69958.0, 3000.0),
+    ("pass", 3): (72078.0, 3000.0),
 }
 
 

@@ -39,6 +39,7 @@ from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_sched
 from kagg.gamelib.shed import shed_room
 from kagg.policy.market import buy_wheat_order, bulk_purchase_plan, sale_revenue, sell_orders
 from kagg.policy.strategy import hires_per_day, rank_portfolio, score_portfolio, should_buy_land
+from kagg.policy.tasks import _DROPPABLE_GOODS as _DROP_GOODS
 from kagg.policy.tasks import (
     PRIORITY_PLANT,
     action_for_unit,
@@ -46,7 +47,9 @@ from kagg.policy.tasks import (
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    goods_deadline_drop_tasks,
     goods_drop_task,
+    harvestable_units_today,
     harvest_clears_tile_today,
 )
 
@@ -968,6 +971,16 @@ _DEFAULT_SEED_PURCHASE_MAX_PENDING_HARVEST = None
 # `drop_goods_cash_min_units` of the item. None disables a trigger.
 _DEFAULT_DROP_GOODS_TO_SHED = True
 
+# T8.50 (the user's design): when money is fine but the shed may overflow at
+# midnight, do not shuttle goods to the shed all day (every trip is a lost
+# round of moves); project the midnight total (shed stock that stays + goods
+# on the units + what today's harvest tasks will still bring) and, above the
+# shed capacity, send just enough loaded units on the last turns of the day,
+# early enough to arrive and sell (moves + item types + a margin of turns).
+# Replaces the immediate `drop_goods_overflow_fraction` trigger when on.
+_DEFAULT_DROP_GOODS_DEADLINE_MODE = False
+_DEFAULT_DROP_GOODS_DEADLINE_MARGIN_TURNS = 2
+
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
 # one unit at a time), so when both sell the same good on the same turn the
@@ -1622,6 +1635,7 @@ def decide(obs: dict, params: dict) -> dict:
     n_weed_tiles = 0
     maintenance_actions_today = 0
     harvest_cleared_tiles = 0
+    remaining_harvest_units = 0
     board_size = len(me["tiles"])
     for y, row in enumerate(me["tiles"]):
         for x, tile in enumerate(row):
@@ -1638,6 +1652,7 @@ def decide(obs: dict, params: dict) -> dict:
                         placed_animal_type_counts.get(tile["animal"], 0) + 1
                     )
                     maintenance_actions_today += animal_tile_day_actions(tile, care_aware=care_aware)
+                    remaining_harvest_units += harvestable_units_today(tile, current_day)
                 elif tile.get("kind") in ("COOP", "PASTURE"):
                     empty_structure_kinds.add(tile["kind"])
                 elif tile.get("kind") == "PLANT":
@@ -1652,6 +1667,9 @@ def decide(obs: dict, params: dict) -> dict:
                         tile, current_day, defer_one_time_harvest_to_max_yield
                     ):
                         harvest_cleared_tiles += 1
+                    remaining_harvest_units += harvestable_units_today(
+                        tile, current_day, defer_one_time_harvest_to_max_yield
+                    )
                 elif tile.get("kind") == "WEED":
                     n_weed_tiles += 1
                     # 1 (DIG) + the follow-up PLANT+WATER once it's clear
@@ -1992,7 +2010,7 @@ def decide(obs: dict, params: dict) -> dict:
     # comment). The cash need is a rough spend estimate for the tiles about to
     # be planted (+ a planned animal): what the bulk plans below would try to
     # buy if money were no object.
-    drop_task = None
+    drop_tasks: list = []
     if params.get("drop_goods_to_shed", _DEFAULT_DROP_GOODS_TO_SHED):
         est_need = 0
         if fallback_crop is not None and not animal_blocks_planting:
@@ -2011,29 +2029,46 @@ def decide(obs: dict, params: dict) -> dict:
             for item, n in shed.items()
             if item not in ANIMALS
         )
+        deadline_mode = params.get("drop_goods_deadline_mode", _DEFAULT_DROP_GOODS_DEADLINE_MODE)
+        shed_capacity_now = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
+        if deadline_mode:
+            drop_tasks.extend(goods_deadline_drop_tasks(
+                private.get("inventories") or [], unit_positions, board_size,
+                hour=current_hour,
+                turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY),
+                shed_used=sum(shed.values()),
+                shed_stay=sum(n for item, n in shed.items() if item not in _DROP_GOODS),
+                shed_capacity=shed_capacity_now,
+                remaining_harvest_units=remaining_harvest_units,
+                margin_turns=params.get(
+                    "drop_goods_deadline_margin_turns", _DEFAULT_DROP_GOODS_DEADLINE_MARGIN_TURNS
+                ),
+            ))
         drop_task = goods_drop_task(
             private.get("inventories") or [], unit_positions, board_size,
             shed_has_sellable_goods=shed_has_sellable_goods,
             shed_used=sum(shed.values()),
             shed_capacity=params.get("shed_capacity", _DEFAULT_SHED_CAPACITY),
             money=me["money"], cash_needed=est_need,
-            overflow_fraction=params.get(
+            overflow_fraction=None if deadline_mode else params.get(
                 "drop_goods_overflow_fraction", _DEFAULT_DROP_GOODS_OVERFLOW_FRACTION
             ),
             cash_min_units=params.get(
                 "drop_goods_cash_min_units", _DEFAULT_DROP_GOODS_CASH_MIN_UNITS
             ),
         )
-        if drop_task is not None:
-            tasks = sorted([*tasks, drop_task], key=lambda t: (t.priority, t.pos))
+        if drop_task is not None and all(t.unit_index != drop_task.unit_index for t in drop_tasks):
+            drop_tasks.append(drop_task)
+        if drop_tasks:
+            tasks = sorted([*tasks, *drop_tasks], key=lambda t: (t.priority, t.pos))
     assignment = assign_units(tasks, unit_positions)
     # What the carrier really drops this turn (only when it already stands on
     # the shed-access tile, i.e. its action below is the PLACE itself).
     dropped_now: dict[str, int] = {}
-    if drop_task is not None:
-        u = drop_task.unit_index
-        if assignment[u] is drop_task and unit_positions[u] == drop_task.pos:
-            dropped_now[drop_task.item] = drop_task.qty
+    for dt in drop_tasks:
+        u = dt.unit_index
+        if assignment[u] is dt and unit_positions[u] == dt.pos:
+            dropped_now[dt.item] = dropped_now.get(dt.item, 0) + dt.qty
 
     farmer_action = action_for_unit(unit_positions[0], assignment[0])
     hand_actions = [

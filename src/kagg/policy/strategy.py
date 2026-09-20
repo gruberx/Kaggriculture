@@ -1058,6 +1058,11 @@ def should_buy_land(
     cost = land_price(n_unlocked_extra)
     if cost is None:
         return False
+    # T8.50: optional cap on the number of bought quadrants (2 = never open the
+    # 4th quadrant). None = no cap.
+    max_extra = params.get("max_extra_quadrants", None)
+    if max_extra is not None and n_unlocked_extra >= max_extra:
+        return False
     threshold = params.get(
         "land_purchase_threshold_money", _DEFAULT_LAND_PURCHASE_THRESHOLD_MONEY
     )

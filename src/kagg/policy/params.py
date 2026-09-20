@@ -744,6 +744,14 @@ DEFAULT_PARAMS = {
     # T8.49 follow-up: SELL orders first, largest revenue first (see
     # kagg.policy.decide._DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE).
     "sell_orders_first_by_revenue": True,
+    # T8.50: end-of-day overflow drop (kagg.policy.decide._DEFAULT_DROP_GOODS_DEADLINE_MODE;
+    # measured mixed, left off) ...
+    "drop_goods_deadline_mode": False,
+    "drop_goods_deadline_margin_turns": 2,
+    # ... and a cap on bought quadrants. 2026-09-20, the user's request ("temporarily block
+    # the 4th quadrant - the top-5 opponents practically never open it"): 2 = never open
+    # the 4th quadrant. Old value: None (no cap).
+    "max_extra_quadrants": 2,
 }
 
 

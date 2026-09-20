@@ -2905,6 +2905,24 @@ project's own established finding, a fresh submission's score is volatile for it
       24th time: starter 56924/55756/72845 -> 52867/51470/65073, pass 57488/59281/74637 -> 43354/62881/69958 (five of six down).
       **Revert**: `drop_goods_cash_min_units` = None (params.py, policy.json, `_DEFAULT_DROP_GOODS_CASH_MIN_UNITS`) restores the
       23rd golden table exactly.
+- [x] T8.50 - block the 4th quadrant; end-of-day overflow drop (the user's proposals, 2026-09-20). (1) `max_extra_quadrants`
+      (`strategy.should_buy_land`, None = no cap): 2 = the 4th quadrant is never bought. The user's premise: bigger land + many
+      mid-day drops cost moves (`ходы` 200-230 of ~90 real actions with 12 hands), and the top-5 opponents almost never open it.
+      (2) `drop_goods_deadline_mode` (+ `drop_goods_deadline_margin_turns`=2): replaces the immediate overflow trigger.
+      `tasks.goods_deadline_drop_tasks` projects the midnight total = shed stock that stays (everything that is not a droppable
+      good: feed WHEAT, animals) + all goods on the units + `remaining_harvest_units` (what today's HARVEST tasks will still bring:
+      `tasks.harvestable_units_today`, summed in the decide tile scan) and, above the shed capacity, picks units biggest droppable
+      stock first (ties nearest the shed) until they cover the excess; a picked unit is dispatched only when `hour + moves + (item
+      types - 1) >= turns_per_day - 1 - margin`, i.e. the last safe moment, and drops its biggest item; shared shed room is tracked
+      across units. The cash trigger (single carrier) is kept and de-duplicated per unit. Tests +7 (tasks 5, decide 3, strategy 1
+      counted with the existing ones). **Measured** (`tools/measure_t850.py`, 40 external seeds; arena 50 working seeds; base =
+      the defaults before this entry): Q alone `+5.4%` (starter, better 30/40) / `+5.7%` (pass, 35/40), arena **46W/1L**; D alone
+      `+0.9%` / `+1.7%` (better 15/40, 17/40), arena **7W/42L**; Q + D `+7.1%` / `+6.9%`, arena 16W/34L; Q + D with the cash
+      trigger off `+8.8%` / `+13.3%` (the cash trigger is still a cost, kept on by the user's decision). **Q is enabled by default**
+      (explicit request, clear win in both metrics); **D stays off** (external gain within noise, unbiased self-play strongly
+      against - not traced; the end-of-day sale lands after the opponent's mid-day sales, which is a real possibility against
+      similar strategies). Golden re-recorded a 25th time: starter 52867/51470/65073 -> 61199/55910/65088, pass
+      43354/62881/69958 -> 47962/62881/72078 (none down). Revert Q: `max_extra_quadrants` = None (params.py, policy.json).
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

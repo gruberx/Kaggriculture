@@ -2915,3 +2915,48 @@ def test_drop_goods_cash_trigger_waits_for_an_empty_sellable_shed():
     obs = _carrying_obs()
     obs["private"]["shed"]["CARROT"] = 4
     assert decide(obs, params)["farmer"][0] != "PLACE"
+
+
+# --- drop_goods_deadline_mode (T8.50) ------------------------------------
+
+
+def _deadline_params(**kw):
+    return dict(
+        DEFAULT_PARAMS, always_pursue_one_animal=False, drop_goods_to_shed=True,
+        drop_goods_deadline_mode=True, drop_goods_cash_min_units=None, **kw,
+    )
+
+
+def test_deadline_mode_defaults():
+    assert DEFAULT_PARAMS["drop_goods_deadline_mode"] in (True, False)
+    assert DEFAULT_PARAMS["drop_goods_deadline_margin_turns"] == 2
+
+
+def test_deadline_mode_waits_early_in_the_day_and_drops_and_sells_at_the_deadline():
+    def action(hour, melons=130):
+        obs = _carrying_obs(melons=melons, money=5000)
+        obs["hour"] = hour
+        return decide(obs, _deadline_params())
+
+    early = action(5)
+    assert early["farmer"][0] != "PLACE" and _orders(early, "SELL") == []
+    late = action(21)
+    assert late["farmer"] == ["PLACE", "MELON", 100]  # shed room caps the drop
+    assert ["SELL", "MELON", 100] in late["market"]
+    # nothing to do when the projected total fits the shed
+    assert action(21, melons=30)["farmer"][0] != "PLACE"
+
+
+def test_deadline_mode_counts_the_harvest_still_in_the_field():
+    obs = _carrying_obs(melons=60, money=5000)
+    obs["hour"] = 21
+    tiles = obs["farms"][0]["tiles"]
+    for c in range(9):  # 9 ripe melon tiles x 5 = 45 more melons at midnight
+        tiles[0][c] = {
+            "kind": "PLANT", "crop": "MELON", "planted_day": 0, "watered_today": True,
+            "consecutive_unwatered": 0, "yield_units": 5, "max_lifespan_step": 312,
+            "fertilized_until_day": -1,
+        }
+    obs["day"] = 10
+    act = decide(obs, _deadline_params())
+    assert act["farmer"] == ["PLACE", "MELON", 60]

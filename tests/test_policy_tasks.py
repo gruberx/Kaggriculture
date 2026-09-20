@@ -26,6 +26,7 @@ from kagg.policy.tasks import (
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    goods_deadline_drop_tasks,
     goods_drop_task,
     harvest_clears_tile_today,
 )
@@ -1528,3 +1529,63 @@ def test_goods_drop_task_cash_trigger_blocked_by_sellable_goods_in_the_shed():
     # The overflow trigger does not care.
     kw = _drop_kwargs(cash_min_units=None)
     assert goods_drop_task([{"MELON": 70}], [(4, 4)], 10, shed_has_sellable_goods=True, **kw) is not None
+
+
+# --- goods_deadline_drop_tasks / harvestable_units_today (T8.50) --------
+
+
+def _deadline_kwargs(**kw):
+    base = dict(
+        hour=21, turns_per_day=24, shed_used=0, shed_stay=0, shed_capacity=100,
+        remaining_harvest_units=0, margin_turns=2,
+    )
+    base.update(kw)
+    return base
+
+
+def test_deadline_drop_no_tasks_while_the_projected_total_fits_the_shed():
+    inv = [{"MELON": 30}, {"MELON": 30}]
+    assert goods_deadline_drop_tasks(inv, [(4, 4), (4, 4)], 10, **_deadline_kwargs()) == []
+
+
+def test_deadline_drop_counts_the_harvest_still_to_come_and_the_shed_stock_that_stays():
+    inv = [{"MELON": 40}, {"MELON": 30}]
+    pos = [(4, 4), (4, 4)]
+    # 70 carried + 20 still in the field + 20 feed WHEAT staying in the shed = 110 > 100
+    tasks = goods_deadline_drop_tasks(
+        inv, pos, 10, **_deadline_kwargs(remaining_harvest_units=20, shed_stay=20)
+    )
+    # excess 10: the biggest stock alone covers it, and it stands on the shed tile at hour 21
+    assert [(t.unit_index, t.item, t.qty) for t in tasks] == [(0, "MELON", 40)]
+
+
+def test_deadline_drop_waits_until_the_latest_safe_moment():
+    inv = [{"MELON": 130}]
+    far = [(4, 9)]  # 4 moves from the shed-access tile (4, 5)
+    # last turn 23, margin 2: leave when hour + 4 >= 21, i.e. from hour 17
+    assert goods_deadline_drop_tasks(inv, far, 10, **_deadline_kwargs(hour=16)) == []
+    tasks = goods_deadline_drop_tasks(inv, far, 10, **_deadline_kwargs(hour=17))
+    assert len(tasks) == 1 and tasks[0].pos == (4, 5) and tasks[0].qty == 100  # shed room caps it
+
+
+def test_deadline_drop_uses_several_carriers_when_one_is_not_enough():
+    inv = [{"MELON": 60}, {"MELON": 50}, {"MELON": 5}]
+    pos = [(4, 4), (5, 4), (4, 5)]
+    tasks = goods_deadline_drop_tasks(inv, pos, 10, **_deadline_kwargs(remaining_harvest_units=45))
+    # 115 + 45 = 160 -> excess 60: unit 0 (60) covers it alone
+    assert [t.unit_index for t in tasks] == [0]
+    tasks = goods_deadline_drop_tasks(
+        inv, pos, 10, **_deadline_kwargs(remaining_harvest_units=95, shed_capacity=100)
+    )
+    # excess 110 needs units 0 and 1 (60 + 50), room shared: 100 -> 60 then 40
+    assert [(t.unit_index, t.qty) for t in tasks] == [(0, 60), (1, 40)]
+
+
+def test_harvestable_units_today():
+    from kagg.policy.tasks import harvestable_units_today
+
+    melon = dict(_plant_tile(planted_day=0, yield_units=5), crop="MELON")
+    assert harvestable_units_today(melon, 10) == 5
+    assert harvestable_units_today(melon, 9) == 0
+    assert harvestable_units_today({"animal": "COW", "yield_units": 3}, 5) == 3
+    assert harvestable_units_today({"animal": "COW", "yield_units": 0}, 5) == 0

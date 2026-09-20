@@ -1466,3 +1466,13 @@ def test_score_portfolio_wheat_self_sufficiency_aware_is_a_noop_with_zero_feed_u
         _MARKET_AT_I0, wheat_self_sufficiency_aware=True, wheat_feed_units_needed=0,
     )
     assert with_flag_but_no_demand == without
+
+
+def test_max_extra_quadrants_caps_land_purchases():
+    from kagg.policy.strategy import should_buy_land
+
+    rich = 10**9
+    assert should_buy_land(rich, 2, {}) is True
+    assert should_buy_land(rich, 2, {"max_extra_quadrants": 2}) is False
+    assert should_buy_land(rich, 1, {"max_extra_quadrants": 2}) is True
+    assert should_buy_land(rich, 2, {"max_extra_quadrants": None}) is True
