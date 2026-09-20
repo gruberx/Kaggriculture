@@ -1244,7 +1244,10 @@ def test_decide_does_not_buy_land_while_most_tiles_are_free_when_the_gate_is_ena
     # the direct fix for the user's own observed defect.
     obs = _obs()  # _BASE_OBS's tiles are a fully-empty 10x10 board
     obs["farms"][0]["money"] = 1_000_000
-    params = dict(DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=0.5)
+    params = dict(
+        DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=0.5,
+        land_buy_affordability=False,  # this test is about the old occupancy gate
+    )
     action = decide(obs, params)
     assert ["BUY_LAND"] not in action["market"]
 
@@ -1259,7 +1262,10 @@ def test_decide_buys_land_when_the_gate_is_enabled_and_few_free_tiles_remain():
         for x in range(10):
             if not (x < 2 and y < 2):  # leave only a 2x2 corner free
                 obs["farms"][0]["tiles"][y][x] = {"kind": "WEED"}
-    params = dict(DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=0.5)
+    params = dict(
+        DEFAULT_PARAMS, land_purchase_threshold_money=0, land_buy_max_free_tile_fraction=0.5,
+        land_buy_affordability=False,  # this test is about the old occupancy gate
+    )
     action = decide(obs, params)
     assert ["BUY_LAND"] in action["market"]
 
@@ -2996,3 +3002,25 @@ def test_capacity_aware_selling_does_nothing_when_the_midnight_total_fits():
     obs = _jammed_shed_obs()
     obs["private"]["inventories"] = [{"STRAWBERRY": 10}]
     assert _orders(decide(obs, _ca_params()), "SELL") == []
+
+
+# --- land_buy_affordability (T8.52) ---------------------------------------
+
+
+def _land_obs(money):
+    obs = _obs()
+    obs["farms"][0]["money"] = money
+    obs["day"] = 5
+    # a full first quadrant: 60% of the 25 own tiles free would refuse under the old gate
+    return obs
+
+
+def test_land_buy_affordability_defaults_and_money_rule():
+    assert DEFAULT_PARAMS["land_buy_affordability"] is True
+    assert DEFAULT_PARAMS["land_purchase_buffer"] == 500
+    params = dict(
+        DEFAULT_PARAMS, always_pursue_one_animal=False, land_buy_affordability=True,
+        max_extra_quadrants=None, dynamic_hiring=False,
+    )
+    assert _orders(decide(_land_obs(300), params), "BUY_LAND") == []
+    assert _orders(decide(_land_obs(100000), params), "BUY_LAND") == [["BUY_LAND"]]

@@ -1015,6 +1015,7 @@ def should_buy_land(
     free_tiles: int | None = None,
     unlocked_tiles: int | None = None,
     nearest_free_shed_distance: int | None = None,
+    development_cost: float | None = None,
 ) -> bool:
     """True if the farm should buy the next quadrant right now.
 
@@ -1068,6 +1069,12 @@ def should_buy_land(
     )
     if money < cost + threshold:
         return False
+    # T8.52 (the user's rule): with `land_buy_affordability` the occupancy gates
+    # below are dropped and the purchase is decided by money alone - the quadrant
+    # price + what it costs to put the new land to work (seeds/animals/extra hires,
+    # `development_cost`, computed by the caller) + a cash buffer.
+    if params.get("land_buy_affordability", False) and development_cost is not None:
+        return money >= cost + development_cost + params.get("land_purchase_buffer", 500)
     if not unlocked_tiles:
         return True
     max_free_fraction = params.get(

@@ -33,9 +33,12 @@ Standard library only - ships inside the submission bundle.
 
 from __future__ import annotations
 
+import math
+
 from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0
 from kagg.gamelib.market import price
 from kagg.gamelib.farm import shed_distance
+from kagg.gamelib.labor import hire_cost
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
 from kagg.policy.market import buy_wheat_order, bulk_purchase_plan, sale_revenue, sell_orders
@@ -856,6 +859,8 @@ _DEFAULT_DAY_PLAN_NEW_TILES_CASH_AWARE = True
 # caller who sweeps it gets a consistent value in both places regardless.
 _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS = 2.0
 _DEFAULT_DAY_PLAN_WEED_REPLANT_AWARE = True
+# T8.52: same default as `strategy._DEFAULT_TURNS_PER_TASK_ESTIMATE` (same params key).
+_DEFAULT_TURNS_PER_TASK_ESTIMATE = 2.0
 
 # T8.47: same idea for a one-time crop harvested today (the HARVEST handler
 # clears the tile to None). Traced on day 10 of the shipped defaults: at
@@ -2484,10 +2489,27 @@ def decide(obs: dict, params: dict) -> dict:
     # once, the next turn's observation re-evaluates and queues the next
     # purchase then.
     n_unlocked_extra = n_quadrants - 1  # T8.44: n_quadrants computed early, reused here unchanged
+    # T8.52: what putting a new quadrant to work costs today - seeds for all its
+    # tiles, the animals the plan wants, and the extra hands its planting needs.
+    quadrant_tiles = (board_size // 2) ** 2
+    development_cost = 0
+    if fallback_crop is not None:
+        development_cost += quadrant_tiles * CROPS[fallback_crop]["seed"]
+    if acquisition_animal is not None:
+        development_cost += planned_new_animals * ANIMALS[acquisition_animal]["cost"]
+    extra_hands = math.ceil(
+        quadrant_tiles
+        * params.get("day_plan_new_crop_tile_actions", _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS)
+        * params.get("turns_per_task_estimate", _DEFAULT_TURNS_PER_TASK_ESTIMATE)
+        / params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY)
+    )
+    first_new_hire = me.get("hires_today", 0) + len(hires)
+    development_cost += sum(hire_cost(first_new_hire + i) for i in range(extra_hands))
     if should_buy_land(
         me["money"], n_unlocked_extra, params,
         free_tiles=free_tiles, unlocked_tiles=unlocked_tiles,
         nearest_free_shed_distance=nearest_free_shed_distance,
+        development_cost=development_cost,
     ):
         tail.append(["BUY_LAND"])
 

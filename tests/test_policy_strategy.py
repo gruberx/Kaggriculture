@@ -1476,3 +1476,17 @@ def test_max_extra_quadrants_caps_land_purchases():
     assert should_buy_land(rich, 2, {"max_extra_quadrants": 2}) is False
     assert should_buy_land(rich, 1, {"max_extra_quadrants": 2}) is True
     assert should_buy_land(rich, 2, {"max_extra_quadrants": None}) is True
+
+
+def test_land_buy_affordability_replaces_the_occupancy_gate_with_a_money_rule():
+    from kagg.policy.strategy import should_buy_land
+
+    occupancy = dict(free_tiles=20, unlocked_tiles=25)  # 80% free: the old gate refuses
+    assert should_buy_land(10**6, 0, {}, **occupancy) is False
+    params = {"land_buy_affordability": True, "land_purchase_buffer": 500}
+    # quadrant $1000 + development $3000 + buffer $500 = $4500
+    assert should_buy_land(4499, 0, params, development_cost=3000, **occupancy) is False
+    assert should_buy_land(4500, 0, params, development_cost=3000, **occupancy) is True
+    # the old rule is untouched while the flag is off, and the quadrant cap still wins
+    assert should_buy_land(10**6, 0, {"land_buy_affordability": False}, development_cost=3000, **occupancy) is False
+    assert should_buy_land(10**6, 2, dict(params, max_extra_quadrants=2), development_cost=3000, **occupancy) is False

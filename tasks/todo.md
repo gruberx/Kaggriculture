@@ -2949,6 +2949,23 @@ project's own established finding, a fresh submission's score is volatile for it
       before -> after final vs the old-default opponent): 900 `16597 -> 38286`, 902 `36330 -> 49925`, 901 `56901 -> 53834`; night
       losses 900: 102 strawberries -> 0, 902: 51 -> 0. **Enabled by default** (explicit request; neutral vs external, decisive
       in self-play). Golden unchanged (the six golden pairs are external opponents). Revert: `capacity_aware_selling` False.
+- [x] T8.52 - land purchase by affordability instead of the free-tile gate (the user's rule, 2026-09-20). Trace that led to it
+      (seed 900, day 11): the NE quadrant was bought at hour 18 although $17.8k was idle from hour 2, because the old gate
+      (`land_buy_max_free_tile_fraction` 0.1) only opened when the last 5 free tiles had been planted - planting is starved behind
+      WATER (first PLANT at hour 14) - so the 25 new tiles appeared with 5 turns left and 23 stayed empty at the end of day 11;
+      the day's hire target (3) could not know about the purchase (6 after it, acting from the next hour). New
+      `land_buy_affordability` (`strategy.should_buy_land(..., development_cost)`, `land_purchase_buffer` 500): the occupancy gates
+      are dropped and the quadrant is bought when money >= its price + `development_cost` + buffer, where decide computes
+      `development_cost` = seeds for all 25 tiles of the fallback crop + the planned animals + the extra hires the quadrant needs
+      (`ceil(25 * 2 * 2 / 24)` = 5 hires priced with `labor.hire_cost` from today's hire count). `max_extra_quadrants` (the 4th
+      quadrant block) still applies first. Tests +4. **Measured** (`tools/measure_t852.py`, 40 external seeds; arena 50 working
+      seeds; base = the defaults before this entry): affordability with the cap `-0.7%` (starter, better 20/40) / `+2.1%` (pass,
+      20/40), arena **47W/3L**; affordability without the cap `+3.5%` / `+9.1%` (better 23/40, 33/40), arena **9W/41L** (the
+      4th quadrant loses in self-play, wins vs the non-competing opponents - the block stays, the user's decision). Trace (starter
+      seed 3): base buys NE/SW on day 11 h20 / day 13 h23; affordability on day 10 h22 / h23 (money $6.6k / $9.1k), final `65866 ->
+      72234`. **Enabled by default with the cap** (neutral-to-positive external, decisive in self-play). Golden re-recorded a 27th
+      time: starter 59095/56230/65866 -> 59813/57212/72234, pass 49190/62657/67359 -> 67546/62552/78380 (five of six up). Revert:
+      `land_buy_affordability` False.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

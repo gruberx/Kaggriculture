@@ -76,5 +76,7 @@
   "drop_goods_deadline_mode": true,
   "drop_goods_deadline_margin_turns": 2,
   "max_extra_quadrants": 2,
-  "capacity_aware_selling": true
+  "capacity_aware_selling": true,
+  "land_buy_affordability": true,
+  "land_purchase_buffer": 500
 }

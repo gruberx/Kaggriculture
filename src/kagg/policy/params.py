@@ -757,6 +757,11 @@ DEFAULT_PARAMS = {
     # stock first (even below the price rule) when the projected midnight shed content
     # exceeds the capacity (kagg.policy.decide._DEFAULT_CAPACITY_AWARE_SELLING).
     "capacity_aware_selling": True,
+    # T8.52 (enabled 2026-09-20 on the user's request; old value False): land purchase by
+    # affordability instead of the free-tile-fraction gate: buy when money >= quadrant price +
+    # seeds/animals/extra hires to develop it + land_purchase_buffer.
+    "land_buy_affordability": True,
+    "land_purchase_buffer": 500,
 }
 
 

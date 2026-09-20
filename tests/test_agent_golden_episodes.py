@@ -409,13 +409,17 @@ AGENT_MAIN_PATH = os.path.join(
 # drop_goods_deadline_mode=True (tasks/todo.md T8.50): starter 61199/55910/65088 ->
 # 59095/56230/65866 and pass 47962/62881/72078 -> 49190/62657/67359 (mixed, within +-7%).
 # T8.38 escape guardrail re-checked, not re-recorded. Revert = drop_goods_deadline_mode False.
+# Re-recorded a 27th time on 2026-09-20, the user's explicit decision to default
+# land_buy_affordability=True (tasks/todo.md T8.52): starter 59095/56230/65866 ->
+# 59813/57212/72234 and pass 49190/62657/67359 -> 67546/62552/78380 (five of six up, pass/seed 2
+# -0.2%). T8.38 escape guardrail re-checked, not re-recorded. Revert = land_buy_affordability False.
 _GOLDEN = {
-    ("starter", 1): (59095.0, 4431.0),
-    ("starter", 2): (56230.0, 3484.0),
-    ("starter", 3): (65866.0, 3571.0),
-    ("pass", 1): (49190.0, 3000.0),
-    ("pass", 2): (62657.0, 3000.0),
-    ("pass", 3): (67359.0, 3000.0),
+    ("starter", 1): (59813.0, 4043.0),
+    ("starter", 2): (57212.0, 3578.0),
+    ("starter", 3): (72234.0, 3581.0),
+    ("pass", 1): (67546.0, 3000.0),
+    ("pass", 2): (62552.0, 3000.0),
+    ("pass", 3): (78380.0, 3000.0),
 }
 
 
