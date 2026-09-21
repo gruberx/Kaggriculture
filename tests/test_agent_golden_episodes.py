@@ -428,13 +428,17 @@ AGENT_MAIN_PATH = os.path.join(
 # (T8.55, +7.5%/+9.1% on top of it): starter 55880/70208/67773 -> 55366/72840/80426 and pass
 # 53161/69469/76756 -> 60668/72953/75145. T8.38 escape guardrail re-checked, not re-recorded.
 # Revert = no_plant_on_last_turn False and plant_priority None.
+# Re-recorded a 31st time on 2026-09-21, the user's explicit decision to default
+# dig_weed_priority=1.8 (T8.55): starter 55366/72840/80426 -> 53182/73202/80919 and pass
+# 60668/72953/75145 -> 62075/73091/75537 (measured +1.0%/+0.1% on 40 external seeds).
+# Revert = dig_weed_priority None.
 _GOLDEN = {
-    ("starter", 1): (55366.0, 3821.0),
-    ("starter", 2): (72840.0, 3493.0),
-    ("starter", 3): (80426.0, 3603.0),
-    ("pass", 1): (60668.0, 3000.0),
-    ("pass", 2): (72953.0, 3000.0),
-    ("pass", 3): (75145.0, 3000.0),
+    ("starter", 1): (53182.0, 3883.0),
+    ("starter", 2): (73202.0, 3493.0),
+    ("starter", 3): (80919.0, 3603.0),
+    ("pass", 1): (62075.0, 3000.0),
+    ("pass", 2): (73091.0, 3000.0),
+    ("pass", 3): (75537.0, 3000.0),
 }
 
 

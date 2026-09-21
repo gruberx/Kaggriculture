@@ -1011,6 +1011,10 @@ _DEFAULT_NO_PLANT_ON_LAST_TURN = True
 # 1.75 = just above the routine WATER tier; fresh plants still get an urgent (tier 0) WATER.
 _DEFAULT_PLANT_PRIORITY = 1.75
 
+# T8.55 follow-up (the user's request): tier of the weed DIG that frees a tile for PLANT. At the old
+# tier 4 (maintenance) a weed stayed until nothing else was left. 1.8 = right behind the PLANT tier.
+_DEFAULT_DIG_WEED_PRIORITY = 1.8
+
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
 # one unit at a time), so when both sell the same good on the same turn the
@@ -2047,7 +2051,7 @@ def decide(obs: dict, params: dict) -> dict:
             "plant_while_animal_pending", _DEFAULT_PLANT_WHILE_ANIMAL_PENDING
         ),
         plant_priority=params.get("plant_priority", _DEFAULT_PLANT_PRIORITY),
-        dig_weed_priority=params.get("dig_weed_priority"),
+        dig_weed_priority=params.get("dig_weed_priority", _DEFAULT_DIG_WEED_PRIORITY),
     )
     # Reserve WHEAT from routine selling once any animal exists on the
     # farm - see market.sell_orders's own docstring for the real deadlock

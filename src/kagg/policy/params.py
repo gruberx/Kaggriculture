@@ -774,10 +774,11 @@ DEFAULT_PARAMS = {
     "no_plant_on_last_turn": True,
     # T8.55 (enabled 2026-09-21 on the user's request; old value None = tier 3, below every
     # non-urgent WATER): priority tier of the ordinary crop PLANT; 1.75 = just above routine WATER.
-    # +7.5%/+9.1% vs starter/pass (40 seeds), arena 40W/10L. dig_weed_priority (weed DIG, default
-    # tier 4; None = unchanged) measured +1% more at 1.8 but is not enabled. Lower = served first.
+    # +7.5%/+9.1% vs starter/pass (40 seeds), arena 40W/10L. Lower = served first.
     "plant_priority": 1.75,
-    "dig_weed_priority": None,
+    # dig_weed_priority (enabled 2026-09-21 on the user's request; old value None = tier 4): tier of
+    # the weed DIG that frees a tile for PLANT; +8.6%/+9.2% vs starter/pass, arena 40W/10L.
+    "dig_weed_priority": 1.8,
 }
 
 

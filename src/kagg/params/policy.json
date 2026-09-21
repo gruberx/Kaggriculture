@@ -82,5 +82,5 @@
   "day_plan_remaining_turns_aware": true,
   "no_plant_on_last_turn": true,
   "plant_priority": 1.75,
-  "dig_weed_priority": null
+  "dig_weed_priority": 1.8
 }

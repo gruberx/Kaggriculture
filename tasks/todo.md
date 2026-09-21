@@ -3012,7 +3012,9 @@ project's own established finding, a fresh submission's score is volatile for it
       top of T8.54 (base = current defaults with `no_plant_on_last_turn`), 40 external seeds + arena, `tools/measure_t855.py`:
       plant 1.75 (and 1.25, identical - no tier between 1.5 and 2): starter 57423 -> 61709 (+7.5%, better 30/40), pass 57205 ->
       62416 (+9.1%, better 34/40), arena 40W/10L; + dig 1.8: +8.6%/+9.2%, arena 40W/10L; + dig 3.0: +7.5%/+9.0%, arena 40W/10L.
-      **Shipped `plant_priority=1.75`, `dig_weed_priority` left None** (not requested; the gain is ~+1% on starter, +0.1% on pass).
+      **Shipped `plant_priority=1.75`; `dig_weed_priority=1.8` enabled afterwards on the user's explicit request (2026-09-21)**
+      (measured +1.0% on starter, +0.1% on pass over plant-only). Golden re-recorded a 31st time: starter 55366/72840/80426 ->
+      53182/73202/80919, pass 60668/72953/75145 -> 62075/73091/75537. Revert: `dig_weed_priority` None.
       Side effect: animal BUILD/PICKUP/PLACE stay at tier 3 and now starve behind PLANT - the golden animal-pipeline guard test
       pins `plant_priority=None`. Golden re-recorded a 30th time: starter 55880/70208/67773 -> 55366/72840/80426, pass
       53161/69469/76756 -> 60668/72953/75145 (T8.54 + T8.55 together). Revert: `plant_priority` None (and `no_plant_on_last_turn` False).
