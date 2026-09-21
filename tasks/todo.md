@@ -3065,6 +3065,13 @@ project's own established finding, a fresh submission's score is volatile for it
       33.3, TOMATO 17.3 / 35.5 (fert 7 and 10, harvest 9 and 11, 8 units, 390), STRAWBERRY 23.8 / 51.2 (fert 9 and 13, harvest 13 and
       16, 8 units, 820), MELON 142.0 / 142.0. Break-even fertilizer price for the day rate: wheat ~47, carrot ~35, tomato ~120,
       strawberry ~240.
+      **Re-check against the official "How to Play" page (the user's request, 2026-09-21)**: every claim of the page matches the engine
+      on all five plants (yield by age with daily watering, without and with fertilizer: WHEAT 4 / 6 at age 4, CARROT 3 / 4 at age 3,
+      MELON 6 at age 10 / at age 8 with fertilizer, TOMATO events at ages 8-11, STRAWBERRY at ages 10/12/14/16 with the tile cap 4;
+      decay one day after max age). One convention difference: the page's yield/tile/day divides by age + 1 (the harvest day still
+      counts as occupied), my rates assumed the next plant is sown on the harvest day (cycle = age). `best_crop_cycle_fert(...,
+      extra_days=1)` gives the page's convention: WHEAT best is then 6 units / 4 d / 120 = 24.0 per day (5 units / 3 d only wins
+      with same-day sowing: 31.7), CARROT 25.0, TOMATO 32.5, STRAWBERRY 48.2, MELON 129.1; no fertilizer: 18.0 / 21.2 / 15.8 / 22.4 / 129.1.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

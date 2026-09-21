@@ -103,7 +103,7 @@ def _tile_key(tile):
     return tuple(sorted(tile.items()))
 
 
-def best_crop_cycle_fert(crop, fert_cost=FERT_COST, max_day=18, multi_harvest=True, objective="rate"):
+def best_crop_cycle_fert(crop, fert_cost=FERT_COST, max_day=18, multi_harvest=True, objective="rate", extra_days=0):
     """Best watering + FERTILIZE (+ intermediate harvests) schedule for one plant, by profit per cycle day.
 
     Dynamic programming over days with the real engine rules. A state is (tile dict, units already
@@ -112,7 +112,9 @@ def best_crop_cycle_fert(crop, fert_cost=FERT_COST, max_day=18, multi_harvest=Tr
     final harvest ends the cycle: profit = units * price - seed - fert_cost * fertilizers, rate = profit /
     that day. An ongoing plant (tomato, strawberry) holds at most `max_yield` units at once, so with
     `multi_harvest` it may also be harvested in the middle of the cycle and keep producing.
-    Ranking: highest rate, then fewest actions. With objective="units": most product first, then rate, then
+    `extra_days` is added to the cycle length when computing the rate: 0 = the next plant is sown on the
+    harvest day (cycle = age); 1 = the harvest day still counts as occupied (the official page's yield/tile/day
+    uses age + 1). Ranking: highest rate, then fewest actions. With objective="units": most product first, then rate, then
     fewest actions (the maximum a plant can yield with fertilizer).
     """
     import copy
@@ -157,7 +159,7 @@ def best_crop_cycle_fert(crop, fert_cost=FERT_COST, max_day=18, multi_harvest=Tr
                             total = taken + units
                             profit = total * price - seed - fert_cost * (nf + fert)
                             actions = 1 + (nw + water) + (nf + fert) + (nh + 1) + (1 if ongoing else 0)
-                            key = (-profit / day, actions) if objective == "rate" else (-total, -profit / day, actions)
+                            key = (-profit / (day + extra_days), actions) if objective == "rate" else (-total, -profit / (day + extra_days), actions)
                             if best is None or key < best[0]:
                                 best = (key, total, day, nf + fert, nw + water, nh + 1, tag + ((day, "H"),), profit)
                     variants = [(f, pr, taken, 0, ())]
