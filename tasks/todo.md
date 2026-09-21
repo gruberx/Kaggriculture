@@ -3025,6 +3025,14 @@ project's own established finding, a fresh submission's score is volatile for it
       max 11: +3.5% / +1.1% (better 36/40, 33/40), arena 46W/4L; **max 10: +3.6% / +2.8% (better 31/40, 28/40), arena 47W/3L**;
       max 8: +1.0% / +1.9%, arena 43W/7L. Shipped default NOT changed (`max_hires_per_day` 12): a flip needs the user's request.
       Candidate: 10.
+- [x] T8.57 - per-product economics of ONE tile over 30 days (the user's request, 2026-09-21): continuous production of a single
+      product, no fertilizer on plants, harvest only at full ripeness / animal at its `max_held` cap, animal fertilizer counted as side
+      income, starting prices with no price walk. `tools/tile_economics_30d.py` (real engine functions, watering schedule searched per
+      crop; ~1 s). Profit / actions / profit-per-day: WHEAT 630 / 42 / 21.0; CARROT 765 / 45 / 25.5; TOMATO 380 / 18 / 12.7; STRAWBERRY
+      380 / 11 / 12.7; MELON 2840 / 20 / 94.7; GOOSE 3450 / 51 / 115.0; COW 3110 / 46 / 103.7; SHEEP 3250 / 46 / 108.3 (animals include
+      $350 of feed wheat at $25 and 29 fertilizer collections at $100 = $2900, 70-90% of their revenue). Engine facts confirmed: a
+      new plant starts with `consecutive_unwatered=1`; an ongoing plant is not cleared by HARVEST (needs DIG); an animal produces
+      regardless of feeding (feeding only avoids escape and enables the CARE bonus) and its fertilizer flag refreshes daily.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
