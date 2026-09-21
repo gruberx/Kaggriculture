@@ -1611,3 +1611,17 @@ def test_tile_day_actions_remaining_only_skips_work_already_done_today():
     assert animal_tile_day_actions(fed) == 1
     assert animal_tile_day_actions(fed, remaining_only=True) == 0
     assert animal_tile_day_actions({"animal": "COW", "fed_today": False}, remaining_only=True) == 1
+
+
+def test_build_task_list_plant_and_dig_priority_retier_only_those_tasks():
+    # T8.55: default None keeps PRIORITY_PLANT / PRIORITY_MAINTENANCE; a value re-tiers the crop PLANT
+    # and the weed DIG, and leaves the tile care (WATER) tiers untouched.
+    tiles = _empty_tiles()
+    tiles[0][0] = {"kind": "WEED"}
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)
+    default = build_task_list(tiles, plant_crop="WHEAT", plant_qty=1)
+    by_op = {t.op: t.priority for t in default}
+    assert by_op == {"PLANT": PRIORITY_PLANT, "DIG": PRIORITY_MAINTENANCE, "WATER": PRIORITY_ROUTINE_CARE}
+    retiered = build_task_list(tiles, plant_crop="WHEAT", plant_qty=1, plant_priority=1.75, dig_weed_priority=1.8)
+    assert {t.op: t.priority for t in retiered} == {"PLANT": 1.75, "DIG": 1.8, "WATER": PRIORITY_ROUTINE_CARE}
+    assert [t.op for t in retiered][:2] == ["PLANT", "DIG"]  # sorted ahead of the routine WATER

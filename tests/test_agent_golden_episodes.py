@@ -423,13 +423,18 @@ AGENT_MAIN_PATH = os.path.join(
 # and pass 66160/67947/75368 -> 53161/69469/76756 (mixed: pass/1 -19.7%, starter/2 +10%; the
 # 40-seed external measurement was +7.6%/+6.3% vs the divisor-only defaults' +5.0%/+4.2%).
 # T8.38 escape guardrail re-checked, not re-recorded. Revert = hire_min_turns_left 0.
+# Re-recorded a 30th time on 2026-09-21, the user's explicit decision to default both
+# no_plant_on_last_turn=True (T8.54, measured -3.8%/-4.8% on its own) and plant_priority=1.75
+# (T8.55, +7.5%/+9.1% on top of it): starter 55880/70208/67773 -> 55366/72840/80426 and pass
+# 53161/69469/76756 -> 60668/72953/75145. T8.38 escape guardrail re-checked, not re-recorded.
+# Revert = no_plant_on_last_turn False and plant_priority None.
 _GOLDEN = {
-    ("starter", 1): (55880.0, 4163.0),
-    ("starter", 2): (70208.0, 3538.0),
-    ("starter", 3): (67773.0, 3569.0),
-    ("pass", 1): (53161.0, 3000.0),
-    ("pass", 2): (69469.0, 3000.0),
-    ("pass", 3): (76756.0, 3000.0),
+    ("starter", 1): (55366.0, 3821.0),
+    ("starter", 2): (72840.0, 3493.0),
+    ("starter", 3): (80426.0, 3603.0),
+    ("pass", 1): (60668.0, 3000.0),
+    ("pass", 2): (72953.0, 3000.0),
+    ("pass", 3): (75145.0, 3000.0),
 }
 
 
@@ -585,7 +590,9 @@ def test_at_least_one_animal_reaches_production_in_a_representative_episode(tmp_
     from kagg.policy.params import DEFAULT_PARAMS
 
     agent_path = tuning.write_candidate_agent(
-        dict(DEFAULT_PARAMS, animal_net_of_cost=False), str(tmp_path)
+        # T8.55: plant_priority=None keeps the crop PLANT at the animal-setup tier (3); at the
+        # shipped 1.75 the BUILD/PICKUP/PLACE steps of an animal starve behind PLANT in this episode.
+        dict(DEFAULT_PARAMS, animal_net_of_cost=False, plant_priority=None), str(tmp_path)
     )
     env = make(
         "kaggriculture",

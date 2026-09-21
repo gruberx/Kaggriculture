@@ -1000,9 +1000,16 @@ _DEFAULT_CAPACITY_AWARE_SELLING = True
 # is not watered on its planting day turns into a WEED at midnight. A PLANT
 # issued on the last turn of the day can never be watered (no later turn, one
 # action per unit per turn), so it wastes the seed and the tile. Measured in
-# self-play: 10-19 such plants per game, all planted on turn 23. Default OFF: measured
-# -3.8%/-4.8% vs starter/pass (40 seeds) and arena 12W/38L, see tasks/todo.md T8.54.
-_DEFAULT_NO_PLANT_ON_LAST_TURN = False
+# self-play: 10-19 such plants per game, all planted on turn 23. Enabled on the user's
+# explicit request (2026-09-21) although measured -3.8%/-4.8% vs starter/pass (40 seeds) and
+# arena 12W/38L, see tasks/todo.md T8.54.
+_DEFAULT_NO_PLANT_ON_LAST_TURN = True
+
+# T8.55 (the user's request): tier of the ordinary crop PLANT. At the old tier 3 a free tile waited
+# behind every non-urgent WATER (tier 2), so it was usually planted only when the queue emptied, on
+# the last turn of the day (10-19 doomed plants per game, idle free tiles and seeds for days).
+# 1.75 = just above the routine WATER tier; fresh plants still get an urgent (tier 0) WATER.
+_DEFAULT_PLANT_PRIORITY = 1.75
 
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
@@ -2039,6 +2046,8 @@ def decide(obs: dict, params: dict) -> dict:
         plant_alongside_animal=params.get(
             "plant_while_animal_pending", _DEFAULT_PLANT_WHILE_ANIMAL_PENDING
         ),
+        plant_priority=params.get("plant_priority", _DEFAULT_PLANT_PRIORITY),
+        dig_weed_priority=params.get("dig_weed_priority"),
     )
     # Reserve WHEAT from routine selling once any animal exists on the
     # farm - see market.sell_orders's own docstring for the real deadlock

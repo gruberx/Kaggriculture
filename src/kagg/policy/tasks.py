@@ -18,6 +18,7 @@ Standard library only - ships inside the submission bundle.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 from kagg.gamelib.constants import ANIMALS, CROPS
@@ -293,6 +294,8 @@ def build_task_list(
     prioritize_animal_setup: bool = False,
     defer_one_time_harvest_to_max_yield: bool = False,
     plant_alongside_animal: bool = False,
+    plant_priority: float | None = None,
+    dig_weed_priority: float | None = None,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -560,6 +563,18 @@ def build_task_list(
     # *stable* sort, so same-priority tasks kept pure row-major scan
     # order - with one unit, assign_units always took tasks[0], i.e. the
     # northwest-most tile of the top tier, however far away it was.
+    # T8.55: optional re-tiering of the ordinary crop PLANT and of the weed DIG that frees a tile
+    # for it (None = keep PRIORITY_PLANT / PRIORITY_MAINTENANCE, bit-identical). Without it a free
+    # tile waits behind every non-urgent WATER (tier 2), i.e. usually until the last turn of the day.
+    if plant_priority is not None or dig_weed_priority is not None:
+        tasks = [
+            dataclasses.replace(t, priority=plant_priority)
+            if t.op == "PLANT" and plant_priority is not None and t.crop is not None
+            else dataclasses.replace(t, priority=dig_weed_priority)
+            if t.op == "DIG" and dig_weed_priority is not None
+            else t
+            for t in tasks
+        ]
     tasks.sort(key=lambda t: (t.priority, t.pos))
     return tasks
 

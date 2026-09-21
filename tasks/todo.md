@@ -3001,9 +3001,21 @@ project's own established finding, a fresh submission's score is volatile for it
       `hour >= turns_per_day-1`, 1 test) removes the doomed sowings (weeds 6.6 -> 1.8 at noon, 16 seeds) but **measured negative**:
       external 40 seeds starter 59685 -> 57423 (-3.8%, better 14/40), pass 60093 -> 57205 (-4.8%, better 9/40); arena 12W/38L (0.24);
       16-seed side check: plants at noon 54.9 -> 53.6, final -2%. Mechanism not identified (the turn-23 unit had nothing else to do,
-      the seed loss is small). Shipped default stays **False**, golden not re-recorded. `tools/measure_t854.py`.
-      **Real fix not done yet**: give PLANT of a free tile a chance earlier in the day (the mid-game "hands walk and water all day, 12
-      free tiles and 43 seeds idle for a week" state seen on seed 900 days 13-19), not only drop the last-turn sowing.
+      the seed loss is small). **Enabled by default on the user's explicit request (2026-09-21) despite the negative measurement**; golden re-recorded together with T8.55. `tools/measure_t854.py`.
+      The real fix (planting earlier in the day) is T8.55 below.
+- [x] T8.55 - raise the priority of PLANT for free tiles (the user's request, 2026-09-21, follow-up to T8.54). Mechanism: an
+      ordinary PLANT sat at tier 3, below every non-urgent WATER (tier 2, one task per unwatered plant tile), so with ~60 plants and
+      units spending most turns walking, a free tile was planted only when the queue emptied - i.e. on the last turn (doomed, see
+      T8.54) - and free tiles plus seeds idled for days (seed 900, days 13-19: 12 free tiles, 43 seeds, $13k). New params
+      `plant_priority` (re-tiers the crop PLANT; `None` = tier 3) and `dig_weed_priority` (re-tiers the weed DIG; `None` = tier 4),
+      applied in `build_task_list` (1 test). Fresh plants still get an urgent tier-0 WATER (`consecutive_unwatered=1`). Measured on
+      top of T8.54 (base = current defaults with `no_plant_on_last_turn`), 40 external seeds + arena, `tools/measure_t855.py`:
+      plant 1.75 (and 1.25, identical - no tier between 1.5 and 2): starter 57423 -> 61709 (+7.5%, better 30/40), pass 57205 ->
+      62416 (+9.1%, better 34/40), arena 40W/10L; + dig 1.8: +8.6%/+9.2%, arena 40W/10L; + dig 3.0: +7.5%/+9.0%, arena 40W/10L.
+      **Shipped `plant_priority=1.75`, `dig_weed_priority` left None** (not requested; the gain is ~+1% on starter, +0.1% on pass).
+      Side effect: animal BUILD/PICKUP/PLACE stay at tier 3 and now starve behind PLANT - the golden animal-pipeline guard test
+      pins `plant_priority=None`. Golden re-recorded a 30th time: starter 55880/70208/67773 -> 55366/72840/80426, pass
+      53161/69469/76756 -> 60668/72953/75145 (T8.54 + T8.55 together). Revert: `plant_priority` None (and `no_plant_on_last_turn` False).
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
