@@ -3050,13 +3050,21 @@ project's own established finding, a fresh submission's score is volatile for it
       (plant: planting to harvest, DIG counted for ongoing crops; animal: a 30-day cycle) with "profit per day per cycle" =
       profit / cycle days: SHEEP 8475 / 30 = 282.5, COW 7535 / 30 = 251.2, GOOSE 4575 / 30 = 152.5, MELON 1420 / 10 = 142.0, CARROT
       85 / 3 = 28.3, STRAWBERRY 380 / 16 = 23.8, WHEAT 90 / 4 = 22.5, TOMATO 190 / 11 = 17.3.
-      **Fertilizer for plants (the user's request, cost of one fertilizer = 20)**: `best_crop_cycle_fert` searches watering + FERTILIZE
-      schedules with the real engine rules (DP over tile states, Pareto on (fertilizers, waterings)) for the highest profit per cycle
-      day. Best: WHEAT fertilize day 2, waters 0/2/3, harvest day 3: 5 units, profit 95 / 3 d = 31.7 (was 22.5); CARROT fertilize day 3,
-      4 units, 100 / 3 = 33.3 (28.3); TOMATO fertilize day 7 (both events x2), harvest day 9: 170 / 9 = 18.9 (17.3); STRAWBERRY fertilize
-      day 9, harvest day 12: 360 / 12 = 30.0 (23.8); MELON no fertilizer (first harvest day 10 is fixed by `first_yield_day`, so
-      fertilizer only saves waterings): 142.0. Break-even fertilizer price for the day rate: wheat ~47, carrot ~35, tomato ~34,
-      strawberry ~95.
+      **Fertilizer for plants (the user's request, cost of one fertilizer = 20), re-checked and corrected the same day**:
+      `best_crop_cycle_fert` searches watering + FERTILIZE (+ intermediate harvests of ongoing crops) schedules with the real engine
+      rules (DP over (tile state, units taken), Pareto on fertilizers/waterings/harvests) for the highest profit per cycle day;
+      re-verified by exhaustive DFS without merging (tomato 0.9M nodes, strawberry 20M, wheat/carrot/melon). Engine timing, tested
+      directly: FERTILIZE sets `fertilized_until_day = max(old, day+2)` = active the day it is used and the next two. One-time crops:
+      the doubling happens inside WATER (age in the window, cap `max_yield`), so FERTILIZE must come BEFORE that day's WATER (after
+      it that day's bonus is lost: wheat 2 vs 3); fertilizing on day 0 is mostly wasted (only the age-2 water is doubled). Ongoing
+      crops: doubling happens at midnight on event nights and only if the plant was watered that day (tomato fertilized but not
+      watered day 7: 1 instead of 2). Max product per plant life (no fert -> with fert): WHEAT 4 -> 6, CARROT 3 -> 4, TOMATO 4 -> 8,
+      STRAWBERRY 4 -> 8, MELON 6 -> 6 (cap reached day 8 but the first harvest is day 10). A tomato/strawberry holds 4 at once and has
+      4 events, so 8 needs 2 fertilizers and 2 harvests (first version wrongly allowed one harvest: tomato 18.9, strawberry 30.0).
+      Best profit per day (no fert / fert): WHEAT 22.5 / 31.7 (fert day 2, 5 units, 3 d; max-product 6 units = 30.0), CARROT 28.3 /
+      33.3, TOMATO 17.3 / 35.5 (fert 7 and 10, harvest 9 and 11, 8 units, 390), STRAWBERRY 23.8 / 51.2 (fert 9 and 13, harvest 13 and
+      16, 8 units, 820), MELON 142.0 / 142.0. Break-even fertilizer price for the day rate: wheat ~47, carrot ~35, tomato ~120,
+      strawberry ~240.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
