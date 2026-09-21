@@ -214,22 +214,41 @@ def summarize(r):
     return cost, revenue, revenue - cost, actions
 
 
+def crop_cycle_report(crop):
+    """One life of one plant: planting to harvest (an ongoing plant is also dug out to free the tile)."""
+    cd = CROPS[crop]
+    units, h, water_days = best_crop_cycle(crop)
+    dig = 1 if cd["ongoing"] else 0
+    cost = cd["seed"]
+    revenue = units * PRICE[crop]
+    actions = 1 + len(water_days) + dig + 1
+    return {
+        "name": crop, "cycle_days": h, "cost_seed": cost, "cost_feed": 0, "plant": 1, "water": len(water_days),
+        "build": 0, "feed": 0, "care": 0, "dig": dig, "harvest": 1, "collect": 0, "actions": actions,
+        "units": units, "product_value": revenue, "fertilizer_value": 0, "profit": revenue - cost,
+    }
+
+
 def main():
-    rows = [crop_report(c) for c in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON")]
-    rows += [animal_report(a) for a in ("GOOSE", "COW", "SHEEP")]
-    print("product|cycle_days|cost_seed+animal|cost_feed|plant|water|build+place|feed|care|dig|harvest|collect_fert|actions|"
-          "units|product_value|fert_value|profit|profit/day|profit/action|ideal/day(horizon)|final-day units")
-    for r in rows:
+    """Per-life table: plants = one planting-to-harvest cycle; animals = a 30-day cycle."""
+    rows = [crop_cycle_report(c) for c in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON")]
+    for a in ("GOOSE", "COW", "SHEEP"):
+        r = animal_report(a)
         cost, revenue, profit, actions = summarize(r)
-        if r["kind"] == "crop":
-            ideal = f"{r['ideal_per_day']:.1f}"
-        else:
-            v, d = animal_ideal_per_day(r["name"])
-            ideal = f"{v:.1f} ({d} d)"
-        print(f"{r['name']}|{r['cycle_days']}|{r['cost_seed'] + r['cost_animal']}|{r['cost_feed']}|"
-              f"{r['plant']}|{r['water']}|{r['build']}|{r['feed']}|{r['care']}|{r['dig']}|{r['harvest']}|{r['collect']}|{actions}|"
-              f"{r['units']}|{r['product_value']}|{r['fertilizer_value']}|{profit}|{profit / DAYS:.1f}|"
-              f"{profit / actions:.1f}|{ideal}|{r['partial_units']}")
+        rows.append({
+            "name": a, "cycle_days": DAYS, "cost_seed": r["cost_animal"], "cost_feed": r["cost_feed"],
+            "plant": 0, "water": 0, "build": r["build"], "feed": r["feed"], "care": r["care"], "dig": 0,
+            "harvest": r["harvest"], "collect": r["collect"], "actions": actions, "units": r["units"],
+            "product_value": r["product_value"], "fertilizer_value": r["fertilizer_value"], "profit": profit,
+        })
+    print("product|cycle_days|cost_seed+animal|cost_feed|cost_total|plant|water|build+place|feed|care|dig|harvest|"
+          "collect_fert|actions|units|product_value|fert_value|profit|profit/action|profit/day per cycle")
+    for r in rows:
+        total = r["cost_seed"] + r["cost_feed"]
+        print(f"{r['name']}|{r['cycle_days']}|{r['cost_seed']}|{r['cost_feed']}|{total}|{r['plant']}|{r['water']}|"
+              f"{r['build']}|{r['feed']}|{r['care']}|{r['dig']}|{r['harvest']}|{r['collect']}|{r['actions']}|"
+              f"{r['units']}|{r['product_value']}|{r['fertilizer_value']}|{r['profit']}|"
+              f"{r['profit'] / r['actions']:.1f}|{r['profit'] / r['cycle_days']:.1f}")
 
 
 if __name__ == "__main__":

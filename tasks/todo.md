@@ -3046,6 +3046,10 @@ project's own established finding, a fresh submission's score is volatile for it
       Harvest threshold is picked per animal (max profit, then fewest actions) because a strict harvest at the cap loses output when
       one care-boosted interval adds more than the room left (sheep: +4 wool per interval, cap 6 -> 7275 strict vs 8475). Ideal per day:
       GOOSE 152.5 (30 d), COW 261.0 (31 d), SHEEP 301.6 (31 d).
+      **Per-life table (the user's restructuring, same day)**: `tools/tile_economics_30d.py` now prints one cycle of life per product
+      (plant: planting to harvest, DIG counted for ongoing crops; animal: a 30-day cycle) with "profit per day per cycle" =
+      profit / cycle days: SHEEP 8475 / 30 = 282.5, COW 7535 / 30 = 251.2, GOOSE 4575 / 30 = 152.5, MELON 1420 / 10 = 142.0, CARROT
+      85 / 3 = 28.3, STRAWBERRY 380 / 16 = 23.8, WHEAT 90 / 4 = 22.5, TOMATO 190 / 11 = 17.3.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
