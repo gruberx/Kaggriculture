@@ -1,0 +1,597 @@
+{
+ "animals": {
+  "COW": {
+   "actions": 95,
+   "animal_cost": 400,
+   "build_place_actions": 2,
+   "care_actions": 29,
+   "collect_fertilizer_actions": 29,
+   "cycle_days": 30,
+   "feed_actions": 29,
+   "feed_cost": 725,
+   "fertilizer_units": 29,
+   "fertilizer_value": 2900,
+   "harvest_actions": 6,
+   "harvest_threshold": 4,
+   "product": "MILK",
+   "product_value": 5760,
+   "profit": 7535,
+   "profit_per_action": 79.3157894736842,
+   "profit_per_day": 251.16666666666666,
+   "units": 36
+  },
+  "GOOSE": {
+   "actions": 103,
+   "animal_cost": 300,
+   "build_place_actions": 2,
+   "care_actions": 29,
+   "collect_fertilizer_actions": 29,
+   "cycle_days": 30,
+   "feed_actions": 29,
+   "feed_cost": 725,
+   "fertilizer_units": 29,
+   "fertilizer_value": 2900,
+   "harvest_actions": 14,
+   "harvest_threshold": 3,
+   "product": "EGG",
+   "product_value": 2700,
+   "profit": 4575,
+   "profit_per_action": 44.41747572815534,
+   "profit_per_day": 152.5,
+   "units": 54
+  },
+  "SHEEP": {
+   "actions": 97,
+   "animal_cost": 500,
+   "build_place_actions": 2,
+   "care_actions": 29,
+   "collect_fertilizer_actions": 29,
+   "cycle_days": 30,
+   "feed_actions": 29,
+   "feed_cost": 725,
+   "fertilizer_units": 29,
+   "fertilizer_value": 2900,
+   "harvest_actions": 8,
+   "harvest_threshold": 1,
+   "product": "WOOL",
+   "product_value": 6800,
+   "profit": 8475,
+   "profit_per_action": 87.37113402061856,
+   "profit_per_day": 282.5,
+   "units": 34
+  }
+ },
+ "assumptions": {
+  "animals": "30-day cycle, FEED+CARE every day (days 0-28), COLLECT_FERTILIZER days 1-29, feed wheat bought at 25, fertilizer sold at the flat start price 100, leftovers collected and sold on day 29",
+  "cycle_convention": "next plant is sown on the harvest day (cycle days = plant age at harvest)",
+  "days": 30,
+  "fertilizer_cost_plants": 20,
+  "not_counted_as_actions": "BUY_*/SELL orders, PICKUP, carrying, walking",
+  "plants": "one plant life, planting to harvest; ongoing crops are also dug out (DIG) to free the tile",
+  "prices": {
+   "CARROT": 35,
+   "EGG": 50,
+   "FERTILIZER": 100,
+   "MELON": 250,
+   "MILK": 160,
+   "STRAWBERRY": 120,
+   "TOMATO": 60,
+   "WHEAT": 25,
+   "WOOL": 200
+  },
+  "warning": "real fertilizer price falls from 100 to 1-30 over a game (top-game data), so the animal fertilizer revenue at a flat 100 is optimistic"
+ },
+ "plants": {
+  "CARROT": {
+   "kind": "one_time",
+   "price": 35,
+   "seed_cost": 20,
+   "variants": {
+    "fertilizer_best_rate": {
+     "actions": 6,
+     "cost_fert": 20,
+     "cost_seed": 20,
+     "cycle_days": 3,
+     "dig": 0,
+     "fert": 1,
+     "fert_days": [
+      3
+     ],
+     "harvest": 1,
+     "harvest_days": [
+      3
+     ],
+     "name": "CARROT",
+     "plant": 1,
+     "product_value": 140,
+     "profit": 100,
+     "profit_per_action": 16.666666666666668,
+     "profit_per_day": 33.333333333333336,
+     "units": 4,
+     "water": 3,
+     "water_days": [
+      0,
+      2,
+      3
+     ]
+    },
+    "fertilizer_max_product": {
+     "actions": 6,
+     "cost_fert": 20,
+     "cost_seed": 20,
+     "cycle_days": 3,
+     "dig": 0,
+     "fert": 1,
+     "fert_days": [
+      3
+     ],
+     "harvest": 1,
+     "harvest_days": [
+      3
+     ],
+     "name": "CARROT",
+     "plant": 1,
+     "product_value": 140,
+     "profit": 100,
+     "profit_per_action": 16.666666666666668,
+     "profit_per_day": 33.333333333333336,
+     "units": 4,
+     "water": 3,
+     "water_days": [
+      0,
+      2,
+      3
+     ]
+    },
+    "no_fertilizer": {
+     "actions": 5,
+     "build": 0,
+     "care": 0,
+     "collect": 0,
+     "cost_feed": 0,
+     "cost_seed": 20,
+     "cycle_days": 3,
+     "dig": 0,
+     "feed": 0,
+     "fertilizer_value": 0,
+     "harvest": 1,
+     "harvest_days": [
+      3
+     ],
+     "name": "CARROT",
+     "plant": 1,
+     "product_value": 105,
+     "profit": 85,
+     "profit_per_action": 17.0,
+     "profit_per_day": 28.333333333333332,
+     "units": 3,
+     "water": 3,
+     "water_days": [
+      0,
+      2,
+      3
+     ]
+    }
+   }
+  },
+  "MELON": {
+   "kind": "one_time",
+   "price": 250,
+   "seed_cost": 80,
+   "variants": {
+    "fertilizer_best_rate": {
+     "actions": 10,
+     "cost_fert": 0,
+     "cost_seed": 80,
+     "cycle_days": 10,
+     "dig": 0,
+     "fert": 0,
+     "fert_days": [],
+     "harvest": 1,
+     "harvest_days": [
+      10
+     ],
+     "name": "MELON",
+     "plant": 1,
+     "product_value": 1500,
+     "profit": 1420,
+     "profit_per_action": 142.0,
+     "profit_per_day": 142.0,
+     "units": 6,
+     "water": 8,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10
+     ]
+    },
+    "fertilizer_max_product": {
+     "actions": 10,
+     "cost_fert": 0,
+     "cost_seed": 80,
+     "cycle_days": 10,
+     "dig": 0,
+     "fert": 0,
+     "fert_days": [],
+     "harvest": 1,
+     "harvest_days": [
+      10
+     ],
+     "name": "MELON",
+     "plant": 1,
+     "product_value": 1500,
+     "profit": 1420,
+     "profit_per_action": 142.0,
+     "profit_per_day": 142.0,
+     "units": 6,
+     "water": 8,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10
+     ]
+    },
+    "no_fertilizer": {
+     "actions": 10,
+     "build": 0,
+     "care": 0,
+     "collect": 0,
+     "cost_feed": 0,
+     "cost_seed": 80,
+     "cycle_days": 10,
+     "dig": 0,
+     "feed": 0,
+     "fertilizer_value": 0,
+     "harvest": 1,
+     "harvest_days": [
+      10
+     ],
+     "name": "MELON",
+     "plant": 1,
+     "product_value": 1500,
+     "profit": 1420,
+     "profit_per_action": 142.0,
+     "profit_per_day": 142.0,
+     "units": 6,
+     "water": 8,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10
+     ]
+    }
+   }
+  },
+  "STRAWBERRY": {
+   "kind": "ongoing",
+   "price": 120,
+   "seed_cost": 100,
+   "variants": {
+    "fertilizer_best_rate": {
+     "actions": 15,
+     "cost_fert": 40,
+     "cost_seed": 100,
+     "cycle_days": 16,
+     "dig": 1,
+     "fert": 2,
+     "fert_days": [
+      9,
+      13
+     ],
+     "harvest": 2,
+     "harvest_days": [
+      13,
+      16
+     ],
+     "name": "STRAWBERRY",
+     "plant": 1,
+     "product_value": 960,
+     "profit": 820,
+     "profit_per_action": 54.666666666666664,
+     "profit_per_day": 51.25,
+     "units": 8,
+     "water": 9,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      8,
+      9,
+      11,
+      13,
+      15
+     ]
+    },
+    "fertilizer_max_product": {
+     "actions": 15,
+     "cost_fert": 40,
+     "cost_seed": 100,
+     "cycle_days": 16,
+     "dig": 1,
+     "fert": 2,
+     "fert_days": [
+      9,
+      13
+     ],
+     "harvest": 2,
+     "harvest_days": [
+      13,
+      16
+     ],
+     "name": "STRAWBERRY",
+     "plant": 1,
+     "product_value": 960,
+     "profit": 820,
+     "profit_per_action": 54.666666666666664,
+     "profit_per_day": 51.25,
+     "units": 8,
+     "water": 9,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      8,
+      9,
+      11,
+      13,
+      15
+     ]
+    },
+    "no_fertilizer": {
+     "actions": 11,
+     "build": 0,
+     "care": 0,
+     "collect": 0,
+     "cost_feed": 0,
+     "cost_seed": 100,
+     "cycle_days": 16,
+     "dig": 1,
+     "feed": 0,
+     "fertilizer_value": 0,
+     "harvest": 1,
+     "harvest_days": [
+      16
+     ],
+     "name": "STRAWBERRY",
+     "plant": 1,
+     "product_value": 480,
+     "profit": 380,
+     "profit_per_action": 34.54545454545455,
+     "profit_per_day": 23.75,
+     "units": 4,
+     "water": 8,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      8,
+      10,
+      12,
+      14
+     ]
+    }
+   }
+  },
+  "TOMATO": {
+   "kind": "ongoing",
+   "price": 60,
+   "seed_cost": 50,
+   "variants": {
+    "fertilizer_best_rate": {
+     "actions": 14,
+     "cost_fert": 40,
+     "cost_seed": 50,
+     "cycle_days": 11,
+     "dig": 1,
+     "fert": 2,
+     "fert_days": [
+      7,
+      10
+     ],
+     "harvest": 2,
+     "harvest_days": [
+      9,
+      11
+     ],
+     "name": "TOMATO",
+     "plant": 1,
+     "product_value": 480,
+     "profit": 390,
+     "profit_per_action": 27.857142857142858,
+     "profit_per_day": 35.45454545454545,
+     "units": 8,
+     "water": 8,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10
+     ]
+    },
+    "fertilizer_max_product": {
+     "actions": 14,
+     "cost_fert": 40,
+     "cost_seed": 50,
+     "cycle_days": 11,
+     "dig": 1,
+     "fert": 2,
+     "fert_days": [
+      7,
+      10
+     ],
+     "harvest": 2,
+     "harvest_days": [
+      9,
+      11
+     ],
+     "name": "TOMATO",
+     "plant": 1,
+     "product_value": 480,
+     "profit": 390,
+     "profit_per_action": 27.857142857142858,
+     "profit_per_day": 35.45454545454545,
+     "units": 8,
+     "water": 8,
+     "water_days": [
+      0,
+      2,
+      4,
+      6,
+      7,
+      8,
+      9,
+      10
+     ]
+    },
+    "no_fertilizer": {
+     "actions": 9,
+     "build": 0,
+     "care": 0,
+     "collect": 0,
+     "cost_feed": 0,
+     "cost_seed": 50,
+     "cycle_days": 11,
+     "dig": 1,
+     "feed": 0,
+     "fertilizer_value": 0,
+     "harvest": 1,
+     "harvest_days": [
+      11
+     ],
+     "name": "TOMATO",
+     "plant": 1,
+     "product_value": 240,
+     "profit": 190,
+     "profit_per_action": 21.11111111111111,
+     "profit_per_day": 17.272727272727273,
+     "units": 4,
+     "water": 6,
+     "water_days": [
+      0,
+      1,
+      3,
+      5,
+      7,
+      9
+     ]
+    }
+   }
+  },
+  "WHEAT": {
+   "kind": "one_time",
+   "price": 25,
+   "seed_cost": 10,
+   "variants": {
+    "fertilizer_best_rate": {
+     "actions": 6,
+     "cost_fert": 20,
+     "cost_seed": 10,
+     "cycle_days": 3,
+     "dig": 0,
+     "fert": 1,
+     "fert_days": [
+      2
+     ],
+     "harvest": 1,
+     "harvest_days": [
+      3
+     ],
+     "name": "WHEAT",
+     "plant": 1,
+     "product_value": 125,
+     "profit": 95,
+     "profit_per_action": 15.833333333333334,
+     "profit_per_day": 31.666666666666668,
+     "units": 5,
+     "water": 3,
+     "water_days": [
+      0,
+      2,
+      3
+     ]
+    },
+    "fertilizer_max_product": {
+     "actions": 7,
+     "cost_fert": 20,
+     "cost_seed": 10,
+     "cycle_days": 4,
+     "dig": 0,
+     "fert": 1,
+     "fert_days": [
+      3
+     ],
+     "harvest": 1,
+     "harvest_days": [
+      4
+     ],
+     "name": "WHEAT",
+     "plant": 1,
+     "product_value": 150,
+     "profit": 120,
+     "profit_per_action": 17.142857142857142,
+     "profit_per_day": 30.0,
+     "units": 6,
+     "water": 4,
+     "water_days": [
+      0,
+      2,
+      3,
+      4
+     ]
+    },
+    "no_fertilizer": {
+     "actions": 6,
+     "build": 0,
+     "care": 0,
+     "collect": 0,
+     "cost_feed": 0,
+     "cost_seed": 10,
+     "cycle_days": 4,
+     "dig": 0,
+     "feed": 0,
+     "fertilizer_value": 0,
+     "harvest": 1,
+     "harvest_days": [
+      4
+     ],
+     "name": "WHEAT",
+     "plant": 1,
+     "product_value": 100,
+     "profit": 90,
+     "profit_per_action": 15.0,
+     "profit_per_day": 22.5,
+     "units": 4,
+     "water": 4,
+     "water_days": [
+      0,
+      2,
+      3,
+      4
+     ]
+    }
+   }
+  }
+ }
+}
