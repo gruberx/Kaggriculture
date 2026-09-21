@@ -3018,6 +3018,13 @@ project's own established finding, a fresh submission's score is volatile for it
       Side effect: animal BUILD/PICKUP/PLACE stay at tier 3 and now starve behind PLANT - the golden animal-pipeline guard test
       pins `plant_priority=None`. Golden re-recorded a 30th time: starter 55880/70208/67773 -> 55366/72840/80426, pass
       53161/69469/76756 -> 60668/72953/75145 (T8.54 + T8.55 together). Revert: `plant_priority` None (and `no_plant_on_last_turn` False).
+- [x] T8.56 - does raising `max_hires_per_day` above 12 pay off (the user's question, 2026-09-21; the engine has no cap on hands,
+      only the fib cost `farmHandCostMult * fib(n)` per day). Measured on the current defaults (T8.54/T8.55 on), 40 external seeds +
+      arena, `tools/measure_t856.py`: **higher is decisively worse** - max 14: starter -6.5% / pass -7.5%, arena 0W/50L; max 16:
+      -22.3% / -23.6%, 0W/50L; max 20: -72.8% / -69.8%, 0W/50L (cost of the 13th+ hire of the day grows fib-fast). **Lower is better**:
+      max 11: +3.5% / +1.1% (better 36/40, 33/40), arena 46W/4L; **max 10: +3.6% / +2.8% (better 31/40, 28/40), arena 47W/3L**;
+      max 8: +1.0% / +1.9%, arena 43W/7L. Shipped default NOT changed (`max_hires_per_day` 12): a flip needs the user's request.
+      Candidate: 10.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
