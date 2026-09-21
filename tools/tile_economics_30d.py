@@ -113,18 +113,18 @@ def crop_report(crop):
     return {
         "name": crop, "kind": "crop", "cycle_days": h, "cycles": cycles, "units_per_cycle": units,
         "water_days": water_days, "partial_units": p_units if partial else 0, "cost_seed": n_plant * cd["seed"],
-        "cost_animal": 0, "cost_feed": 0, "plant": n_plant, "water": n_water, "build": 0, "feed": 0,
+        "cost_animal": 0, "cost_feed": 0, "care": 0, "plant": n_plant, "water": n_water, "build": 0, "feed": 0,
         "dig": digs, "harvest": n_plant, "collect": 0, "units": n_units, "product": crop,
         "product_value": n_units * PRICE[crop], "fertilizer_units": 0, "fertilizer_value": 0,
         "ideal_per_day": per_cycle / h,
     }
 
 
-def animal_report(animal, days=DAYS, collect_leftover=True):
+def _animal_run(animal, days=DAYS, collect_leftover=True, care=True, harvest_at=None):
     ad = ANIMALS[animal]
     farm, private = _fresh()
     inv = private["inventories"][0]
-    counts = dict(build=0, place=0, feed=0, collect=0, harvest=0)
+    counts = dict(build=0, place=0, feed=0, collect=0, harvest=0, care=0)
     fert = units = 0
     first_full = None
     leftover = 0
@@ -139,13 +139,19 @@ def animal_report(animal, days=DAYS, collect_leftover=True):
                 _act(farm, private, day, ["PLACE", animal]); counts["place"] += 1
             tile = _tile(farm)
             if hour == 2 and isinstance(tile, dict) and "animal" in tile:
-                # feed only when the second missed day would make the animal escape before the end
-                if tile["consecutive_unfed"] >= 1 and day < days - 1:
+                if care and day <= days - 2:
+                    # CARE only counts on a day the animal is also fed, and is paid out at the next
+                    # production event; on the last day it could not be collected any more.
+                    inv["WHEAT"] = inv.get("WHEAT", 0) + 1
+                    _act(farm, private, day, ["FEED"]); counts["feed"] += 1
+                    _act(farm, private, day, ["CARE"]); counts["care"] += 1
+                elif tile["consecutive_unfed"] >= 1 and day < days - 1:
+                    # feed only when the second missed day would make the animal escape before the end
                     inv["WHEAT"] = inv.get("WHEAT", 0) + 1
                     _act(farm, private, day, ["FEED"]); counts["feed"] += 1
                 if tile["fertilizer_available"]:
                     _act(farm, private, day, ["COLLECT_FERTILIZER"]); counts["collect"] += 1
-                if tile["yield_units"] >= ad["max_held"]:  # harvest only at the accumulation cap
+                if tile["yield_units"] >= (harvest_at or ad["max_held"]):  # default: only at the accumulation cap
                     _act(farm, private, day, ["HARVEST"]); counts["harvest"] += 1
                     last_cap_day = day
                     if first_full is None:
@@ -162,12 +168,29 @@ def animal_report(animal, days=DAYS, collect_leftover=True):
         "name": animal, "kind": "animal", "cycle_days": None, "cycles": counts["harvest"],
         "units_per_cycle": ad["max_held"], "water_days": (), "partial_units": leftover, "cost_seed": 0,
         "cost_animal": ad["cost"], "cost_feed": counts["feed"] * PRICE["WHEAT"], "plant": 0, "water": 0,
-        "build": counts["build"] + counts["place"], "feed": counts["feed"], "dig": 0,
+        "build": counts["build"] + counts["place"], "feed": counts["feed"], "care": counts["care"], "dig": 0,
         "harvest": counts["harvest"], "collect": counts["collect"], "units": units, "product": ad["product"],
         "product_value": units * PRICE[ad["product"]], "fertilizer_units": fert,
         "fertilizer_value": fert * PRICE["FERTILIZER"], "leftover_units": leftover, "first_full": first_full,
         "escaped": escaped, "last_cap_day": last_cap_day, "days": days,
     }
+
+
+def animal_report(animal, days=DAYS, collect_leftover=True, care=True):
+    """Harvest as late as possible without losing production.
+
+    Harvesting strictly at the `max_held` cap wastes output when one production interval with CARE adds
+    more than the room left (a sheep adds 4 wool per interval against a cap of 6), so the harvest
+    threshold is picked per animal: most profit first, then fewest actions.
+    """
+    runs = []
+    for at in range(1, ANIMALS[animal]["max_held"] + 1):
+        r = _animal_run(animal, days, collect_leftover, care, harvest_at=at)
+        _, _, profit, actions = summarize(r)
+        runs.append(((-profit, actions), at, r))
+    _, at, best = min(runs, key=lambda x: x[0])
+    best["harvest_at"] = at
+    return best
 
 
 def animal_ideal_per_day(animal):
@@ -187,14 +210,14 @@ def animal_ideal_per_day(animal):
 def summarize(r):
     cost = r["cost_seed"] + r["cost_animal"] + r["cost_feed"]
     revenue = r["product_value"] + r["fertilizer_value"]
-    actions = r["plant"] + r["water"] + r["build"] + r["feed"] + r["dig"] + r["harvest"] + r["collect"]
+    actions = r["plant"] + r["water"] + r["build"] + r["feed"] + r["care"] + r["dig"] + r["harvest"] + r["collect"]
     return cost, revenue, revenue - cost, actions
 
 
 def main():
     rows = [crop_report(c) for c in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON")]
     rows += [animal_report(a) for a in ("GOOSE", "COW", "SHEEP")]
-    print("product|cycle_days|cost_seed+animal|cost_feed|plant|water|build+place|feed|dig|harvest|collect_fert|actions|"
+    print("product|cycle_days|cost_seed+animal|cost_feed|plant|water|build+place|feed|care|dig|harvest|collect_fert|actions|"
           "units|product_value|fert_value|profit|profit/day|profit/action|ideal/day(horizon)|final-day units")
     for r in rows:
         cost, revenue, profit, actions = summarize(r)
@@ -204,7 +227,7 @@ def main():
             v, d = animal_ideal_per_day(r["name"])
             ideal = f"{v:.1f} ({d} d)"
         print(f"{r['name']}|{r['cycle_days']}|{r['cost_seed'] + r['cost_animal']}|{r['cost_feed']}|"
-              f"{r['plant']}|{r['water']}|{r['build']}|{r['feed']}|{r['dig']}|{r['harvest']}|{r['collect']}|{actions}|"
+              f"{r['plant']}|{r['water']}|{r['build']}|{r['feed']}|{r['care']}|{r['dig']}|{r['harvest']}|{r['collect']}|{actions}|"
               f"{r['units']}|{r['product_value']}|{r['fertilizer_value']}|{profit}|{profit / DAYS:.1f}|"
               f"{profit / actions:.1f}|{ideal}|{r['partial_units']}")
 

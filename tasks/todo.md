@@ -3038,6 +3038,14 @@ project's own established finding, a fresh submission's score is volatile for it
       not cleared by HARVEST (needs DIG - and only when the tile is replanted); an animal produces regardless of feeding (feeding only avoids
       escape and enables the CARE bonus) and its fertilizer flag refreshes daily. Correction to the first version of this table: the last
       DIG of an ongoing crop was counted although nothing is replanted after it (tomato 2 -> 1, strawberry 1 -> 0 before the partial cycle).
+      **CARE added (the user's correction, same day)**: the first version left CARE out. Engine (`_daily_refresh_animals`): a day with
+      BOTH fed and cared adds +1 to `pending_care_bonus` (after that day's production check); the next production event pays
+      `1 + pending` (only if fed that day), capped at `max_held`; the bonus of every care day since the last event accumulates (cow
+      first event = min(6, 1 + 7)). With FEED + CARE + COLLECT_FERTILIZER every day (29 feeds = $725, 29 cares): GOOSE 4575 (103
+      actions, 54 eggs; was 3550 without care), COW 7535 (95 actions, 36 milk; was 3910), SHEEP 8475 (97 actions, 34 wool; was 3650).
+      Harvest threshold is picked per animal (max profit, then fewest actions) because a strict harvest at the cap loses output when
+      one care-boosted interval adds more than the room left (sheep: +4 wool per interval, cap 6 -> 7275 strict vs 8475). Ideal per day:
+      GOOSE 152.5 (30 d), COW 261.0 (31 d), SHEEP 301.6 (31 d).
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
