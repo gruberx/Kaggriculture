@@ -995,6 +995,15 @@ _DEFAULT_DROP_GOODS_DEADLINE_MARGIN_TURNS = 2
 # shed for a week and ~100 strawberries ($215 each) were discarded at midnight.
 _DEFAULT_CAPACITY_AWARE_SELLING = True
 
+# T8.54 (the user's request): the engine starts a new plant with
+# consecutive_unwatered=1 ("planting day counts as unwatered"), so a plant that
+# is not watered on its planting day turns into a WEED at midnight. A PLANT
+# issued on the last turn of the day can never be watered (no later turn, one
+# action per unit per turn), so it wastes the seed and the tile. Measured in
+# self-play: 10-19 such plants per game, all planted on turn 23. Default OFF: measured
+# -3.8%/-4.8% vs starter/pass (40 seeds) and arena 12W/38L, see tasks/todo.md T8.54.
+_DEFAULT_NO_PLANT_ON_LAST_TURN = False
+
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
 # one unit at a time), so when both sell the same good on the same turn the
@@ -1989,6 +1998,11 @@ def decide(obs: dict, params: dict) -> dict:
             i += 1
         plant_crop = basket_seq if basket_seq else None
         plant_qty = len(basket_seq)
+
+    if params.get("no_plant_on_last_turn", _DEFAULT_NO_PLANT_ON_LAST_TURN) and current_hour >= (
+        params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY) - 1
+    ):
+        plant_qty = 0
 
     water_bonus_window_aware = params.get("water_bonus_window_aware", _DEFAULT_WATER_BONUS_WINDOW_AWARE)
     parallel_animal_acquisition = params.get(

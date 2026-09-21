@@ -2990,6 +2990,20 @@ project's own established finding, a fresh submission's score is volatile for it
       logged in `data/arena/submissions.jsonl` with `arena_win_rate` 0.68 (T8.53 arena vs its base). Public score not yet known -
       re-check after ~20 minutes (early scores are volatile). Expectation to hold it against: the external-opponent measurements were
       +5-10% per step, but the self-play-only wins (deadline drop, 4th-quadrant block) are unverified against real strong opponents.
+- [x] T8.54 - no PLANT on the last turn of the day (the user's request, 2026-09-21: "weeds come from plants sown in the last hour
+      that can no longer be watered - check and fix"). **Hypothesis confirmed.** Engine (`kaggriculture.py:222`): a new plant starts
+      with `consecutive_unwatered=1` ("planting day counts as unwatered"), so a plant not watered on its planting day is a WEED at
+      midnight (my first check, which looked for `cu>=1` on the next morning, missed this and wrongly said "no such plants").
+      Traced with hooks on `_daily_refresh_plants` (seeds 900/901/902, vs the old-default opponent): 10/19/16 plants per game died the
+      night they were planted, ALL sown on turn 23 (turn 22 is safe: someone waters on turn 23), on days 10-26, none survive
+      (0 survivors of turn-23 plantings). Cause of the late sowing: planting sits behind WATER/HARVEST and walking all day, so a free
+      tile is planted only when the queue empties at the very end. New flag `no_plant_on_last_turn` (`plant_qty=0` when
+      `hour >= turns_per_day-1`, 1 test) removes the doomed sowings (weeds 6.6 -> 1.8 at noon, 16 seeds) but **measured negative**:
+      external 40 seeds starter 59685 -> 57423 (-3.8%, better 14/40), pass 60093 -> 57205 (-4.8%, better 9/40); arena 12W/38L (0.24);
+      16-seed side check: plants at noon 54.9 -> 53.6, final -2%. Mechanism not identified (the turn-23 unit had nothing else to do,
+      the seed loss is small). Shipped default stays **False**, golden not re-recorded. `tools/measure_t854.py`.
+      **Real fix not done yet**: give PLANT of a free tile a chance earlier in the day (the mid-game "hands walk and water all day, 12
+      free tiles and 43 seeds idle for a week" state seen on seed 900 days 13-19), not only drop the last-turn sowing.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

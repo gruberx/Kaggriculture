@@ -768,6 +768,9 @@ DEFAULT_PARAMS = {
     # forecast divides the work still to be done by the turns left today (24 - hour) instead
     # of 24.
     "day_plan_remaining_turns_aware": True,
+    # T8.54 (measured negative, so OFF): never issue a PLANT on the last turn of the day - it cannot
+    # be watered, so the plant becomes a weed at midnight. -3.8%/-4.8% vs starter/pass, arena 12W/38L.
+    "no_plant_on_last_turn": False,
 }
 
 

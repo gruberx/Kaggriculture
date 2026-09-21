@@ -79,5 +79,6 @@
   "capacity_aware_selling": true,
   "land_buy_affordability": true,
   "land_purchase_buffer": 500,
-  "day_plan_remaining_turns_aware": true
+  "day_plan_remaining_turns_aware": true,
+  "no_plant_on_last_turn": false
 }

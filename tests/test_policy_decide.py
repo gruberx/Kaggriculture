@@ -871,6 +871,32 @@ def test_decide_hire_min_turns_left_defaults_to_six_and_zero_is_a_no_op():
     assert sum(1 for o in action["market"] if o == ["HIRE"]) == 1  # gate never engages
 
 
+def test_decide_no_plant_on_last_turn_suppresses_plant_tasks_only_on_the_last_turn(monkeypatch):
+    # T8.54: a plant not watered on its planting day becomes a WEED at midnight (the engine starts
+    # consecutive_unwatered at 1), so a PLANT issued on the last turn can never survive.
+    import kagg.policy.decide as decide_module
+
+    original = decide_module.build_task_list
+
+    def planted(hour, **overrides):
+        captured = {}
+
+        def spy(*args, **kwargs):
+            captured.update(kwargs)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(decide_module, "build_task_list", spy)
+        obs = _obs()
+        obs["hour"] = hour
+        obs["private"]["seeds"] = {c: 5 for c in CROPS}
+        decide(obs, dict(DEFAULT_PARAMS, **overrides))
+        return captured["plant_qty"]
+
+    assert planted(22, no_plant_on_last_turn=True) > 0
+    assert planted(23, no_plant_on_last_turn=True) == 0
+    assert planted(23, no_plant_on_last_turn=False) > 0
+
+
 def test_decide_max_hire_orders_per_turn_caps_hire_orders_this_turn():
     obs = _obs()
     params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=20, max_hire_orders_per_turn=3)
