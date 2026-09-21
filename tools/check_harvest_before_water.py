@@ -3,7 +3,7 @@
 For every HARVEST in a self-play episode (current shipped defaults vs `starter`): the yield taken against the
 yield attainable with the plan's daily watering (1 + the bonus-window ages up to the harvest age, capped at
 `max_yield`), and whether the tile had been watered that day. Ongoing crops and animals: units per harvest.
-Usage: python tools/check_harvest_before_water.py <seed>. Not part of the committed test suite.
+Usage: python tools/check_harvest_before_water.py <seed> [json param overrides]. Not part of the committed test suite.
 """
 import os, sys, json
 from collections import defaultdict
@@ -16,7 +16,10 @@ from kagg.gamelib.growth import watering_bonus_window
 seed = int(sys.argv[1])
 W = os.path.join(os.environ.get("CLAUDE_JOB_DIR", "/tmp"), "tmp", "wha%d" % seed); os.makedirs(W, exist_ok=True)
 env = make("kaggriculture", configuration={"episodeSteps": 720, "seed": seed}, debug=False)
-env.run([tuning.write_candidate_agent(dict(DEFAULT_PARAMS), W), "starter"])
+params = dict(DEFAULT_PARAMS)
+if len(sys.argv) > 2:
+    params.update(json.loads(sys.argv[2]))  # e.g. '{"harvest_water_first": true}'
+env.run([tuning.write_candidate_agent(params, W), "starter"])
 st = env.steps
 S = defaultdict(lambda: defaultdict(int))
 for t in range(len(st) - 1):

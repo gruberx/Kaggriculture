@@ -3088,6 +3088,21 @@ project's own established finding, a fresh submission's score is volatile for it
       10/12/14/16, tomato 8/9) = up to 4 HARVEST actions per plant instead of 1, an action-efficiency issue, no product lost. Animals:
       not applicable. Proposed fix (not done): for one-time crops, hold HARVEST while the day's watering would still add yield (age in
       the window, not watered today, yield < max_yield) and give that WATER the harvest tier; costs one extra action per harvest.
+- [x] T8.59 - harvest rules after the T8.58 finding (the user's request, 2026-09-21): (1) one-time crops: the unit that comes to
+      harvest WATERs first when that day's watering still adds yield, then HARVESTs the next turn (`HarvestRules.water_first`;
+      the separate routine WATER task of a harvest-ready tile is dropped, an urgent tier-0 WATER stays; tiers unchanged);
+      (2) tomato/strawberry: harvest only when the next production would overflow `max_yield` or every production has fired
+      (`ongoing_at_cap`); (3) animals: only when the next production (1 + banked CARE) would overflow `max_held`
+      (`animals_at_cap`); all three harvest everything on the last `liquidation_days_before_end` days. Each is its own flag; 1 sheet
+      of tests in test_policy_tasks/decide. Measured on the current defaults, 40 external seeds + arena, `tools/measure_t859.py`:
+      water first starter 62375 -> 63990 (+2.6%, better 28/40), pass 62487 -> 63310 (+1.3%, 22/40), arena 50W/0L; ongoing at cap
+      -7.0% / -6.9% (better 9/40, 14/40), arena 3W/47L; animals at cap +0.0% / +0.0% (the agent hardly buys animals), arena
+      5W/7L/38T; all three -6.8% / -8.3%, arena 38W/12L. Check with `tools/check_harvest_before_water.py` (water first on): MELON
+      100% of the attainable yield (6 of 6, was 5), WHEAT/CARROT no last-day losses. Traced why ongoing-at-cap loses (seed 901,
+      base 68389 vs 61900): strawberry planted day 11 pays nothing until age 16 (money at day 26: 13.7k vs 52.1k), then ~216 berries are
+      sold on days 27-28 and the price collapses. **Shipped `harvest_water_first=True` only**; the other two stay False. Golden
+      re-recorded a 32nd time (starter 53182/73202/80919 -> 65522/71436/85801, pass 62075/73091/75537 -> 60542/78810/79213). Revert:
+      `harvest_water_first` False. Not done: DIG a spent ongoing plant right after its last harvest (it now waits for the weed).
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

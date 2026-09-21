@@ -146,6 +146,25 @@ def _units_holding(inventories: list[dict], item: str, n_units: int) -> tuple[in
 
 
 @dataclass(frozen=True)
+class HarvestRules:
+    """T8.59: when a tile's produce is worth harvesting (all fields off = the pre-T8.59 behaviour).
+
+    `water_first`: a one-time crop whose day's WATER still adds yield (age inside the bonus window, not
+    watered today, yield below the cap) is harvested by the SAME unit in two turns - WATER, then HARVEST -
+    instead of the harvest removing the plant before the watering (the separate routine WATER task is
+    dropped, tiers unchanged).
+    `ongoing_at_cap` (tomato/strawberry) and `animals_at_cap`: harvest only when the next scheduled
+    production would overflow the tile's cap (`max_yield` / `max_held`), or nothing more is coming.
+    `harvest_all`: the last days of the season - harvest whatever is ready, so nothing is left unsold.
+    """
+
+    water_first: bool = False
+    ongoing_at_cap: bool = False
+    animals_at_cap: bool = False
+    harvest_all: bool = False
+
+
+@dataclass(frozen=True)
 class Task:
     priority: int
     pos: tuple[int, int]
@@ -175,6 +194,8 @@ class Task:
     # positional Task(...) construction keeps working unchanged, and
     # assign_units's unpinned stage is untouched for these tasks.
     eligible_units: tuple[int, ...] | None = None
+    # T8.59: a HARVEST task whose unit must WATER first (see HarvestRules.water_first).
+    water_first: bool = False
 
 
 def _closest_pos(candidates: list[tuple[int, int]], unit_positions) -> tuple[int, int] | None:
@@ -296,6 +317,7 @@ def build_task_list(
     plant_alongside_animal: bool = False,
     plant_priority: float | None = None,
     dig_weed_priority: float | None = None,
+    harvest_rules: HarvestRules | None = None,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -493,10 +515,11 @@ def build_task_list(
                         use_fertilizer,
                         water_bonus_window_aware,
                         defer_one_time_harvest_to_max_yield,
+                        harvest_rules,
                     )
                 )
             elif "animal" in tile:
-                animal_tasks, feed_priority = _animal_tile_tasks(pos, tile, wheat_units, care_aware)
+                animal_tasks, feed_priority = _animal_tile_tasks(pos, tile, wheat_units, care_aware, harvest_rules)
                 tasks.extend(animal_tasks)
                 if feed_priority is not None:
                     feed_needed_tiles += 1
@@ -708,9 +731,23 @@ def _plant_tile_tasks(
     use_fertilizer: bool = True,
     water_bonus_window_aware: bool = False,
     defer_one_time_harvest_to_max_yield: bool = False,
+    harvest_rules: HarvestRules | None = None,
 ) -> list[Task]:
     tasks = []
-    if not tile.get("watered_today", False):
+    harvest_ready = tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
+        tile, current_day, defer_one_time_harvest_to_max_yield, harvest_rules
+    )
+    # T8.59: the harvester waters first when that day's watering still adds yield. An urgent WATER
+    # (yesterday missed) stays a separate tier-0 task: skipping it could let the plant die if the
+    # harvest is not reached today.
+    water_first = (
+        harvest_ready
+        and harvest_rules is not None
+        and harvest_rules.water_first
+        and tile.get("consecutive_unwatered", 0) < 1
+        and _water_adds_yield(tile, current_day)
+    )
+    if not tile.get("watered_today", False) and not water_first:
         urgent = tile.get("consecutive_unwatered", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
         if water_bonus_window_aware and not urgent:
@@ -759,10 +796,8 @@ def _plant_tile_tasks(
                 if age not in watering_bonus_window(tile["crop"]):
                     priority = PRIORITY_LOW_VALUE_CARE
         tasks.append(Task(priority, pos, "WATER"))
-    if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
-        tile, current_day, defer_one_time_harvest_to_max_yield
-    ):
-        tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
+    if harvest_ready:
+        tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST", water_first=water_first))
     if (
         use_fertilizer
         and fertilizer_units
@@ -809,8 +844,39 @@ def _plant_tile_tasks(
     return tasks
 
 
+def _water_adds_yield(tile: dict, current_day: int) -> bool:
+    """T8.59: True if a WATER on this one-time-crop tile today would still add yield (real handler:
+    age inside the bonus window, not yet watered today, yield below the cap)."""
+    cd = CROPS[tile["crop"]]
+    if cd["ongoing"] or tile.get("watered_today", False):
+        return False
+    age = current_day - tile["planted_day"]
+    return age in watering_bonus_window(tile["crop"]) and tile.get("yield_units", 0) < cd["max_yield"]
+
+
+def _ongoing_ready(tile: dict, current_day: int) -> bool:
+    """T8.59: an ongoing crop (tomato/strawberry) is worth harvesting when the next scheduled
+    production would overflow the tile (`max_yield`), or when every scheduled production has fired
+    (the plant then decays). Unfertilized each production adds 1, so that is the final harvest of all
+    `max_yield` units; a fertilized+watered production adds 2, so it can be needed a step earlier."""
+    cd = CROPS[tile["crop"]]
+    cap = cd["max_yield"]
+    age = current_day - tile["planted_day"]
+    if age >= cd["first_yield_day"] + (cap - 1) * cd["interval"]:
+        return True
+    gain = 2 if tile.get("fertilized_until_day", -1) >= current_day else 1
+    return tile.get("yield_units", 0) + gain > cap
+
+
+def _animal_ready(tile: dict) -> bool:
+    """T8.59: a placed animal is worth harvesting when its next production (1 + banked CARE bonus)
+    would overflow `max_held`."""
+    cap = ANIMALS[tile["animal"]]["max_held"]
+    return tile.get("yield_units", 0) + 1 + tile.get("pending_care_bonus", 0) > cap
+
+
 def _is_actually_harvestable(
-    tile: dict, current_day: int, defer_to_max_yield: bool = False
+    tile: dict, current_day: int, defer_to_max_yield: bool = False, rules: HarvestRules | None = None
 ) -> bool:
     """True if a PLANT tile with `yield_units > 0` can really be
     HARVESTed right now, not just banked toward a future harvest.
@@ -877,6 +943,8 @@ def _is_actually_harvestable(
     """
     cd = CROPS[tile["crop"]]
     if cd["ongoing"]:
+        if rules is not None and rules.ongoing_at_cap and not rules.harvest_all:
+            return _ongoing_ready(tile, current_day)
         return True
     age = current_day - tile["planted_day"]
     if age < cd["first_yield_day"]:
@@ -894,8 +962,17 @@ def _is_actually_harvestable(
     return age >= cd["max_yield_day"] or tile.get("yield_units", 0) >= cd["max_yield"]
 
 
+def _animal_harvest_wanted(tile: dict, rules: HarvestRules | None) -> bool:
+    if tile.get("yield_units", 0) <= 0:
+        return False
+    if rules is not None and rules.animals_at_cap and not rules.harvest_all:
+        return _animal_ready(tile)
+    return True
+
+
 def _animal_tile_tasks(
-    pos: tuple[int, int], tile: dict, wheat_units: tuple[int, ...], care_aware: bool = False
+    pos: tuple[int, int], tile: dict, wheat_units: tuple[int, ...], care_aware: bool = False,
+    harvest_rules: HarvestRules | None = None,
 ) -> tuple[list[Task], int | None]:
     """Returns (tasks, feed_priority) - the second element is `None`
     unless this tile still needs feeding today (fed_today is False),
@@ -935,7 +1012,7 @@ def _animal_tile_tasks(
         feed_priority = priority
         if wheat_units:
             tasks.append(Task(priority, pos, "FEED", eligible_units=wheat_units))
-    if tile.get("yield_units", 0) > 0:
+    if _animal_harvest_wanted(tile, harvest_rules):
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     if tile.get("fertilizer_available", False):
         tasks.append(Task(PRIORITY_MAINTENANCE, pos, "COLLECT_FERTILIZER"))
@@ -969,6 +1046,7 @@ def crop_tile_day_actions(
     defer_one_time_harvest_to_max_yield: bool = False,
     harvest_replant_actions: float = 0,
     remaining_only: bool = False,
+    harvest_rules: HarvestRules | None = None,
 ) -> float:
     """T8.44: how many real actions a single already-planted PLANT tile
     costs *today* - the per-tile "today" term the day-plan hiring forecast
@@ -1009,7 +1087,7 @@ def crop_tile_day_actions(
     # nothing is watered yet, so it is identical there.
     actions = 0 if (remaining_only and tile.get("watered_today", False)) else 1  # WATER
     if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
-        tile, current_day, defer_one_time_harvest_to_max_yield
+        tile, current_day, defer_one_time_harvest_to_max_yield, harvest_rules
     ):
         actions += 1
         if harvest_clears_tile_today(tile, current_day, defer_one_time_harvest_to_max_yield):
@@ -1020,7 +1098,8 @@ def crop_tile_day_actions(
 
 
 def animal_tile_day_actions(
-    tile: dict, *, care_aware: bool = False, remaining_only: bool = False
+    tile: dict, *, care_aware: bool = False, remaining_only: bool = False,
+    harvest_rules: HarvestRules | None = None,
 ) -> int:
     """T8.44: `crop_tile_day_actions`'s counterpart for a placed animal
     tile - mirrors `_animal_tile_tasks` exactly (same four possible
@@ -1033,7 +1112,7 @@ def animal_tile_day_actions(
     COLLECT_FERTILIZER), `+ 1` if `care_aware` and not yet `cared_today`.
     """
     actions = 0 if (remaining_only and tile.get("fed_today", False)) else 1  # FEED
-    if tile.get("yield_units", 0) > 0:
+    if _animal_harvest_wanted(tile, harvest_rules):
         actions += 1
     if tile.get("fertilizer_available", False):
         actions += 1
@@ -1167,6 +1246,8 @@ def action_for_unit(unit_pos: tuple[int, int], task: Task | None) -> list:
     if task is None:
         return ["PASS"]
     if unit_pos == task.pos:
+        if task.op == "HARVEST" and task.water_first:
+            return ["WATER"]  # T8.59: the next turn the tile is watered and the task becomes a plain HARVEST
         if task.op == "PLANT":
             return ["PLANT", task.crop]
         if task.op == "PLACE":
@@ -1264,7 +1345,8 @@ def goods_drop_task(
 
 
 def harvestable_units_today(
-    tile: dict, current_day: int, defer_one_time_harvest_to_max_yield: bool = False
+    tile: dict, current_day: int, defer_one_time_harvest_to_max_yield: bool = False,
+    harvest_rules: HarvestRules | None = None,
 ) -> int:
     """T8.50: goods a HARVEST of this tile would yield today - a PLANT tile
     that `_is_actually_harvestable` says is ready, or an animal tile with
@@ -1273,9 +1355,9 @@ def harvestable_units_today(
     if units <= 0:
         return 0
     if "animal" in tile:
-        return units
+        return units if _animal_harvest_wanted(tile, harvest_rules) else 0
     if tile.get("kind") == "PLANT" and _is_actually_harvestable(
-        tile, current_day, defer_one_time_harvest_to_max_yield
+        tile, current_day, defer_one_time_harvest_to_max_yield, harvest_rules
     ):
         return units
     return 0

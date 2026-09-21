@@ -53,6 +53,7 @@ from kagg.policy.tasks import (
     crop_tile_day_actions,
     goods_deadline_drop_tasks,
     goods_drop_task,
+    HarvestRules,
     harvestable_units_today,
     harvest_clears_tile_today,
 )
@@ -1015,6 +1016,20 @@ _DEFAULT_PLANT_PRIORITY = 1.75
 # tier 4 (maintenance) a weed stayed until nothing else was left. 1.8 = right behind the PLANT tier.
 _DEFAULT_DIG_WEED_PRIORITY = 1.8
 
+# T8.59 (the user's request): harvest rules, see kagg.policy.tasks.HarvestRules.
+#  - harvest_water_first: one-time crops (wheat/carrot/melon) are WATERed by the harvesting unit right
+#    before the HARVEST when that day's watering still adds yield. Measured: the harvest used to win
+#    the tier and remove the plant before its last bonus watering (all melon harvests at 5 of 6 units).
+#  - ongoing_crop_harvest_at_cap / animal_harvest_at_cap: harvest tomato/strawberry/animals only when the
+#    next production would overflow the tile's cap (and everything on the last days), instead of every
+#    single production (up to 4 HARVEST actions per plant). Measured: water_first +2.6%/+1.3% vs
+#    starter/pass (40 seeds), arena 50W/0L -> ON; ongoing_at_cap -7.0%/-6.9%, arena 3W/47L (the income
+#    of a strawberry field is held back to age 16 and then dumped in one glut) and animals_at_cap
+#    +0.0% (the agent hardly buys animals) -> OFF.
+_DEFAULT_HARVEST_WATER_FIRST = True
+_DEFAULT_ONGOING_CROP_HARVEST_AT_CAP = False
+_DEFAULT_ANIMAL_HARVEST_AT_CAP = False
+
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
 # one unit at a time), so when both sell the same good on the same turn the
@@ -1613,6 +1628,22 @@ def decide(obs: dict, params: dict) -> dict:
     defer_one_time_harvest_to_max_yield = params.get(
         "defer_one_time_harvest_to_max_yield", _DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD
     )
+    # T8.59: None when every harvest rule is off (bit-identical to the pre-T8.59 behaviour).
+    _hw_first = params.get("harvest_water_first", _DEFAULT_HARVEST_WATER_FIRST)
+    _hw_ongoing = params.get("ongoing_crop_harvest_at_cap", _DEFAULT_ONGOING_CROP_HARVEST_AT_CAP)
+    _hw_animals = params.get("animal_harvest_at_cap", _DEFAULT_ANIMAL_HARVEST_AT_CAP)
+    harvest_rules = (
+        HarvestRules(
+            water_first=_hw_first,
+            ongoing_at_cap=_hw_ongoing,
+            animals_at_cap=_hw_animals,
+            harvest_all=current_day
+            >= params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+            - params.get("liquidation_days_before_end", _DEFAULT_LIQUIDATION_DAYS_BEFORE_END),
+        )
+        if (_hw_first or _hw_ongoing or _hw_animals)
+        else None
+    )
     # One scan covers seven questions at once: which animal types are
     # already placed (stuck/already-have-one logic above), whether any
     # empty tile exists at all, which structure kinds already sit empty
@@ -1689,9 +1720,12 @@ def decide(obs: dict, params: dict) -> dict:
                         placed_animal_type_counts.get(tile["animal"], 0) + 1
                     )
                     maintenance_actions_today += animal_tile_day_actions(
-                        tile, care_aware=care_aware, remaining_only=remaining_turns_aware
+                        tile, care_aware=care_aware, remaining_only=remaining_turns_aware,
+                        harvest_rules=harvest_rules,
                     )
-                    remaining_harvest_units += harvestable_units_today(tile, current_day)
+                    remaining_harvest_units += harvestable_units_today(
+                        tile, current_day, harvest_rules=harvest_rules
+                    )
                 elif tile.get("kind") in ("COOP", "PASTURE"):
                     empty_structure_kinds.add(tile["kind"])
                 elif tile.get("kind") == "PLANT":
@@ -1702,13 +1736,14 @@ def decide(obs: dict, params: dict) -> dict:
                         use_fertilizer=use_fertilizer,
                         defer_one_time_harvest_to_max_yield=defer_one_time_harvest_to_max_yield,
                         remaining_only=remaining_turns_aware,
+                        harvest_rules=harvest_rules,
                     )
                     if harvest_clears_tile_today(
                         tile, current_day, defer_one_time_harvest_to_max_yield
                     ):
                         harvest_cleared_tiles += 1
                     remaining_harvest_units += harvestable_units_today(
-                        tile, current_day, defer_one_time_harvest_to_max_yield
+                        tile, current_day, defer_one_time_harvest_to_max_yield, harvest_rules
                     )
                 elif tile.get("kind") == "WEED":
                     n_weed_tiles += 1
@@ -2052,6 +2087,7 @@ def decide(obs: dict, params: dict) -> dict:
         ),
         plant_priority=params.get("plant_priority", _DEFAULT_PLANT_PRIORITY),
         dig_weed_priority=params.get("dig_weed_priority", _DEFAULT_DIG_WEED_PRIORITY),
+        harvest_rules=harvest_rules,
     )
     # Reserve WHEAT from routine selling once any animal exists on the
     # farm - see market.sell_orders's own docstring for the real deadlock

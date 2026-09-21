@@ -432,13 +432,18 @@ AGENT_MAIN_PATH = os.path.join(
 # dig_weed_priority=1.8 (T8.55): starter 55366/72840/80426 -> 53182/73202/80919 and pass
 # 60668/72953/75145 -> 62075/73091/75537 (measured +1.0%/+0.1% on 40 external seeds).
 # Revert = dig_weed_priority None.
+# Re-recorded a 32nd time on 2026-09-21, the user's request to fix the harvest-before-watering
+# defect (T8.59): harvest_water_first=True, starter 53182/73202/80919 -> 65522/71436/85801 and pass
+# 62075/73091/75537 -> 60542/78810/79213 (mixed on the 6 fixed episodes: starter/2 -2.4%, pass/1
+# -2.5%, the rest +3..+23%; the 40-seed external measurement was +2.6%/+1.3%, arena 50W/0L).
+# T8.38 escape guardrail re-checked, not re-recorded. Revert = harvest_water_first False.
 _GOLDEN = {
-    ("starter", 1): (53182.0, 3883.0),
-    ("starter", 2): (73202.0, 3493.0),
-    ("starter", 3): (80919.0, 3603.0),
-    ("pass", 1): (62075.0, 3000.0),
-    ("pass", 2): (73091.0, 3000.0),
-    ("pass", 3): (75537.0, 3000.0),
+    ("starter", 1): (65522.0, 3786.0),
+    ("starter", 2): (71436.0, 3493.0),
+    ("starter", 3): (85801.0, 3605.0),
+    ("pass", 1): (60542.0, 3000.0),
+    ("pass", 2): (78810.0, 3000.0),
+    ("pass", 3): (79213.0, 3000.0),
 }
 
 

@@ -20,6 +20,7 @@ from kagg.policy.tasks import (
     PRIORITY_PLANT,
     PRIORITY_PREVENT_LOSS,
     PRIORITY_ROUTINE_CARE,
+    HarvestRules,
     Task,
     action_for_unit,
     animal_tile_day_actions,
@@ -1625,3 +1626,89 @@ def test_build_task_list_plant_and_dig_priority_retier_only_those_tasks():
     retiered = build_task_list(tiles, plant_crop="WHEAT", plant_qty=1, plant_priority=1.75, dig_weed_priority=1.8)
     assert {t.op: t.priority for t in retiered} == {"PLANT": 1.75, "DIG": 1.8, "WATER": PRIORITY_ROUTINE_CARE}
     assert [t.op for t in retiered][:2] == ["PLANT", "DIG"]  # sorted ahead of the routine WATER
+
+
+def _crop(crop, planted_day=0, **fields) -> dict:
+    tile = _plant_tile(planted_day=planted_day)
+    tile["crop"] = crop
+    tile.update(fields)
+    return tile
+
+
+def _ops(tasks):
+    return sorted((t.op, t.water_first) for t in tasks)
+
+
+def test_harvest_water_first_replaces_the_separate_water_task_and_the_unit_waters_then_harvests():
+    # T8.59: melon age 10 (first harvest day, bonus window 6-12), yield 5 of 6, not watered today.
+    tiles = _empty_tiles()
+    tiles[2][2] = _crop("MELON", yield_units=5)
+    old = build_task_list(tiles, current_day=10)
+    assert _ops(old) == [("HARVEST", False), ("WATER", False)]  # the harvest wins and removes the plant
+    rules = HarvestRules(water_first=True)
+    new = build_task_list(tiles, current_day=10, harvest_rules=rules)
+    assert _ops(new) == [("HARVEST", True)]  # one task, tiers unchanged
+    task = new[0]
+    assert task.priority == PRIORITY_HARVEST
+    assert action_for_unit((2, 2), task) == ["WATER"]
+    # the next turn the tile is watered: a plain HARVEST
+    tiles[2][2]["watered_today"] = True
+    tiles[2][2]["yield_units"] = 6
+    again = build_task_list(tiles, current_day=10, harvest_rules=rules)
+    assert _ops(again) == [("HARVEST", False)]
+    assert action_for_unit((2, 2), again[0]) == ["HARVEST"]
+
+
+def test_harvest_water_first_is_skipped_when_watering_adds_nothing_or_is_urgent():
+    rules = HarvestRules(water_first=True)
+    capped = _empty_tiles()
+    capped[2][2] = _crop("MELON", yield_units=6)  # already at the cap
+    assert ("HARVEST", False) in _ops(build_task_list(capped, current_day=10, harvest_rules=rules))
+    late = _empty_tiles()
+    late[2][2] = _crop("MELON", yield_units=5)  # age 13: past the bonus window
+    assert all(not wf for _, wf in _ops(build_task_list(late, current_day=13, harvest_rules=rules)))
+    urgent = _empty_tiles()
+    urgent[2][2] = _crop("MELON", yield_units=5, consecutive_unwatered=1)
+    ops = _ops(build_task_list(urgent, current_day=10, harvest_rules=rules))
+    assert ("WATER", False) in ops and ("HARVEST", False) in ops  # an urgent WATER stays its own task
+
+
+def test_harvest_water_first_covers_wheat_on_its_max_yield_day_only_with_the_defer_rule():
+    rules = HarvestRules(water_first=True)
+    tiles = _empty_tiles()
+    tiles[2][2] = _crop("WHEAT", yield_units=3)
+    kw = dict(defer_one_time_harvest_to_max_yield=True, harvest_rules=rules)
+    assert _ops(build_task_list(tiles, current_day=3, **kw)) == [("WATER", False)]  # not ripe yet
+    assert _ops(build_task_list(tiles, current_day=4, **kw)) == [("HARVEST", True)]  # age 4: water, then harvest
+
+
+def test_ongoing_crops_are_harvested_only_at_the_cap_or_after_the_last_production():
+    rules = HarvestRules(ongoing_at_cap=True)
+    def harvest_tasks(tile, day, r=rules):
+        tiles = _empty_tiles(); tiles[2][2] = tile
+        return [t for t in build_task_list(tiles, current_day=day, harvest_rules=r) if t.op == "HARVEST"]
+    assert harvest_tasks(_crop("TOMATO", yield_units=1, watered_today=True), 8, None)  # legacy: every production
+    assert not harvest_tasks(_crop("TOMATO", yield_units=1, watered_today=True), 8)
+    assert not harvest_tasks(_crop("TOMATO", yield_units=3, watered_today=True), 10)  # 3 + 1 does not overflow
+    assert harvest_tasks(_crop("TOMATO", yield_units=4, watered_today=True), 11)  # every production fired
+    assert not harvest_tasks(_crop("STRAWBERRY", yield_units=2, watered_today=True), 12)
+    assert harvest_tasks(_crop("STRAWBERRY", yield_units=4, watered_today=True), 16)
+    fertilized = _crop("TOMATO", yield_units=3, watered_today=True, fertilized_until_day=10)
+    assert harvest_tasks(fertilized, 9)  # the next production adds 2: 3 + 2 > 4
+    assert harvest_tasks(_crop("TOMATO", yield_units=1, watered_today=True), 8, HarvestRules(ongoing_at_cap=True, harvest_all=True))
+
+
+def test_animals_are_harvested_only_when_the_next_production_would_overflow():
+    rules = HarvestRules(animals_at_cap=True)
+    def wanted(yield_units, pending=0, r=rules):
+        tile = _animal_tile(yield_units=yield_units)
+        tile["animal"] = "GOOSE"  # max_held 4
+        tile["pending_care_bonus"] = pending
+        tiles = _empty_tiles(); tiles[2][2] = tile
+        return any(t.op == "HARVEST" for t in build_task_list(tiles, current_day=5, harvest_rules=r))
+    assert wanted(1, r=None)  # legacy: any produce
+    assert not wanted(1) and not wanted(3)
+    assert wanted(4)
+    assert wanted(1, pending=3)  # 1 + 1 + 3 > 4
+    assert wanted(1, r=HarvestRules(animals_at_cap=True, harvest_all=True))
+    assert not wanted(0)

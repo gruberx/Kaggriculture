@@ -779,6 +779,14 @@ DEFAULT_PARAMS = {
     # dig_weed_priority (enabled 2026-09-21 on the user's request; old value None = tier 4): tier of
     # the weed DIG that frees a tile for PLANT; +8.6%/+9.2% vs starter/pass, arena 40W/10L.
     "dig_weed_priority": 1.8,
+    # T8.59 (the user's request): see kagg.policy.tasks.HarvestRules. harvest_water_first (enabled
+    # 2026-09-21, old value False): a one-time crop's harvesting unit WATERs first, then HARVESTs
+    # (+2.6%/+1.3% vs starter/pass, arena 50W/0L). ongoing_crop_harvest_at_cap and animal_harvest_at_cap
+    # stay OFF: harvest only when the next production would overflow measured -7.0%/-6.9% (arena 3W/47L,
+    # income held back then dumped in one glut) and +0.0% (animals barely used).
+    "harvest_water_first": True,
+    "ongoing_crop_harvest_at_cap": False,
+    "animal_harvest_at_cap": False,
 }
 
 

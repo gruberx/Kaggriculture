@@ -897,6 +897,31 @@ def test_decide_no_plant_on_last_turn_suppresses_plant_tasks_only_on_the_last_tu
     assert planted(23, no_plant_on_last_turn=False) > 0
 
 
+def test_decide_harvest_water_first_waters_then_harvests_a_ripe_melon():
+    # T8.59: the harvesting unit stands on a melon at its first harvest day (age 10) that has not
+    # been watered today: with the rule it WATERs (bonus +1), the next turn it HARVESTs.
+    obs = _obs()
+    obs["day"], obs["hour"] = 10, 5
+    farm = obs["farms"][0]
+    tile = {"kind": "PLANT", "crop": "MELON", "planted_day": 0, "watered_today": False,
+            "consecutive_unwatered": 0, "yield_units": 5, "max_lifespan_step": 312, "fertilized_until_day": -1}
+    x, y = 1, 1
+    farm["tiles"][y][x] = tile
+    farm["farmer"] = [x, y]
+    farm["hands"] = []
+    off = decide(obs, dict(DEFAULT_PARAMS, harvest_water_first=False))
+    assert off["farmer"] == ["HARVEST"]
+    on = decide(obs, dict(DEFAULT_PARAMS, harvest_water_first=True))
+    assert on["farmer"] == ["WATER"]
+    tile["watered_today"], tile["yield_units"] = True, 6
+    assert decide(obs, dict(DEFAULT_PARAMS, harvest_water_first=True))["farmer"] == ["HARVEST"]
+
+
+def test_decide_harvest_rules_default_to_off():
+    for key in ("harvest_water_first", "ongoing_crop_harvest_at_cap", "animal_harvest_at_cap"):
+        assert DEFAULT_PARAMS[key] is (key == "harvest_water_first")
+
+
 def test_decide_max_hire_orders_per_turn_caps_hire_orders_this_turn():
     obs = _obs()
     params = dict(DEFAULT_PARAMS, dynamic_hiring=False, hires_per_day=20, max_hire_orders_per_turn=3)

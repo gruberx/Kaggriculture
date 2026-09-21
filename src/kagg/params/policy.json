@@ -82,5 +82,8 @@
   "day_plan_remaining_turns_aware": true,
   "no_plant_on_last_turn": true,
   "plant_priority": 1.75,
-  "dig_weed_priority": 1.8
+  "dig_weed_priority": 1.8,
+  "harvest_water_first": true,
+  "ongoing_crop_harvest_at_cap": false,
+  "animal_harvest_at_cap": false
 }
