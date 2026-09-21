@@ -57,10 +57,11 @@ def _run_day(farm, day, private, water):
         _end_of_hour(farm, day, hour)
 
 
-def best_crop_cycle(crop, max_day=18):
+def best_crop_cycle(crop, max_day=18, target_day=None):
     """Search every survivable watering schedule with the real engine rules.
 
-    Ranking: highest yield, then earliest harvest day, then fewest waterings.
+    Ranking: highest yield, then earliest harvest day, then fewest waterings. With `target_day` only a
+    harvest on exactly that day counts (the unfinished last cycle harvested on the final day).
     """
     import copy
 
@@ -75,20 +76,22 @@ def best_crop_cycle(crop, max_day=18):
             probe, ppr = copy.deepcopy(f), copy.deepcopy(pr)
             _act(probe, ppr, day, ["HARVEST"])  # harvest is allowed on the day, after that day's watering
             units = ppr["inventories"][0].get(crop, 0)
-            if units > 0:
+            if units > 0 and (target_day is None or day == target_day):
                 key = (-units, day, len(w))
                 if best[0] is None or key < best[0][0]:
                     best[0] = (key, units, day, w)
             for hour in range(TPD):
                 _end_of_hour(f, day, hour)
             tile = _tile(f)
-            if day < max_day and isinstance(tile, dict) and tile.get("kind") == "PLANT":
+            if day < (max_day if target_day is None else target_day) and isinstance(tile, dict) and tile.get("kind") == "PLANT":
                 visit(day + 1, f, pr, w)
 
     farm, private = _fresh()
     private["seeds"][crop] = 1
     _act(farm, private, 0, ["PLANT", crop])
     visit(0, farm, private, ())
+    if best[0] is None:
+        return 0, target_day, ()
     _, units, h, w = best[0]
     return units, h, w
 
@@ -97,18 +100,27 @@ def crop_report(crop):
     cd = CROPS[crop]
     units, h, water_days = best_crop_cycle(crop)
     cycles = (DAYS - 1) // h  # cycle k is planted on day k*h and harvested on day (k+1)*h <= 29
-    digs = cycles if cd["ongoing"] else 0  # an ongoing plant is not removed by HARVEST
+    rest = (DAYS - 1) - cycles * h  # days left after the last full harvest
+    # The unfinished last cycle is planted only if what it holds on the final day (collected and sold
+    # then) is worth more than its seed.
+    p_units, _, p_waters = best_crop_cycle(crop, target_day=rest) if rest >= 1 else (0, rest, ())
+    partial = p_units * PRICE[crop] > cd["seed"]
+    n_plant = cycles + (1 if partial else 0)
+    digs = (n_plant - 1) if cd["ongoing"] else 0  # an ongoing plant is not cleared by HARVEST
+    n_water = cycles * len(water_days) + (len(p_waters) if partial else 0)
+    n_units = cycles * units + (p_units if partial else 0)
+    per_cycle = units * PRICE[crop] - cd["seed"]
     return {
         "name": crop, "kind": "crop", "cycle_days": h, "cycles": cycles, "units_per_cycle": units,
-        "water_days": water_days, "seeds": cycles, "cost_seed": cycles * cd["seed"], "cost_animal": 0,
-        "cost_feed": 0, "plant": cycles, "water": cycles * len(water_days), "build": 0, "feed": 0,
-        "dig": digs, "harvest": cycles, "collect": 0, "units": cycles * units, "product": crop,
-        "product_value": cycles * units * PRICE[crop], "fertilizer_units": 0, "fertilizer_value": 0,
-        "leftover_units": 0,
+        "water_days": water_days, "partial_units": p_units if partial else 0, "cost_seed": n_plant * cd["seed"],
+        "cost_animal": 0, "cost_feed": 0, "plant": n_plant, "water": n_water, "build": 0, "feed": 0,
+        "dig": digs, "harvest": n_plant, "collect": 0, "units": n_units, "product": crop,
+        "product_value": n_units * PRICE[crop], "fertilizer_units": 0, "fertilizer_value": 0,
+        "ideal_per_day": per_cycle / h,
     }
 
 
-def animal_report(animal):
+def animal_report(animal, days=DAYS, collect_leftover=True):
     ad = ANIMALS[animal]
     farm, private = _fresh()
     inv = private["inventories"][0]
@@ -116,7 +128,8 @@ def animal_report(animal):
     fert = units = 0
     first_full = None
     leftover = 0
-    for day in range(DAYS):
+    last_cap_day = None
+    for day in range(days):
         for hour in range(TPD):
             if day == 0 and hour == 0:
                 _act(farm, private, day, ["BUILD_COOP" if ad["structure"] == "COOP" else "BUILD_PASTURE"])
@@ -127,17 +140,19 @@ def animal_report(animal):
             tile = _tile(farm)
             if hour == 2 and isinstance(tile, dict) and "animal" in tile:
                 # feed only when the second missed day would make the animal escape before the end
-                if tile["consecutive_unfed"] >= 1 and day < DAYS - 1:
+                if tile["consecutive_unfed"] >= 1 and day < days - 1:
                     inv["WHEAT"] = inv.get("WHEAT", 0) + 1
                     _act(farm, private, day, ["FEED"]); counts["feed"] += 1
                 if tile["fertilizer_available"]:
                     _act(farm, private, day, ["COLLECT_FERTILIZER"]); counts["collect"] += 1
                 if tile["yield_units"] >= ad["max_held"]:  # harvest only at the accumulation cap
                     _act(farm, private, day, ["HARVEST"]); counts["harvest"] += 1
+                    last_cap_day = day
                     if first_full is None:
                         first_full = day
-                if day == DAYS - 1:
-                    leftover = tile["yield_units"]  # accumulated but not at the cap: not collected
+                if day == days - 1 and collect_leftover and tile["yield_units"] > 0:
+                    leftover = tile["yield_units"]  # collected and sold on the final day
+                    _act(farm, private, day, ["HARVEST"]); counts["harvest"] += 1
             _end_of_hour(farm, day, hour)
     units = inv.get(ad["product"], 0)
     fert = inv.get("FERTILIZER", 0)
@@ -145,14 +160,28 @@ def animal_report(animal):
     escaped = not (isinstance(tile, dict) and "animal" in tile)
     return {
         "name": animal, "kind": "animal", "cycle_days": None, "cycles": counts["harvest"],
-        "units_per_cycle": ad["max_held"], "water_days": (), "seeds": 0, "cost_seed": 0,
+        "units_per_cycle": ad["max_held"], "water_days": (), "partial_units": leftover, "cost_seed": 0,
         "cost_animal": ad["cost"], "cost_feed": counts["feed"] * PRICE["WHEAT"], "plant": 0, "water": 0,
         "build": counts["build"] + counts["place"], "feed": counts["feed"], "dig": 0,
         "harvest": counts["harvest"], "collect": counts["collect"], "units": units, "product": ad["product"],
         "product_value": units * PRICE[ad["product"]], "fertilizer_units": fert,
         "fertilizer_value": fert * PRICE["FERTILIZER"], "leftover_units": leftover, "first_full": first_full,
-        "escaped": escaped,
+        "escaped": escaped, "last_cap_day": last_cap_day, "days": days,
     }
+
+
+def animal_ideal_per_day(animal):
+    """Profit per day if production ran past day 29 until the in-progress cycle completes.
+
+    The horizon is the first day count >= 30 whose last day is a harvest at the accumulation cap
+    (days counted like the 30-day window: purchase day 0 .. last harvest day).
+    """
+    for days in range(DAYS, 120):
+        r = animal_report(animal, days=days, collect_leftover=False)
+        if r["last_cap_day"] == days - 1:
+            _, _, profit, _ = summarize(r)
+            return profit / days, days
+    raise RuntimeError(animal)
 
 
 def summarize(r):
@@ -165,14 +194,19 @@ def summarize(r):
 def main():
     rows = [crop_report(c) for c in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON")]
     rows += [animal_report(a) for a in ("GOOSE", "COW", "SHEEP")]
-    print("product|cycle_days|cycles|cost_seed+animal|cost_feed|plant|water|build+place|feed|dig|harvest|collect_fert|"
-          "actions|product_units|product_value|fert_value|profit|profit/day|profit/action|leftover_units")
+    print("product|cycle_days|cost_seed+animal|cost_feed|plant|water|build+place|feed|dig|harvest|collect_fert|actions|"
+          "units|product_value|fert_value|profit|profit/day|profit/action|ideal/day(horizon)|final-day units")
     for r in rows:
         cost, revenue, profit, actions = summarize(r)
-        print(f"{r['name']}|{r['cycle_days']}|{r['cycles']}|{r['cost_seed'] + r['cost_animal']}|{r['cost_feed']}|"
+        if r["kind"] == "crop":
+            ideal = f"{r['ideal_per_day']:.1f}"
+        else:
+            v, d = animal_ideal_per_day(r["name"])
+            ideal = f"{v:.1f} ({d} d)"
+        print(f"{r['name']}|{r['cycle_days']}|{r['cost_seed'] + r['cost_animal']}|{r['cost_feed']}|"
               f"{r['plant']}|{r['water']}|{r['build']}|{r['feed']}|{r['dig']}|{r['harvest']}|{r['collect']}|{actions}|"
               f"{r['units']}|{r['product_value']}|{r['fertilizer_value']}|{profit}|{profit / DAYS:.1f}|"
-              f"{profit / actions:.1f}|{r['leftover_units']}")
+              f"{profit / actions:.1f}|{ideal}|{r['partial_units']}")
 
 
 if __name__ == "__main__":
