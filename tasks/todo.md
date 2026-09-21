@@ -3072,6 +3072,8 @@ project's own established finding, a fresh submission's score is volatile for it
       counts as occupied), my rates assumed the next plant is sown on the harvest day (cycle = age). `best_crop_cycle_fert(...,
       extra_days=1)` gives the page's convention: WHEAT best is then 6 units / 4 d / 120 = 24.0 per day (5 units / 3 d only wins
       with same-day sowing: 31.7), CARROT 25.0, TOMATO 32.5, STRAWBERRY 48.2, MELON 129.1; no fertilizer: 18.0 / 21.2 / 15.8 / 22.4 / 129.1.
+      **Convention chosen by the user (2026-09-21): "sow on the harvest day"** (cycle = age, `extra_days=0`, the script's default); the
+      parenthesised page-convention numbers are dropped from the tables.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
