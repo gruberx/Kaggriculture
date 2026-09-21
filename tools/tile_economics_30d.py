@@ -96,6 +96,71 @@ def best_crop_cycle(crop, max_day=18, target_day=None):
     return units, h, w
 
 
+FERT_COST = 20  # the user's assumption: one unit of fertilizer costs 20
+
+
+def _tile_key(tile):
+    return tuple(sorted(tile.items()))
+
+
+def best_crop_cycle_fert(crop, fert_cost=FERT_COST, max_day=18):
+    """Best watering + FERTILIZE schedule for one plant, judged by profit per cycle day.
+
+    Dynamic programming over days with the real engine rules: a state is the tile dict, and for each
+    state only the Pareto-best (fertilizers, waterings) counts are kept. FERTILIZE (active on the day
+    and the next two) is applied before WATER on the same day. A harvest on day d, after that day's
+    actions, is a candidate: profit = units * price - seed - fert_cost * fertilizers, rate = profit / d.
+    Ranking: highest rate, then fewest actions.
+    """
+    import copy
+
+    price, seed = PRICE[crop], CROPS[crop]["seed"]
+    farm, private = _fresh()
+    private["seeds"][crop] = 1
+    _act(farm, private, 0, ["PLANT", crop])
+    frontier = {_tile_key(_tile(farm)): (_tile(farm), [(0, 0, ())])}
+    best = None
+    for day in range(max_day + 1):
+        nxt = {}
+        for tile, pareto in frontier.values():
+            for fert in (0, 1):
+                for water in (0, 1):
+                    f = {"money": 10**9, "tiles": [[copy.deepcopy(tile)]], "farmer": [0, 0], "hands": [], "hires_today": 0}
+                    pr = K._new_private()
+                    pr["inventories"][0]["FERTILIZER"] = 1 if fert else 0
+                    if fert:
+                        _act(f, pr, day, ["FERTILIZE"])
+                    if water:
+                        _act(f, pr, day, ["WATER"])
+                    probe, ppr = copy.deepcopy(f), copy.deepcopy(pr)
+                    _act(probe, ppr, day, ["HARVEST"])
+                    units = ppr["inventories"][0].get(crop, 0)
+                    for nf, nw, sched in pareto:
+                        ntag = sched + (((day, "F"),) if fert else ()) + (((day, "W"),) if water else ())
+                        if units > 0 and day >= 1:
+                            profit = units * price - seed - fert_cost * (nf + fert)
+                            actions = 1 + (nw + water) + (nf + fert) + (1 if CROPS[crop]["ongoing"] else 0) + 1
+                            key = (-profit / day, actions)
+                            if best is None or key < best[0]:
+                                best = (key, units, day, nf + fert, nw + water, ntag, profit)
+                    for hour in range(TPD):
+                        _end_of_hour(f, day, hour)
+                    t2 = _tile(f)
+                    if day < max_day and isinstance(t2, dict) and t2.get("kind") == "PLANT":
+                        k2 = _tile_key(t2)
+                        entry = nxt.setdefault(k2, (t2, []))
+                        for nf, nw, sched in pareto:
+                            cand = (nf + fert, nw + water, sched + (((day, "F"),) if fert else ()) + (((day, "W"),) if water else ()))
+                            lst = entry[1]
+                            if any(o[0] <= cand[0] and o[1] <= cand[1] for o in lst):
+                                continue
+                            lst[:] = [o for o in lst if not (cand[0] <= o[0] and cand[1] <= o[1])] + [cand]
+        frontier = nxt
+    _, units, h, ferts, waters, sched, profit = best
+    return {"units": units, "days": h, "ferts": ferts, "waters": waters, "schedule": sched, "profit": profit,
+            "fert_days": tuple(d for d, k in sched if k == "F"), "water_days": tuple(d for d, k in sched if k == "W")}
+
+
 def crop_report(crop):
     cd = CROPS[crop]
     units, h, water_days = best_crop_cycle(crop)
@@ -229,6 +294,30 @@ def crop_cycle_report(crop):
     }
 
 
+def crop_fert_cycle_report(crop):
+    """One plant life with the most profitable FERTILIZE + WATER schedule (cost of one fertilizer = 20)."""
+    cd = CROPS[crop]
+    r = best_crop_cycle_fert(crop)
+    dig = 1 if cd["ongoing"] else 0
+    return {
+        "name": crop, "cycle_days": r["days"], "cost_seed": cd["seed"], "cost_fert": FERT_COST * r["ferts"],
+        "plant": 1, "water": r["waters"], "fert": r["ferts"], "dig": dig, "harvest": 1,
+        "actions": 1 + r["waters"] + r["ferts"] + dig + 1, "units": r["units"],
+        "product_value": r["units"] * PRICE[crop], "profit": r["profit"], "fert_days": r["fert_days"],
+        "water_days": r["water_days"],
+    }
+
+
+def main_fert():
+    print("product|cycle_days|cost_seed|cost_fert|plant|water|fertilize|dig|harvest|actions|units|product_value|"
+          "profit|profit/action|profit/day per cycle|fertilize on day|water on days")
+    for c in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON"):
+        r = crop_fert_cycle_report(c)
+        print(f"{r['name']}|{r['cycle_days']}|{r['cost_seed']}|{r['cost_fert']}|{r['plant']}|{r['water']}|{r['fert']}|"
+              f"{r['dig']}|{r['harvest']}|{r['actions']}|{r['units']}|{r['product_value']}|{r['profit']}|"
+              f"{r['profit'] / r['actions']:.1f}|{r['profit'] / r['cycle_days']:.1f}|{r['fert_days']}|{r['water_days']}")
+
+
 def main():
     """Per-life table: plants = one planting-to-harvest cycle; animals = a 30-day cycle."""
     rows = [crop_cycle_report(c) for c in ("WHEAT", "CARROT", "TOMATO", "STRAWBERRY", "MELON")]
@@ -253,3 +342,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print()
+    main_fert()

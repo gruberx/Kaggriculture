@@ -3050,6 +3050,13 @@ project's own established finding, a fresh submission's score is volatile for it
       (plant: planting to harvest, DIG counted for ongoing crops; animal: a 30-day cycle) with "profit per day per cycle" =
       profit / cycle days: SHEEP 8475 / 30 = 282.5, COW 7535 / 30 = 251.2, GOOSE 4575 / 30 = 152.5, MELON 1420 / 10 = 142.0, CARROT
       85 / 3 = 28.3, STRAWBERRY 380 / 16 = 23.8, WHEAT 90 / 4 = 22.5, TOMATO 190 / 11 = 17.3.
+      **Fertilizer for plants (the user's request, cost of one fertilizer = 20)**: `best_crop_cycle_fert` searches watering + FERTILIZE
+      schedules with the real engine rules (DP over tile states, Pareto on (fertilizers, waterings)) for the highest profit per cycle
+      day. Best: WHEAT fertilize day 2, waters 0/2/3, harvest day 3: 5 units, profit 95 / 3 d = 31.7 (was 22.5); CARROT fertilize day 3,
+      4 units, 100 / 3 = 33.3 (28.3); TOMATO fertilize day 7 (both events x2), harvest day 9: 170 / 9 = 18.9 (17.3); STRAWBERRY fertilize
+      day 9, harvest day 12: 360 / 12 = 30.0 (23.8); MELON no fertilizer (first harvest day 10 is fixed by `first_yield_day`, so
+      fertilizer only saves waterings): 142.0. Break-even fertilizer price for the day rate: wheat ~47, carrot ~35, tomato ~34,
+      strawberry ~95.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
