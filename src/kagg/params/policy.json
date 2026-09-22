@@ -46,7 +46,7 @@
   "investment_commit_margin": 0.0,
   "always_pursue_one_animal": true,
   "always_pursue_animal_target_count": 1,
-  "water_bonus_window_aware": false,
+  "water_bonus_window_aware": true,
   "parallel_animal_acquisition": false,
   "feed_pickup_unpinned": false,
   "animal_pickup_unpinned": false,
@@ -86,5 +86,6 @@
   "harvest_water_first": true,
   "ongoing_crop_harvest_at_cap": false,
   "animal_harvest_at_cap": false,
-  "dig_spent_ongoing_crops": true
+  "dig_spent_ongoing_crops": true,
+  "water_idle_priority_when_safe": true
 }

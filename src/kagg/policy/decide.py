@@ -664,7 +664,11 @@ _DEFAULT_INVESTMENT_COMMIT_MARGIN = 0.0
 # routine split already does. Kept available (tested, off by default) for
 # that future revision - same convention as every other T8.3/T8.10-series
 # rejection.
-_DEFAULT_WATER_BONUS_WINDOW_AWARE = False
+#
+# T8.61 (enabled 2026-09-22 on the user's request): re-measured against today's much-changed
+# defaults (day-plan hiring, harvest_water_first, etc.) - now decisively positive: +1.0%/+2.3% vs
+# starter/pass (40 seeds), arena 46W/4L. See tasks/todo.md T8.61 for the full trace.
+_DEFAULT_WATER_BONUS_WINDOW_AWARE = True
 
 # T8.22, the user's own request: verified directly against
 # kaggriculture.py that BUY_ANIMAL has no same-type limit at all (only
@@ -1034,6 +1038,16 @@ _DEFAULT_ANIMAL_HARVEST_AT_CAP = False
 # left on it) right away instead of waiting for it to decay into a weed, and stop watering it. Skipped
 # when no crop could still be planted and mature before the season ends (`_crop_has_time_to_mature`).
 _DEFAULT_DIG_SPENT_ONGOING_CROPS = True
+
+# T8.62 (the user's own scheme, 2026-09-22): a plant tile's routine WATER, when it is both safe (not
+# urgent - a miss today only costs one day of the two-day weed buffer) and useless (adds no yield
+# today - see kagg.policy.tasks._water_is_useless_today), drops to PRIORITY_IDLE_ONLY - the very last
+# thing assigned this turn, below DIG/COLLECT_FERTILIZER/CARE. It still gets watered whenever a turn
+# genuinely has spare capacity (real anti-weed insurance, "free" since nothing else needed that unit),
+# but never competes with anything productive; a turn with none simply skips it, and the tile turns
+# urgent (top priority) the very next day exactly like an ordinary missed watering. Reaches ongoing
+# crops (tomato/strawberry) too, unlike water_bonus_window_aware, which is scoped to one-time crops.
+_DEFAULT_WATER_IDLE_PRIORITY_WHEN_SAFE = True
 
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
@@ -2096,6 +2110,9 @@ def decide(obs: dict, params: dict) -> dict:
         plant_priority=params.get("plant_priority", _DEFAULT_PLANT_PRIORITY),
         dig_weed_priority=params.get("dig_weed_priority", _DEFAULT_DIG_WEED_PRIORITY),
         harvest_rules=harvest_rules,
+        water_idle_priority_when_safe=params.get(
+            "water_idle_priority_when_safe", _DEFAULT_WATER_IDLE_PRIORITY_WHEN_SAFE
+        ),
     )
     # Reserve WHEAT from routine selling once any animal exists on the
     # farm - see market.sell_orders's own docstring for the real deadlock

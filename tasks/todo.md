@@ -3130,7 +3130,25 @@ project's own established finding, a fresh submission's score is volatile for it
       both reach 100% of attainable. **Residual gap**: WHEAT age 3 still misses 42-100% of the time even with the flag on - both age 2
       and age 3 sit at the *same* `ROUTINE_CARE` tier once inside the window, so a day needing both competes on raw proximity, not on
       which one is more valuable; not investigated further (no evidence yet that fixing it would net more than the flag already does).
-      **Not enabled by default yet - pending the user's decision.**
+      **Enabled by default on the user's explicit request (2026-09-22)**. Golden re-recorded, see T8.62's own entry.
+- [x] T8.62 - fix the still-remaining useless watering (the user's own scheme, 2026-09-22, follow-up to T8.61): a plant tile's
+      routine (non-urgent) WATER, when it is both safe (`consecutive_unwatered == 0` - missing it today only spends one of the
+      two-day weed buffer, not the plant's life) and useless (adds no yield today - `_water_is_useless_today`: one-time crop out of
+      its bonus window or already at the cap; ongoing crop, unless fertilized AND tonight is a real scheduled production night, the
+      FERTILIZE-combo case), drops to a brand new `PRIORITY_IDLE_ONLY = 5` - below DIG/COLLECT_FERTILIZER/CARE, the very last thing
+      assigned this turn. It still gets watered whenever a turn has genuine spare capacity (still real anti-weed insurance, "for
+      free"), but never competes with anything productive; a turn with none simply skips it, and the tile turns urgent (top
+      priority) the very next day exactly like an ordinary missed watering - no new cross-day state needed, `consecutive_unwatered`
+      already carries it. Reaches ongoing crops (tomato/strawberry, useless nearly their whole life), unlike `water_bonus_window_
+      aware` which is scoped to one-time crops; wins over it when both are on (checked first). Flag `water_idle_priority_when_safe`,
+      7 tests in test_policy_tasks + 2 in test_policy_decide. Measured, 40 external seeds + arena (`tools/measure_t862.py`): starter
+      64659 -> 67060 (+3.7%, better 34/40), pass 64725 -> 67240 (+3.9%, better 32/40), arena 38W/12L. **Enabled by default on the
+      user's explicit request.** Golden re-recorded a 34th time together with T8.61: starter 65339/72217/85783 ->
+      66580/76812/84264, pass 59288/79188/80535 -> 68233/79722/80671. Test fixture fix: `test_seed_purchase_waits_while_watering_
+      outranks_planting`'s synthetic WHEAT tiles moved from age 1 to age 2 (now inside the bonus window) so `water_bonus_window_
+      aware`'s new default doesn't demote them out of the `seed_purchase_max_pending_water` gate's count - a real, correct
+      consequence of T8.61's default flip, not a regression. Revert: `water_idle_priority_when_safe` False (and `water_bonus_
+      window_aware` False for T8.61).
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

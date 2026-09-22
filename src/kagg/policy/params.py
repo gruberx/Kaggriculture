@@ -601,7 +601,10 @@ DEFAULT_PARAMS = {
     # lead it exposes (a middle priority tier, not all the way to
     # MAINTENANCE). Kept available (tested, off by default) for that
     # future revision.
-    "water_bonus_window_aware": False,
+    # T8.61 (enabled 2026-09-22 on the user's request; old value False): re-measured against
+    # today's defaults - +1.0%/+2.3% vs starter/pass (40 seeds), arena 46W/4L. See
+    # kagg.policy.decide._DEFAULT_WATER_BONUS_WINDOW_AWARE for the full history and this session's trace.
+    "water_bonus_window_aware": True,
     # T8.18: PICKUP has no structural prerequisite (verified directly
     # against kaggriculture.py) - only PLACE needs both an animal in hand
     # and a matching built structure. Off by default reproduces the
@@ -791,6 +794,11 @@ DEFAULT_PARAMS = {
     # +0.1%/-0.0% vs starter/pass, arena 30W/19L/1T): DIG a spent tomato/strawberry right after its
     # last harvest (and do not water it); skipped once no crop can still mature before the season ends.
     "dig_spent_ongoing_crops": True,
+    # T8.62 (enabled 2026-09-22 on the user's own scheme; old value False; measured +3.7%/+3.9% vs
+    # starter/pass, arena 38W/12L): a plant tile's routine WATER, when both safe (not urgent) and
+    # useless (adds no yield today), drops to the very last priority of the turn instead of its
+    # normal tier - see kagg.policy.decide._DEFAULT_WATER_IDLE_PRIORITY_WHEN_SAFE.
+    "water_idle_priority_when_safe": True,
 }
 
 

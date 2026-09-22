@@ -15,6 +15,7 @@ from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
 from kagg.policy.tasks import (
     PRIORITY_ANIMAL_SETUP,
     PRIORITY_HARVEST,
+    PRIORITY_IDLE_ONLY,
     PRIORITY_LOW_VALUE_CARE,
     PRIORITY_MAINTENANCE,
     PRIORITY_PLANT,
@@ -163,6 +164,82 @@ def test_build_task_list_water_bonus_window_aware_defaults_to_false():
     tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # WHEAT, age 0
     without_flag = build_task_list(tiles, current_day=0)
     with_flag_off = build_task_list(tiles, current_day=0, water_bonus_window_aware=False)
+    assert without_flag == with_flag_off == [Task(PRIORITY_ROUTINE_CARE, (2, 2), "WATER")]
+
+
+def test_water_idle_priority_when_safe_demotes_a_safe_useless_watering_to_the_bottom():
+    # T8.62, the user's own scheme: WHEAT age 0 (out of the {2,3,4} bonus window), not urgent
+    # (consecutive_unwatered=0, i.e. watered yesterday or freshly safe) - adds no yield today, and
+    # missing it only costs one day of the two-day weed buffer, so it drops to the very last tier.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # WHEAT, age 0
+    tasks = build_task_list(tiles, current_day=0, water_idle_priority_when_safe=True)
+    assert tasks == [Task(PRIORITY_IDLE_ONLY, (2, 2), "WATER")]
+
+
+def test_water_idle_priority_when_safe_leaves_a_yield_productive_watering_at_routine_care():
+    # Same tile at age 2 - inside the bonus window, watering today genuinely adds yield - must stay
+    # at the normal routine tier so it competes fairly for labor, not get buried at the bottom.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # WHEAT
+    tasks = build_task_list(tiles, current_day=2, water_idle_priority_when_safe=True)
+    assert tasks == [Task(PRIORITY_ROUTINE_CARE, (2, 2), "WATER")]
+
+
+def test_water_idle_priority_when_safe_never_demotes_an_urgent_watering():
+    # consecutive_unwatered >= 1: missing today is the plant's last chance before it becomes a weed
+    # tonight - must stay at PRIORITY_PREVENT_LOSS regardless of the flag.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=1, watered_today=False, planted_day=0)  # WHEAT, age 0
+    tasks = build_task_list(tiles, current_day=0, water_idle_priority_when_safe=True)
+    assert tasks == [Task(PRIORITY_PREVENT_LOSS, (2, 2), "WATER")]
+
+
+def test_water_idle_priority_when_safe_reaches_ongoing_crops_unlike_water_bonus_window_aware():
+    # An ongoing crop's watering never adds yield on its own (only the FERTILIZE-combo, tested
+    # separately) - water_bonus_window_aware deliberately never touches it (see that flag's own
+    # test), but this flag does: it is useless every single day of the plant's life.
+    tiles = _empty_tiles()
+    tile = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)
+    tile["crop"] = "STRAWBERRY"
+    tiles[2][2] = tile
+    tasks = build_task_list(tiles, current_day=5, water_idle_priority_when_safe=True)
+    assert tasks == [Task(PRIORITY_IDLE_ONLY, (2, 2), "WATER")]
+
+
+def test_water_idle_priority_when_safe_keeps_an_ongoing_crop_at_routine_care_on_a_fertilized_production_night():
+    # T8.62's own correctness case: an ongoing crop fertilized today, on a night its scheduled
+    # production actually fires, doubles that production if watered today (the real FERTILIZE-combo
+    # bonus) - so today's watering is NOT useless and must stay at the normal tier, not the bottom.
+    tile = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)
+    tile["crop"] = "TOMATO"  # first_yield_day=8, interval=1: fires every night from age 8
+    tile["fertilized_until_day"] = 8
+    tiles = _empty_tiles()
+    tiles[2][2] = tile
+    tasks = build_task_list(tiles, current_day=8, water_idle_priority_when_safe=True)
+    assert tasks == [Task(PRIORITY_ROUTINE_CARE, (2, 2), "WATER")]
+    # a day fertilizer is active but tonight is not a scheduled production night: still useless.
+    off_night = dict(tile, planted_day=2)  # age 6 at day 8: before first_yield_day, no event tonight
+    tiles[2][2] = off_night
+    tasks = build_task_list(tiles, current_day=8, water_idle_priority_when_safe=True)
+    assert tasks == [Task(PRIORITY_IDLE_ONLY, (2, 2), "WATER")]
+
+
+def test_water_idle_priority_when_safe_wins_over_water_bonus_window_aware_when_both_are_on():
+    # For a one-time crop out of its window, both flags would fire - the deeper (idle) demotion wins.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # WHEAT, age 0
+    tasks = build_task_list(
+        tiles, current_day=0, water_bonus_window_aware=True, water_idle_priority_when_safe=True
+    )
+    assert tasks == [Task(PRIORITY_IDLE_ONLY, (2, 2), "WATER")]
+
+
+def test_water_idle_priority_when_safe_defaults_to_false():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(consecutive_unwatered=0, watered_today=False, planted_day=0)  # WHEAT, age 0
+    without_flag = build_task_list(tiles, current_day=0)
+    with_flag_off = build_task_list(tiles, current_day=0, water_idle_priority_when_safe=False)
     assert without_flag == with_flag_off == [Task(PRIORITY_ROUTINE_CARE, (2, 2), "WATER")]
 
 

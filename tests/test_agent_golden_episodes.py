@@ -442,13 +442,19 @@ AGENT_MAIN_PATH = os.path.join(
 # 65339/72217/85783, pass 60542/78810/79213 -> 59288/79188/80535 (small mixed moves, as expected from a
 # ~null external measurement). T8.38 escape guardrail re-checked, not re-recorded.
 # Revert = dig_spent_ongoing_crops False.
+# Re-recorded a 34th time on 2026-09-22, the user's explicit decisions to default both
+# water_bonus_window_aware=True (T8.61, re-measured +1.0%/+2.3% vs starter/pass) and
+# water_idle_priority_when_safe=True (T8.62, the user's own scheme, +3.7%/+3.9% on top of it):
+# starter 65339/72217/85783 -> 66580/76812/84264, pass 59288/79188/80535 -> 68233/79722/80671.
+# T8.38 escape guardrail re-checked, not re-recorded.
+# Revert = water_bonus_window_aware False and water_idle_priority_when_safe False.
 _GOLDEN = {
-    ("starter", 1): (65339.0, 3786.0),
-    ("starter", 2): (72217.0, 3493.0),
-    ("starter", 3): (85783.0, 3605.0),
-    ("pass", 1): (59288.0, 3000.0),
-    ("pass", 2): (79188.0, 3000.0),
-    ("pass", 3): (80535.0, 3000.0),
+    ("starter", 1): (66580.0, 3749.0),
+    ("starter", 2): (76812.0, 3516.0),
+    ("starter", 3): (84264.0, 3603.0),
+    ("pass", 1): (68233.0, 3000.0),
+    ("pass", 2): (79722.0, 3000.0),
+    ("pass", 3): (80671.0, 3000.0),
 }
 
 

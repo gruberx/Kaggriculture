@@ -917,6 +917,34 @@ def test_decide_harvest_water_first_waters_then_harvests_a_ripe_melon():
     assert decide(obs, dict(DEFAULT_PARAMS, harvest_water_first=True))["farmer"] == ["HARVEST"]
 
 
+def test_decide_water_idle_priority_when_safe_lets_a_farther_weed_dig_win_over_a_closer_useless_water():
+    # T8.62: assign_units resolves a whole priority tier before ever looking at the next one, so tier
+    # always beats distance - a farmer standing right next to a safe, useless WHEAT watering (age 0)
+    # but far from a weed must still WATER without the flag (ROUTINE_CARE=2 < PRIORITY_MAINTENANCE=4
+    # for DIG), and must go DIG the far weed instead once the flag drops the watering below it.
+    obs = _obs()
+    farm = obs["farms"][0]
+    farm["tiles"][4][4] = {"kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": False,
+                           "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
+                           "fertilized_until_day": -1}
+    farm["tiles"][9][9] = {"kind": "WEED"}
+    farm["farmer"] = [4, 4]  # standing right on the wheat tile, far from the weed
+    farm["hands"] = []
+    # Pin the unrelated T8.55/T8.61 defaults that would otherwise also demote/reorder this specific
+    # tile (dig_weed_priority, water_bonus_window_aware) so only water_idle_priority_when_safe varies.
+    baseline = dict(DEFAULT_PARAMS, dig_spent_ongoing_crops=False, dig_weed_priority=None,
+                    water_bonus_window_aware=False)
+    off = decide(obs, dict(baseline, water_idle_priority_when_safe=False))
+    assert off["farmer"] == ["WATER"]
+    on = decide(obs, dict(baseline, water_idle_priority_when_safe=True))
+    assert on["farmer"] in (["SOUTH"], ["EAST"])  # heading toward the weed, not watering
+
+
+def test_decide_water_idle_priority_when_safe_defaults_to_true():
+    # 2026-09-22: enabled by the user's request (T8.62), measured +3.7%/+3.9% vs starter/pass.
+    assert DEFAULT_PARAMS["water_idle_priority_when_safe"] is True
+
+
 def test_decide_dig_spent_ongoing_crops_digs_a_spent_tomato_unless_nothing_can_mature_any_more():
     # T8.60: a tomato (productions at ages 8-11) at age 11 with nothing left on it: DIG it now; from day 27
     # on (no crop can still mature before day 30) leave it alone.
@@ -932,7 +960,9 @@ def test_decide_dig_spent_ongoing_crops_digs_a_spent_tomato_unless_nothing_can_m
         return decide(obs, dict(DEFAULT_PARAMS, **{"dig_spent_ongoing_crops": True, **overrides}))["farmer"]
 
     assert farmer_action(15) == ["DIG"]
-    assert farmer_action(15, dig_spent_ongoing_crops=False) == ["WATER"]
+    # T8.62's water_idle_priority_when_safe would otherwise also demote this same spent (permanently
+    # useless) tomato's WATER off to the bottom tier - pin it off to isolate dig_spent_ongoing_crops.
+    assert farmer_action(15, dig_spent_ongoing_crops=False, water_idle_priority_when_safe=False) == ["WATER"]
     assert farmer_action(27) != ["DIG"]  # too late to plant anything that matures
 
 
@@ -2864,7 +2894,10 @@ def _obs_with_queued_work(n_unwatered=0, n_ripe_melons=0):
     cells = [(r, c) for r in range(5) for c in range(5)]
     for r, c in cells[:n_unwatered]:
         tiles[r][c] = {
-            "kind": "PLANT", "crop": "WHEAT", "planted_day": 9, "watered_today": False,
+            # planted_day 8 -> age 2 at day 10, inside WHEAT's bonus window {2,3,4} - stays at
+            # PRIORITY_ROUTINE_CARE even with water_bonus_window_aware on (T8.61's default), so this
+            # still counts as "pending water" for the seed_purchase_max_pending_water gate below.
+            "kind": "PLANT", "crop": "WHEAT", "planted_day": 8, "watered_today": False,
             "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": 120,
             "fertilized_until_day": -1,
         }

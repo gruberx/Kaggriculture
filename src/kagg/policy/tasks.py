@@ -85,6 +85,16 @@ PRIORITY_PLANT = 3
 # integer tiers.
 PRIORITY_LOW_VALUE_CARE = 3.5
 PRIORITY_MAINTENANCE = 4
+# T8.62 (the user's own scheme, 2026-09-22): the very last thing a turn ever assigns a unit to -
+# below DIG/COLLECT_FERTILIZER/CARE, so it only ever picks up units nothing else this turn needs.
+# For a WATER on a plant tile that (a) is safe today (not urgent: consecutive_unwatered == 0, i.e.
+# it *was* watered yesterday - missing it today only sets consecutive_unwatered to 1, one full day
+# short of the weed threshold) and (b) would add no yield today anyway - see
+# `_water_is_useless_today`'s own docstring. Whenever a turn actually has spare capacity this still
+# gets done (real anti-weed insurance for a day the labor budget can genuinely spare), but it never
+# competes with anything productive; a turn with no spare capacity simply skips it, and the tile
+# turns urgent (PRIORITY_PREVENT_LOSS) the very next day, exactly like an ordinary missed watering.
+PRIORITY_IDLE_ONLY = 5
 
 # How much WHEAT to PICKUP in one trip once any is needed for feeding -
 # more than the 1 unit a single FEED consumes, so the farmer doesn't have
@@ -324,6 +334,7 @@ def build_task_list(
     plant_priority: float | None = None,
     dig_weed_priority: float | None = None,
     harvest_rules: HarvestRules | None = None,
+    water_idle_priority_when_safe: bool = False,
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
 
@@ -522,6 +533,7 @@ def build_task_list(
                         water_bonus_window_aware,
                         defer_one_time_harvest_to_max_yield,
                         harvest_rules,
+                        water_idle_priority_when_safe,
                     )
                 )
             elif "animal" in tile:
@@ -738,6 +750,7 @@ def _plant_tile_tasks(
     water_bonus_window_aware: bool = False,
     defer_one_time_harvest_to_max_yield: bool = False,
     harvest_rules: HarvestRules | None = None,
+    water_idle_priority_when_safe: bool = False,
 ) -> list[Task]:
     tasks = []
     if harvest_rules is not None and harvest_rules.dig_spent and is_spent_ongoing(tile, current_day):
@@ -758,7 +771,15 @@ def _plant_tile_tasks(
     if not tile.get("watered_today", False) and not water_first:
         urgent = tile.get("consecutive_unwatered", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
-        if water_bonus_window_aware and not urgent:
+        if water_idle_priority_when_safe and not urgent and _water_is_useless_today(tile, current_day):
+            # T8.62, the user's own scheme: whenever this watering is both safe (not urgent - missing
+            # it today only costs one day of buffer, not the plant's life) and useless (adds no yield
+            # today), it is the last thing anyone gets assigned this turn - see PRIORITY_IDLE_ONLY's
+            # own docstring. Checked before water_bonus_window_aware below so it wins whenever both are
+            # on (a deeper demotion, and the only one that reaches ongoing crops at all - water_bonus_
+            # window_aware is scoped to one-time crops only).
+            priority = PRIORITY_IDLE_ONLY
+        elif water_bonus_window_aware and not urgent:
             # T8.11, the user's own observation: the real WATER handler
             # (kaggriculture.py:431-443) only ever adds yield for a
             # *one-time* crop (WHEAT/CARROT/MELON), and only on ages
@@ -860,6 +881,38 @@ def _water_adds_yield(tile: dict, current_day: int) -> bool:
         return False
     age = current_day - tile["planted_day"]
     return age in watering_bonus_window(tile["crop"]) and tile.get("yield_units", 0) < cd["max_yield"]
+
+
+def _ongoing_fires_tonight(tile: dict, current_day: int) -> bool:
+    """T8.62: True if tonight's midnight refresh actually produces a scheduled yield for this ongoing
+    crop, mirroring the real engine's own `_daily_refresh_plants` schedule check exactly (production
+    fires regardless of watering; only the FERTILIZE-combo doubling cares whether today was watered)."""
+    cd = CROPS[tile["crop"]]
+    next_day = current_day + 1
+    days_since_first = next_day - tile["planted_day"] - cd["first_yield_day"]
+    if days_since_first < 0 or days_since_first % cd["interval"] != 0:
+        return False
+    return days_since_first // cd["interval"] + 1 <= cd["max_yield"]
+
+
+def _water_is_useless_today(tile: dict, current_day: int) -> bool:
+    """T8.62: True if a WATER on this plant tile today adds no yield at all, one-time or ongoing.
+
+    One-time crop: reuses `_water_adds_yield` (age outside the bonus window, or already at the cap).
+    Ongoing crop: watering itself never adds yield directly - the only way it matters is the
+    FERTILIZE-combo doubling, which needs both an active fertilizer application *and* today being a
+    real scheduled production night (`_ongoing_fires_tonight`); every other day is pure anti-weed
+    insurance, useless by the same real-handler definition `_water_adds_yield` already uses for
+    one-time crops. Correct even with `use_fertilizer` on (unlike a plain "ongoing = always useless"
+    shortcut, which would wrongly deprioritize the one watering that actually doubles a fertilized
+    production night) - though under today's shipped `use_fertilizer=False` no tile is ever fertilized,
+    so this branch is dormant in practice.
+    """
+    cd = CROPS[tile["crop"]]
+    if not cd["ongoing"]:
+        return not _water_adds_yield(tile, current_day)
+    fertilized = tile.get("fertilized_until_day", -1) >= current_day
+    return not (fertilized and _ongoing_fires_tonight(tile, current_day))
 
 
 def is_spent_ongoing(tile: dict, current_day: int) -> bool:
