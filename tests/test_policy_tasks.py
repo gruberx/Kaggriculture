@@ -1712,3 +1712,25 @@ def test_animals_are_harvested_only_when_the_next_production_would_overflow():
     assert wanted(1, pending=3)  # 1 + 1 + 3 > 4
     assert wanted(1, r=HarvestRules(animals_at_cap=True, harvest_all=True))
     assert not wanted(0)
+
+
+def test_spent_ongoing_plant_is_dug_not_watered_and_only_when_the_tile_is_still_useful():
+    # T8.60: tomato: 4 productions at ages 8-11; strawberry: ages 10, 12, 14, 16.
+    from kagg.policy.tasks import is_spent_ongoing
+
+    spent = _crop("TOMATO", yield_units=0)
+    assert is_spent_ongoing(spent, 11) and not is_spent_ongoing(spent, 10)  # age 10: 2 productions to go
+    assert not is_spent_ongoing(_crop("TOMATO", yield_units=2), 11)  # still holds produce: harvest first
+    assert not is_spent_ongoing(_crop("WHEAT", yield_units=0), 20)  # one-time crops never
+    assert is_spent_ongoing(_crop("STRAWBERRY", yield_units=0), 16)
+    assert not is_spent_ongoing(_crop("STRAWBERRY", yield_units=0), 14)
+    tiles = _empty_tiles(); tiles[2][2] = spent
+    assert _ops(build_task_list(tiles, current_day=11)) == [("WATER", False)]  # legacy: watered until it decays
+    rules = HarvestRules(dig_spent=True)
+    tasks = build_task_list(tiles, current_day=11, harvest_rules=rules)
+    assert _ops(tasks) == [("DIG", False)]
+    assert build_task_list(tiles, current_day=10, harvest_rules=rules)[0].op == "WATER"  # not spent yet
+    assert build_task_list(tiles, current_day=11, harvest_rules=HarvestRules(dig_spent=True, dig_spent_useful=False)) == []
+    assert crop_tile_day_actions(spent, 11, harvest_rules=rules) == 1
+    assert crop_tile_day_actions(spent, 11, harvest_rules=HarvestRules(dig_spent=True, dig_spent_useful=False)) == 0
+    assert crop_tile_day_actions(spent, 11) == 1  # legacy: the WATER

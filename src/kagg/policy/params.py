@@ -787,6 +787,9 @@ DEFAULT_PARAMS = {
     "harvest_water_first": True,
     "ongoing_crop_harvest_at_cap": False,
     "animal_harvest_at_cap": False,
+    # T8.60 (off until measured): DIG a spent tomato/strawberry right after its last harvest (and do not
+    # water it); skipped once no crop can still mature before the season ends.
+    "dig_spent_ongoing_crops": False,
 }
 
 

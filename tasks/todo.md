@@ -3103,6 +3103,15 @@ project's own established finding, a fresh submission's score is volatile for it
       sold on days 27-28 and the price collapses. **Shipped `harvest_water_first=True` only**; the other two stay False. Golden
       re-recorded a 32nd time (starter 53182/73202/80919 -> 65522/71436/85801, pass 62075/73091/75537 -> 60542/78810/79213). Revert:
       `harvest_water_first` False. Not done: DIG a spent ongoing plant right after its last harvest (it now waits for the weed).
+- [x] T8.60 - DIG a spent tomato/strawberry right after its last harvest (the user's request, 2026-09-21, "skip it on the last
+      turns when nothing can be planted any more"). `HarvestRules.dig_spent` (`is_spent_ongoing`: every scheduled production fired and
+      nothing left on the plant): the tile gets one DIG (at the weed-DIG tier) and no WATER (the forecast counts 1 DIG, or 0);
+      `dig_spent_useful` = any crop still matures if planted today (`_crop_has_time_to_mature`, today carrot: day <= 26), otherwise the spent
+      plant is left alone. Flag `dig_spent_ongoing_crops` (default False), 2 tests. Measured, 40 external seeds + arena
+      (`tools/measure_t860.py`): starter 63990 -> 64045 (+0.1%, better 18/40), pass 63310 -> 63294 (-0.0%, 16/40), arena 30W/19L/1T.
+      Reason for the null result: it fires only 2-3 times per game (seeds 900/901: DIG on plants 2/3, weed DIGs still 38-56, WATER on spent
+      plants 4-5 -> 0), because a spent plant turns into a weed at the very next midnight and the ordinary weed DIG already picks the
+      tile up; the gain is the rest of one day. **Not enabled.**
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value

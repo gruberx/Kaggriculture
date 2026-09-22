@@ -917,8 +917,27 @@ def test_decide_harvest_water_first_waters_then_harvests_a_ripe_melon():
     assert decide(obs, dict(DEFAULT_PARAMS, harvest_water_first=True))["farmer"] == ["HARVEST"]
 
 
+def test_decide_dig_spent_ongoing_crops_digs_a_spent_tomato_unless_nothing_can_mature_any_more():
+    # T8.60: a tomato (productions at ages 8-11) at age 11 with nothing left on it: DIG it now; from day 27
+    # on (no crop can still mature before day 30) leave it alone.
+    def farmer_action(day, **overrides):
+        obs = _obs()
+        obs["day"], obs["hour"] = day, 5
+        farm = obs["farms"][0]
+        farm["tiles"][1][1] = {"kind": "PLANT", "crop": "TOMATO", "planted_day": day - 11, "watered_today": False,
+                               "consecutive_unwatered": 0, "yield_units": 0, "max_lifespan_step": -1,
+                               "fertilized_until_day": -1}
+        farm["farmer"] = [1, 1]
+        farm["hands"] = []
+        return decide(obs, dict(DEFAULT_PARAMS, **{"dig_spent_ongoing_crops": True, **overrides}))["farmer"]
+
+    assert farmer_action(15) == ["DIG"]
+    assert farmer_action(15, dig_spent_ongoing_crops=False) == ["WATER"]
+    assert farmer_action(27) != ["DIG"]  # too late to plant anything that matures
+
+
 def test_decide_harvest_rules_default_to_off():
-    for key in ("harvest_water_first", "ongoing_crop_harvest_at_cap", "animal_harvest_at_cap"):
+    for key in ("harvest_water_first", "ongoing_crop_harvest_at_cap", "animal_harvest_at_cap", "dig_spent_ongoing_crops"):
         assert DEFAULT_PARAMS[key] is (key == "harvest_water_first")
 
 

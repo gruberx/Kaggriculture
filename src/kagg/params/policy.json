@@ -85,5 +85,6 @@
   "dig_weed_priority": 1.8,
   "harvest_water_first": true,
   "ongoing_crop_harvest_at_cap": false,
-  "animal_harvest_at_cap": false
+  "animal_harvest_at_cap": false,
+  "dig_spent_ongoing_crops": false
 }

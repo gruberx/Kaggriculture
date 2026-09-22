@@ -1030,6 +1030,11 @@ _DEFAULT_HARVEST_WATER_FIRST = True
 _DEFAULT_ONGOING_CROP_HARVEST_AT_CAP = False
 _DEFAULT_ANIMAL_HARVEST_AT_CAP = False
 
+# T8.60 (the user's request): DIG a spent tomato/strawberry (every scheduled production fired, nothing
+# left on it) right away instead of waiting for it to decay into a weed, and stop watering it. Skipped
+# when no crop could still be planted and mature before the season ends (`_crop_has_time_to_mature`).
+_DEFAULT_DIG_SPENT_ONGOING_CROPS = False
+
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,
 # one unit at a time), so when both sell the same good on the same turn the
@@ -1632,16 +1637,19 @@ def decide(obs: dict, params: dict) -> dict:
     _hw_first = params.get("harvest_water_first", _DEFAULT_HARVEST_WATER_FIRST)
     _hw_ongoing = params.get("ongoing_crop_harvest_at_cap", _DEFAULT_ONGOING_CROP_HARVEST_AT_CAP)
     _hw_animals = params.get("animal_harvest_at_cap", _DEFAULT_ANIMAL_HARVEST_AT_CAP)
+    _hw_dig = params.get("dig_spent_ongoing_crops", _DEFAULT_DIG_SPENT_ONGOING_CROPS)
+    _season_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
     harvest_rules = (
         HarvestRules(
             water_first=_hw_first,
             ongoing_at_cap=_hw_ongoing,
             animals_at_cap=_hw_animals,
             harvest_all=current_day
-            >= params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-            - params.get("liquidation_days_before_end", _DEFAULT_LIQUIDATION_DAYS_BEFORE_END),
+            >= _season_days - params.get("liquidation_days_before_end", _DEFAULT_LIQUIDATION_DAYS_BEFORE_END),
+            dig_spent=_hw_dig,
+            dig_spent_useful=any(_crop_has_time_to_mature(c, current_day, _season_days) for c in CROPS),
         )
-        if (_hw_first or _hw_ongoing or _hw_animals)
+        if (_hw_first or _hw_ongoing or _hw_animals or _hw_dig)
         else None
     )
     # One scan covers seven questions at once: which animal types are

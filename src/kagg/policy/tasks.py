@@ -156,12 +156,18 @@ class HarvestRules:
     `ongoing_at_cap` (tomato/strawberry) and `animals_at_cap`: harvest only when the next scheduled
     production would overflow the tile's cap (`max_yield` / `max_held`), or nothing more is coming.
     `harvest_all`: the last days of the season - harvest whatever is ready, so nothing is left unsold.
+    `dig_spent`: an ongoing plant (tomato/strawberry) that has fired every scheduled production and has
+    nothing left on it is dug out right away (it would decay into a weed anyway) and is no longer
+    watered; `dig_spent_useful` says whether freeing the tile still pays (something can still be planted
+    and mature before the season ends) - if not, the spent plant is simply left alone.
     """
 
     water_first: bool = False
     ongoing_at_cap: bool = False
     animals_at_cap: bool = False
     harvest_all: bool = False
+    dig_spent: bool = False
+    dig_spent_useful: bool = True
 
 
 @dataclass(frozen=True)
@@ -734,6 +740,8 @@ def _plant_tile_tasks(
     harvest_rules: HarvestRules | None = None,
 ) -> list[Task]:
     tasks = []
+    if harvest_rules is not None and harvest_rules.dig_spent and is_spent_ongoing(tile, current_day):
+        return [Task(PRIORITY_MAINTENANCE, pos, "DIG")] if harvest_rules.dig_spent_useful else []
     harvest_ready = tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
         tile, current_day, defer_one_time_harvest_to_max_yield, harvest_rules
     )
@@ -852,6 +860,16 @@ def _water_adds_yield(tile: dict, current_day: int) -> bool:
         return False
     age = current_day - tile["planted_day"]
     return age in watering_bonus_window(tile["crop"]) and tile.get("yield_units", 0) < cd["max_yield"]
+
+
+def is_spent_ongoing(tile: dict, current_day: int) -> bool:
+    """T8.60: an ongoing crop (tomato/strawberry) whose every scheduled production has fired and whose
+    produce is all harvested - only the decay into a weed is left."""
+    cd = CROPS[tile["crop"]]
+    if not cd["ongoing"] or tile.get("yield_units", 0) > 0:
+        return False
+    age = current_day - tile["planted_day"]
+    return age >= cd["first_yield_day"] + (cd["max_yield"] - 1) * cd["interval"]
 
 
 def _ongoing_ready(tile: dict, current_day: int) -> bool:
@@ -1085,6 +1103,8 @@ def crop_tile_day_actions(
     # `remaining_only` (T8.53): count the WATER only while it is still to be done
     # today - for a forecast made mid-day and divided by the turns left. At hour 0
     # nothing is watered yet, so it is identical there.
+    if harvest_rules is not None and harvest_rules.dig_spent and is_spent_ongoing(tile, current_day):
+        return 1 if harvest_rules.dig_spent_useful else 0  # T8.60: DIG (or nothing), no WATER
     actions = 0 if (remaining_only and tile.get("watered_today", False)) else 1  # WATER
     if tile.get("yield_units", 0) > 0 and _is_actually_harvestable(
         tile, current_day, defer_one_time_harvest_to_max_yield, harvest_rules
