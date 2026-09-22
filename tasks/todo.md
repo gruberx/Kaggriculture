@@ -3160,6 +3160,15 @@ project's own established finding, a fresh submission's score is volatile for it
       against its benefit elsewhere. The user's own original bug report ("персонажи ходят через всё поле к x=9") was from an older,
       already-submitted game predating this flag entirely, so it is NOT the same bug - a separate, real mechanism found while chasing
       it. Revisit only if the user reports it recurring.
+- [x] Submission of the T8.54-T8.62 bundle (the user's explicit request, 2026-09-22): commit `0e44338`, `build/submission.tar.gz`
+      (238732 bytes, audit + smoke passed), Kaggle ref **56450906** (team Gruberx, confirmed via `get_competition_submission`),
+      logged in `data/arena/submissions.jsonl` with `arena_win_rate` 0.76 (T8.62 arena vs its base). Public score not yet known -
+      re-check after ~20 minutes (early scores are volatile). Bundle: T8.54 no_plant_on_last_turn (off, measured negative), T8.55
+      plant_priority=1.75 + dig_weed_priority=1.8, T8.56 max_hires_per_day analysis (unchanged, 12 stays default), T8.57 tile
+      economics dataset (no code change), T8.58 harvest-before-watering diagnosis, T8.59 harvest_water_first (on) + ongoing/animal
+      at-cap (off), T8.60 dig_spent_ongoing_crops (on), T8.61 water_bonus_window_aware (on), T8.62 water_idle_priority_when_safe
+      (on, new). Golden re-recorded 4 times across this bundle (31st-34th). Open, deferred-by-request observation: T8.62's idle-tier
+      watering can oscillate a large ongoing-crop monoculture between mostly-safe and mostly-urgent day to day (see the entry above).
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
