@@ -938,7 +938,7 @@ def test_decide_dig_spent_ongoing_crops_digs_a_spent_tomato_unless_nothing_can_m
 
 def test_decide_harvest_rules_default_to_off():
     for key in ("harvest_water_first", "ongoing_crop_harvest_at_cap", "animal_harvest_at_cap", "dig_spent_ongoing_crops"):
-        assert DEFAULT_PARAMS[key] is (key == "harvest_water_first")
+        assert DEFAULT_PARAMS[key] is (key in ("harvest_water_first", "dig_spent_ongoing_crops"))
 
 
 def test_decide_max_hire_orders_per_turn_caps_hire_orders_this_turn():

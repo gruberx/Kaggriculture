@@ -437,13 +437,18 @@ AGENT_MAIN_PATH = os.path.join(
 # 62075/73091/75537 -> 60542/78810/79213 (mixed on the 6 fixed episodes: starter/2 -2.4%, pass/1
 # -2.5%, the rest +3..+23%; the 40-seed external measurement was +2.6%/+1.3%, arena 50W/0L).
 # T8.38 escape guardrail re-checked, not re-recorded. Revert = harvest_water_first False.
+# Re-recorded a 33rd time on 2026-09-22, the user's explicit decision to default dig_spent_ongoing_crops=True
+# (T8.60, measured ~null: +0.1%/-0.0% vs starter/pass, arena 30W/19L/1T): starter 65522/71436/85801 ->
+# 65339/72217/85783, pass 60542/78810/79213 -> 59288/79188/80535 (small mixed moves, as expected from a
+# ~null external measurement). T8.38 escape guardrail re-checked, not re-recorded.
+# Revert = dig_spent_ongoing_crops False.
 _GOLDEN = {
-    ("starter", 1): (65522.0, 3786.0),
-    ("starter", 2): (71436.0, 3493.0),
-    ("starter", 3): (85801.0, 3605.0),
-    ("pass", 1): (60542.0, 3000.0),
-    ("pass", 2): (78810.0, 3000.0),
-    ("pass", 3): (79213.0, 3000.0),
+    ("starter", 1): (65339.0, 3786.0),
+    ("starter", 2): (72217.0, 3493.0),
+    ("starter", 3): (85783.0, 3605.0),
+    ("pass", 1): (59288.0, 3000.0),
+    ("pass", 2): (79188.0, 3000.0),
+    ("pass", 3): (80535.0, 3000.0),
 }
 
 

@@ -1033,7 +1033,7 @@ _DEFAULT_ANIMAL_HARVEST_AT_CAP = False
 # T8.60 (the user's request): DIG a spent tomato/strawberry (every scheduled production fired, nothing
 # left on it) right away instead of waiting for it to decay into a weed, and stop watering it. Skipped
 # when no crop could still be planted and mature before the season ends (`_crop_has_time_to_mature`).
-_DEFAULT_DIG_SPENT_ONGOING_CROPS = False
+_DEFAULT_DIG_SPENT_ONGOING_CROPS = True
 
 # T8.49 follow-up: the engine settles the two players' market orders in
 # lockstep by list index (order i of one player against order i of the other,

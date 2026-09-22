@@ -86,5 +86,5 @@
   "harvest_water_first": true,
   "ongoing_crop_harvest_at_cap": false,
   "animal_harvest_at_cap": false,
-  "dig_spent_ongoing_crops": false
+  "dig_spent_ongoing_crops": true
 }
