@@ -3112,6 +3112,25 @@ project's own established finding, a fresh submission's score is volatile for it
       Reason for the null result: it fires only 2-3 times per game (seeds 900/901: DIG on plants 2/3, weed DIGs still 38-56, WATER on spent
       plants 4-5 -> 0), because a spent plant turns into a weed at the very next midnight and the ordinary weed DIG already picks the
       tile up; the gain is the rest of one day. **Not enabled.**
+- [x] T8.61 - analysis of wheat's missed early-window waterings (the user's request, 2026-09-22, follow-up to T8.58/T8.59).
+      **Cause confirmed** (seeds 900-903, current defaults incl. `harvest_water_first`): a one-time crop's routine (non-urgent) WATER
+      sits at `PRIORITY_ROUTINE_CARE` (tier 2) regardless of whether the day is inside its bonus window - the *same* tier as a
+      tomato/strawberry's daily WATER, which never adds yield at all (`water_bonus_window_aware` exists for exactly this, see T8.11/
+      T8.15, but stayed off after those two measurements from years-old defaults). On labor-saturated days (traced: day 13, seed 900,
+      235 unit-turns, 0 idle, 0 PASS) tier-2 tasks are serviced by nearest-first matching with no distinction between a
+      yield-productive watering and a purely anti-weed one, so wheat/carrot/melon inside their bonus window lose ties to competing
+      ongoing-crop watering as often as chance. Measured directly (age-by-age, at end of day): WHEAT age 2 (the window's first day)
+      unwatered 0-40% of the time, age 3 unwatered 53-62% consistently across all 4 seeds, only age 4 mostly fixed already by T8.59's
+      `harvest_water_first`. Net effect (`tools/check_harvest_before_water.py`): WHEAT captured only 62-71% of the attainable yield.
+      **Re-measured `water_bonus_window_aware` (already-built T8.11/T8.15 mechanism, never revisited since - the whole day-plan/
+      hiring/harvest stack has changed since then) against today's defaults, 40 external seeds + arena** (`tools/measure_t861.py`):
+      starter 64045 -> 64659 (+1.0%, better 25/40), pass 63294 -> 64725 (+2.3%, better 23/40), arena 46W/4L - **decisively positive
+      now**, unlike its historical T8.11/T8.15 rejection. Confirmed mechanism directly: with the flag on, WHEAT age-2 misses drop to
+      0% in all 4 seeds (out-of-window watering demoted, freeing tier-2 capacity), captured yield rises to 73-90%; CARROT and MELON
+      both reach 100% of attainable. **Residual gap**: WHEAT age 3 still misses 42-100% of the time even with the flag on - both age 2
+      and age 3 sit at the *same* `ROUTINE_CARE` tier once inside the window, so a day needing both competes on raw proximity, not on
+      which one is more valuable; not investigated further (no evidence yet that fixing it would net more than the flag already does).
+      **Not enabled by default yet - pending the user's decision.**
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
