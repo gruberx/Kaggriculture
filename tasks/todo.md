@@ -3149,6 +3149,17 @@ project's own established finding, a fresh submission's score is volatile for it
       aware`'s new default doesn't demote them out of the `seed_purchase_max_pending_water` gate's count - a real, correct
       consequence of T8.61's default flip, not a regression. Revert: `water_idle_priority_when_safe` False (and `water_bonus_
       window_aware` False for T8.61).
+- [ ] Open observation (not a confirmed bug, deferred by the user's own request, 2026-09-22): once a large ongoing-crop
+      monoculture fills a whole quadrant (see the entry above about single-crop quadrant colonization), `water_idle_priority_when_safe`
+      (T8.62) can oscillate a big fraction of that field between "safe" and "urgent" day to day instead of staying mostly safe as
+      designed - measured directly (seed 901, ~54 STRAWBERRY tiles): the urgent fraction at day start swings 19% -> 39% -> 54% -> 67%
+      -> 24% -> 69% (days 13-28), because there isn't enough genuinely spare labor each day to cover 50+ idle-tier waterings, so a
+      large chunk misses and turns urgent (top priority, tier 0) the very next day - explains why units are seen walking all the way
+      across a quadrant "every day" once it fills up. Net external measurement of the flag is still positive (+3.7%/+3.9%, T8.62's own
+      entry) - not yet known whether this specific side effect costs money on a large monoculture specifically, or nets out fine
+      against its benefit elsewhere. The user's own original bug report ("персонажи ходят через всё поле к x=9") was from an older,
+      already-submitted game predating this flag entirely, so it is NOT the same bug - a separate, real mechanism found while chasing
+      it. Revisit only if the user reports it recurring.
 ## Not planned yet (see plan.md)
 
 `fastsim` (no evidence the arena is the bottleneck) and `tuning` Stage 2 (search-generated value
