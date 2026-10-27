@@ -8,7 +8,7 @@ import pytest
 from kaggle_environments.envs.kaggriculture import kaggriculture as real
 
 from kagg.gamelib.constants import MAX_SHOP_INSTANCES, SHOPS, TOWN_CENTER_PRODUCTS
-from kagg.gamelib.market import expected_daily_consumption, price, shape
+from kagg.gamelib.market import expected_consumption_over_horizon, expected_daily_consumption, price, shape
 
 
 def test_shops_table_matches_the_real_engine():
@@ -89,3 +89,41 @@ def test_expected_daily_consumption_counts_duplicate_shop_instances_independentl
     # Shops are drawn with replacement - two YARN_STORE instances both
     # consume, matching kaggriculture.py's own per-instance loop.
     assert expected_daily_consumption("WOOL", ["YARN_STORE", "YARN_STORE"]) == pytest.approx(1.0 + 2 * (2 * 24 / 4))
+
+
+def test_expected_consumption_over_horizon_matches_flat_rate_for_a_product_no_shop_sells():
+    # MELON appears in no SHOPS listing, so no future unlock can ever add
+    # to its rate - the horizon-aware total must collapse to exactly the
+    # flat expected_daily_consumption() rate times days_remaining, T8.70's
+    # own "0 extra shops means bit-identical to the old flat multiply".
+    days_remaining = 10
+    flat = expected_daily_consumption("MELON", []) * days_remaining
+    assert expected_consumption_over_horizon("MELON", [], current_day=0, days_remaining=days_remaining) == pytest.approx(
+        flat
+    )
+
+
+def test_expected_consumption_over_horizon_prices_in_a_future_unlock():
+    # WOOL: only YARN_STORE sells it (weight 2, single-product shop).
+    # Starting with 0 unlocked shops at current_day=0 over a 3-day
+    # horizon: the real engine's own unlock timing (kaggriculture.py's
+    # _end_of_day, next_day % shop_unlock_interval == 0) fires the first
+    # possible unlock exactly at day 3, not before - so days 1-2 see the
+    # plain town-center-only rate (1.0/day) and day 3 sees 1 extra
+    # possible shop, weighted 2/8 of len(SHOPS) draws, at 24/4 steps/day:
+    # 1.0 + (2/8) * 6 = 2.5.
+    total = expected_consumption_over_horizon("WOOL", [], current_day=0, days_remaining=3)
+    assert total == pytest.approx(1.0 + 1.0 + 2.5)
+
+
+def test_expected_consumption_over_horizon_stops_growing_once_shops_are_maxed_out():
+    # 8 already-unlocked instances == MAX_SHOP_INSTANCES: no future
+    # unlock can ever add more, so the total is exactly the (now
+    # elevated) flat rate times days_remaining, same shape as the
+    # no-shops case above.
+    unlocked = ["YARN_STORE"] * 8
+    days_remaining = 5
+    flat = expected_daily_consumption("WOOL", unlocked) * days_remaining
+    assert expected_consumption_over_horizon(
+        "WOOL", unlocked, current_day=0, days_remaining=days_remaining
+    ) == pytest.approx(flat)

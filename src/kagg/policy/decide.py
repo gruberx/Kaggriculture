@@ -33,24 +33,37 @@ Standard library only - ships inside the submission bundle.
 
 from __future__ import annotations
 
+import dataclasses
+
 import math
 
 from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0
 from kagg.gamelib.market import price
-from kagg.gamelib.farm import shed_distance
+from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance as _tile_dist
 from kagg.gamelib.labor import hire_cost
 from kagg.gamelib.growth import forecast_animal_schedule, forecast_ongoing_schedule
 from kagg.gamelib.shed import shed_room
+from kagg.policy import opening as _opening
 from kagg.policy.market import buy_wheat_order, bulk_purchase_plan, sale_revenue, sell_orders
+from kagg.policy.cycle_economics import (
+    crop_has_time_to_produce,
+    crops_worth_fertilizing,
+    score_portfolio_v2,
+    units_per_cycle,
+)
 from kagg.policy.strategy import hires_per_day, rank_portfolio, score_portfolio, should_buy_land
 from kagg.policy.tasks import _DROPPABLE_GOODS as _DROP_GOODS
 from kagg.policy.tasks import (
+    PRIORITY_HARVEST,
     PRIORITY_PLANT,
+    PRIORITY_PREVENT_LOSS,
     action_for_unit,
     animal_tile_day_actions,
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    final_day_harvest_eligibility,
+    near_shed_drop_tasks,
     goods_deadline_drop_tasks,
     goods_drop_task,
     HarvestRules,
@@ -540,7 +553,7 @@ _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE = False
 # both self-play blocks, consistent with each mechanism's own individual
 # rejection - no confounding, no surprise (unlike T8.3m's Part A/Part B
 # split, where the combination masked Part A's own effect).
-_DEFAULT_ANIMAL_CARE_AWARE = False
+_DEFAULT_ANIMAL_CARE_AWARE = False  # the shipped value (True since T8.65) lives in params.py / policy.json
 
 # T8.10, the user's own observation: rank_portfolio's animal side only
 # ever estimated town/shop consumption over *one production interval*
@@ -607,6 +620,67 @@ _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE = False
 # inventory, glut pushes it DOWN). Off by default - the exact prior WHEAT
 # ranking for every caller that doesn't set it.
 _DEFAULT_WHEAT_SELF_SUFFICIENCY_AWARE = False
+
+# T8.68, the user's own request: replaces strategy.rank_portfolio/
+# score_portfolio entirely with kagg.policy.cycle_economics's whole-
+# remaining-life accounting - see _dispatch_score_portfolio's own
+# docstring for the single switch point. Off by default, not yet
+# measured - reproduces the exact prior ranking for every caller that
+# doesn't set it.
+_DEFAULT_USE_CYCLE_ECONOMICS_RANKING = False
+# T8.68: the live FERTILIZER sell price below which a crop's score (and
+# real FERTILIZE application) switches to the fertilized-cycle economics
+# - see cycle_economics.crop_horizon_profit_per_day's own docstring. Only
+# read when use_cycle_economics_ranking is on. $10, the user's own
+# suggested starting point.
+_DEFAULT_CYCLE_ECONOMICS_FERTILIZER_PRICE_THRESHOLD = 10
+
+# T8.70, the user's own follow-up to a known T8.69 gap ("shop-driven
+# demand varies by seed and isn't yet priced into this ranking at all"):
+# `expected_daily_consumption` (crop_shop_demand_aware above) only ever
+# looks at *today's* unlocked_shops, held flat across the whole horizon -
+# it never accounts for the engine's own deterministic shop-unlock
+# schedule (a new shop every 3 days, up to 8 total). When on, `_dispatch_
+# score_portfolio` swaps that flat rate for `kagg.gamelib.market.
+# expected_consumption_over_horizon`, which prices in shops not yet
+# unlocked too. Only read on the cycle-economics path (use_cycle_
+# economics_ranking) - the old strategy.score_portfolio path has no
+# matching mechanism. Off by default, not yet measured.
+_DEFAULT_CROP_SHOP_UNLOCK_FORECAST_AWARE = False
+
+# T8.70, the user's own follow-up (same request as above, supply side):
+# `already_committed_units` (cycle_economics.py) only ever counts tiles a
+# crop *already* occupies, never tiles about to be planted with the
+# winning crop in this same decision wave - the actual bulk-purchase tile
+# count is computed later in decide() from the same free-tile count this
+# flag reads. When on, every crop is scored as if it were about to claim
+# the currently-free land (capped by bulk_purchase_max_new_tiles), so a
+# crop's own concentrated future supply depresses its predicted price the
+# same way its already-planted tiles already do - fed to BOTH
+# `_top_investment_choice` and `_top_crop_basket`'s own `fallback_crops`
+# call (a real, traced correction: a first cut scoped only to `_top_
+# investment_choice` measured as a bit-for-bit no-op, since that
+# function's own crop identity is never what actually gets planted -
+# `_top_crop_basket`'s `fallback_crop` is). Off by default, not yet
+# measured.
+_DEFAULT_CROP_OWN_FUTURE_SUPPLY_AWARE = False
+
+# T8.71, the user's own redesign of the same problem: rather than have
+# a candidate crop project its OWN hypothetical future replanting cycles
+# (crop_horizon_profit_per_day's original "whole remaining life"
+# framing), price only the ONE cycle that would actually start if this
+# crop were planted right now, off the REAL currently-known production
+# pipeline (shed + units' hands + growing-but-ready + growing-but-not-
+# yet-ready tiles - see _pending_crop_supply's own docstring) instead of
+# a snapshot count of tiles times one cycle's units. Consumption is also
+# netted over the horizon up to THIS crop's own first harvest, not the
+# whole season - both real, computable numbers (the game's own Price
+# Function and consumption formulas), never a guess about future turns'
+# choices, which `decide()` re-derives fresh every turn regardless.
+# Supersedes crop_own_future_supply_aware (M2) for the crop it's on -
+# see cycle_economics.crop_cycle_profit_per_day's own docstring for the
+# full mechanism. Off by default, not yet measured.
+_DEFAULT_CROP_PENDING_SUPPLY_AWARE = False
 
 # T8.14: exactly the "concrete lead for later" T8.10's own rejection
 # comment above named - a minimum score margin an animal candidate must
@@ -867,6 +941,33 @@ _DEFAULT_DAY_PLAN_WEED_REPLANT_AWARE = True
 # T8.52: same default as `strategy._DEFAULT_TURNS_PER_TASK_ESTIMATE` (same params key).
 _DEFAULT_TURNS_PER_TASK_ESTIMATE = 2.0
 
+# T8.74 (this session's own T8.72/73 opening-search follow-up): a fixed
+# quadrant-1-only opening, both gated on `n_quadrants == 1` so quadrant 2+
+# play is bit-identical to today regardless of these values.
+# `quadrant1_hire_target` forces `hires_per_day`'s own `[min_hires_per_day,
+# max_hires_per_day]` clip to a single fixed point for both calls in this
+# module (see the `hiring_params` override right after `n_quadrants` is
+# computed) - a blunt override of the adaptive formula, not a change to it
+# (unrelated to T8.44's own quadrant-count-aware `turns_per_task` idea,
+# which was tried and reverted - see `strategy.hires_per_day`'s docstring).
+# `quadrant1_crop_lock` replaces the animal-opening's own ranked non-wheat
+# crop list (`opening_ranked_crops`, used only for the *initial* land-fill
+# below) with this single crop - `fallback_crops` (the separate, later
+# harvest-and-replant ranking) is untouched, so a locked crop's tile
+# replants via today's normal full ranking once harvested.
+_DEFAULT_QUADRANT1_HIRE_TARGET = None
+_DEFAULT_QUADRANT1_CROP_LOCK = None
+# T8.74 follow-up (experiment): scales hires_per_day's own adaptive result
+# (after its [min, max] clip) by this factor, rounded to the nearest int;
+# 1.0 = bit-identical to today.
+_DEFAULT_HIRES_MULTIPLIER = 1.0
+
+
+def _scale_hires(n: int, multiplier: float) -> int:
+    if multiplier == 1.0:
+        return n
+    return int(math.floor(n * multiplier + 0.5))
+
 # T8.47: same idea for a one-time crop harvested today (the HARVEST handler
 # clears the tile to None). Traced on day 10 of the shipped defaults: at
 # hour 0 the forecast was 51 actions (24 HARVEST + upkeep, 0 free tiles)
@@ -1010,6 +1111,30 @@ _DEFAULT_CAPACITY_AWARE_SELLING = True
 # arena 12W/38L, see tasks/todo.md T8.54.
 _DEFAULT_NO_PLANT_ON_LAST_TURN = True
 
+# T8.63 (the user's request): on the last day nothing carried by a unit or left on a tile is ever sold
+# (units empty into the shed only at midnight, which never comes). With this on, every unit holding
+# goods walks them to the shed and drops them by the last turn, and a unit only takes a HARVEST it can
+# still deliver in time.
+_DEFAULT_FINAL_DAY_DELIVERY = True
+
+# T8.63 (the user's request): last-day labor. `final_day_far_first`: the ready tiles farthest from the
+# shed are harvested first (the nearest-first matching left the far corner for last, when there was no
+# time to walk there and back). `final_day_tiles_per_hand`: the last day's hires are sized once, from
+# the ready tiles (ceil(tiles / this) hands), instead of the ordinary day plan that trickled hands in
+# all day; None = the ordinary hiring. Measured 6/4/3/2: 3 is best.
+_DEFAULT_FINAL_DAY_FAR_FIRST = True
+
+# T8.66 (the user's request): a unit carrying goods within this many moves of a shed-access tile drops them
+# into the shed at once and they are sold the same turn, instead of waiting for the end of the day.
+# None = off.
+_DEFAULT_DROP_NEAR_SHED_DISTANCE = None
+_DEFAULT_DROP_NEAR_SHED_MIN_UNITS = 1
+_DEFAULT_DROP_NEAR_SHED_WHEAT_FOR_HANDS = False
+_DEFAULT_DROP_NEAR_SHED_FERTILIZER = False
+_DEFAULT_DROP_NEAR_SHED_MAX_DAY = None  # only on days before this one (None = every day)
+_DEFAULT_DROP_NEAR_SHED_ONLY_WHEN_CASH_SHORT = False  # only while money < the planned seed/animal spend
+_DEFAULT_FINAL_DAY_TILES_PER_HAND = 3
+
 # T8.55 (the user's request): tier of the ordinary crop PLANT. At the old tier 3 a free tile waited
 # behind every non-urgent WATER (tier 2), so it was usually planted only when the queue emptied, on
 # the last turn of the day (10-19 doomed plants per game, idle free tiles and seeds for days).
@@ -1065,6 +1190,13 @@ _DEFAULT_DROP_GOODS_CASH_MIN_UNITS = 5
 # turn's own HARVEST will empty, so the replant stock is bought in advance.
 _DEFAULT_BULK_PURCHASE_COUNTS_HARVEST_TILES = True
 _DEFAULT_SEED_PURCHASE_MAX_PENDING_WATER = None
+
+# T8.69, the user's own request: off reproduces the exact prior market-
+# order sequence for every caller that doesn't set it - see the final
+# `market = ...` assembly's own comment for the mechanism.
+_DEFAULT_INVESTMENT_PRIORITY_REORDERED = False
+_DEFAULT_SEED_PURCHASE_LOOKAHEAD_AWARE = False
+_DEFAULT_SEED_PURCHASE_LOOKAHEAD_TURNS = 2
 
 # T8.1: anchors new-investment tile placement to the shed rather than the
 # farmer's current position - see tasks.build_task_list's own docstring
@@ -1207,6 +1339,50 @@ def _crop_tile_counts(tiles) -> dict[str, int]:
     return counts
 
 
+def _pending_crop_supply(tiles, shed: dict, inventories, current_day: int) -> dict[str, int]:
+    """T8.71, the user's own redesign of `crop_pending_supply_aware`'s
+    price-pressure input: the REAL, already-known future supply of every
+    product our own farm has already committed to - not a hypothesis
+    about tiles not yet planted. Three parts, summed per product:
+
+    1. Already harvested, sitting in the shed, not yet sold (`shed`).
+    2. Already harvested, held in a unit's own inventory, not yet
+       dropped to shed (`inventories`) - kaggriculture.py's own
+       `_drop_inventories_to_shed` closes this same-turn gap at end of
+       day, so this is a same-turn detail, never double-counted with 1.
+    3. Growing on our own PLANT tiles right now: `harvestable_units_
+       today`'s own exact count for a tile that's ready today, else
+       `cycle_economics.units_per_cycle(crop)` (the same DP-optimal
+       full-life yield already used everywhere else in this package) as
+       the forecast for a tile that hasn't matured yet - a standard
+       estimate, not a fresh per-tile watering-history simulation (the
+       user's own explicit "simpler is fine" call).
+
+    Deliberately does NOT include tiles not yet planted (the winning
+    crop hasn't been decided yet at scoring time - the same reasoning
+    `crop_cycle_profit_per_day`'s own docstring gives for not projecting
+    this tile's own future replantings either), and does NOT include the
+    opponent's farm (their shed is private, invisible to us, and their
+    still-growing tiles would only be half the picture without it).
+    """
+    supply: dict[str, int] = {}
+    for item, qty in shed.items():
+        if qty:
+            supply[item] = supply.get(item, 0) + qty
+    for inv in inventories:
+        for item, qty in inv.items():
+            if qty:
+                supply[item] = supply.get(item, 0) + qty
+    for row in tiles:
+        for tile in row:
+            if not isinstance(tile, dict) or tile.get("kind") != "PLANT":
+                continue
+            crop = tile.get("crop")
+            ready = harvestable_units_today(tile, current_day)
+            supply[crop] = supply.get(crop, 0) + (ready if ready > 0 else units_per_cycle(crop))
+    return supply
+
+
 def _combined_crop_tile_counts(my_tiles, other_farms, opponent_weight: float = 1.0) -> dict[str, float]:
     """`_crop_tile_counts(my_tiles)`, plus every farm in `other_farms`
     counted at `opponent_weight` (T8.3g extends T8.3f's own-farm-only
@@ -1245,6 +1421,110 @@ def _combined_crop_tile_counts(my_tiles, other_farms, opponent_weight: float = 1
     return combined
 
 
+def _dispatch_score_portfolio(
+    market_inventory: dict,
+    current_day: int,
+    params: dict,
+    crop_tile_counts: dict | None = None,
+    unlocked_shops: list | None = None,
+    net_of_seed_cost: bool = False,
+    wheat_self_sufficiency_aware: bool = False,
+    wheat_feed_units_needed: int = 0,
+    potential_new_tiles: int = 0,
+    pending_crop_supply: dict | None = None,
+) -> tuple[dict[str, float], frozenset[str]]:
+    """T8.68's single switch point between the old `strategy.score_
+    portfolio` and the new `cycle_economics.score_portfolio_v2`, read by
+    every ranking call site in this module (`_top_investment_choice`/
+    `_top_animal_choice`/`_top_crop_basket`) so `use_cycle_economics_
+    ranking` only ever needs to be checked here, not duplicated at each
+    call site. Returns `(scores, fertilize_crops)` - the old path always
+    returns an empty `fertilize_crops` (it has no notion of price-gated
+    crop fertilizing at all).
+
+    `wheat_self_sufficiency_aware`/`wheat_feed_units_needed` are taken as
+    plain arguments, not read from `params` here, specifically so each
+    caller keeps its own pre-T8.68 choice about whether to pass them at
+    all - `_top_investment_choice`/`_top_animal_choice` never did (their
+    WHEAT score is unaffected by this flag regardless of its value in
+    `params`), only `_top_crop_basket` does; reading the flag directly
+    from `params` inside this function would silently change the first
+    two's behavior whenever a user later turns the flag on, which is not
+    a change T8.68 is asking for.
+
+    Every other flag (`rank_season_aware`/`animal_net_of_cost`/
+    `animal_fertilizer_income_aware`/`animal_care_aware`/`animal_
+    consumption_horizon_aware`/`cycle_economics_fertilizer_price_
+    threshold`) is read from `params` here exactly as each call site read
+    it directly before T8.68 - a pure extraction, not a behavior change,
+    for the old path.
+
+    `potential_new_tiles` (T8.70, `crop_own_future_supply_aware`) is
+    taken as a plain argument, not read from `params` here, matching
+    `wheat_self_sufficiency_aware`'s own reasoning above: `decide()`
+    computes the real (gated, capped) value once and passes it to both
+    `_top_investment_choice` and `_top_crop_basket`'s own `fallback_
+    crops` call - the only two call sites that need it - `_top_animal_
+    choice`/the opening's own `_top_crop_basket` call keep the pre-T8.70
+    `0` default regardless of the flag's value in `params`. Only read (as
+    `shop_unlock_forecast_aware`) by the cycle-economics path below - the
+    old `strategy.score_portfolio` path has no matching mechanism, so
+    `potential_new_tiles` is silently unused there, same as `current_day`
+    already is for every branch that doesn't need it.
+
+    `pending_crop_supply` (T8.71, `crop_pending_supply_aware`) mirrors
+    `potential_new_tiles`'s own plumbing exactly - `decide()` computes it
+    once (`_pending_crop_supply(...)`) and passes the same dict to both
+    `_top_investment_choice` and `_top_crop_basket`'s `fallback_crops`
+    call, the only two sites that need it (see `potential_new_tiles`'s
+    own paragraph above for why those specific two, found the hard way
+    when T8.70's first cut only reached `_top_investment_choice`).
+    """
+    season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
+    if params.get("use_cycle_economics_ranking", _DEFAULT_USE_CYCLE_ECONOMICS_RANKING):
+        days_remaining = season_length_days - current_day
+        fertilizer_price_threshold = params.get(
+            "cycle_economics_fertilizer_price_threshold",
+            _DEFAULT_CYCLE_ECONOMICS_FERTILIZER_PRICE_THRESHOLD,
+        )
+        animal_fertilizer_income_aware = params.get(
+            "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
+        )
+        animal_consumption_horizon_aware = params.get(
+            "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
+        )
+        shop_unlock_forecast_aware = params.get(
+            "crop_shop_unlock_forecast_aware", _DEFAULT_CROP_SHOP_UNLOCK_FORECAST_AWARE
+        )
+        crop_pending_supply_aware = params.get(
+            "crop_pending_supply_aware", _DEFAULT_CROP_PENDING_SUPPLY_AWARE
+        )
+        return score_portfolio_v2(
+            market_inventory, days_remaining, crop_tile_counts, unlocked_shops,
+            fertilizer_price_threshold, animal_fertilizer_income_aware,
+            animal_consumption_horizon_aware, wheat_self_sufficiency_aware, wheat_feed_units_needed,
+            current_day, shop_unlock_forecast_aware, potential_new_tiles,
+            crop_pending_supply_aware, pending_crop_supply,
+        )
+    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
+    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
+    animal_fertilizer_income_aware = params.get(
+        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
+    )
+    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
+    animal_consumption_horizon_aware = params.get(
+        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
+    )
+    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
+    scores = score_portfolio(
+        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
+        animal_care_aware, animal_consumption_horizon_aware,
+        wheat_self_sufficiency_aware, wheat_feed_units_needed,
+    )
+    return scores, frozenset()
+
+
 def _top_investment_choice(
     market_inventory: dict,
     current_day: int,
@@ -1252,6 +1532,8 @@ def _top_investment_choice(
     crop_tile_counts: dict | None = None,
     unlocked_shops: list | None = None,
     net_of_seed_cost: bool = False,
+    potential_new_tiles: int = 0,
+    pending_crop_supply: dict | None = None,
 ) -> tuple[str, str] | None:
     """The highest-ranked crop-or-animal that still has time to mature
     this season, as `(name, kind)` with `kind` "crop" or "animal". `None`
@@ -1272,6 +1554,24 @@ def _top_investment_choice(
     computed once from the same `season_length_days` this function
     already needs for the maturity checks below.
 
+    `potential_new_tiles` (T8.70, `crop_own_future_supply_aware`): plain
+    pass-through to `_dispatch_score_portfolio`, `0` by default (a
+    no-op). `decide()` computes the real value once (from `free_tiles_
+    now`, capped by `bulk_purchase_max_new_tiles`) and passes the same
+    number here AND to `_top_crop_basket`'s own `fallback_crops` call -
+    each crop is scored as if it were about to claim that many *more*
+    tiles on top of the ones it already occupies, since the actual bulk
+    seed purchase later in `decide()` (`tiles_to_plant`, itself derived
+    from this same free-tile count) will concentrate exactly that many
+    tiles onto whichever crop `fallback_crop` ends up naming - NOT
+    necessarily this function's own return value (see `decide()`'s own
+    comment on why `_top_investment_choice`'s crop identity, unlike
+    `_top_crop_basket`'s, never drives what actually gets planted).
+
+    `pending_crop_supply` (T8.71, `crop_pending_supply_aware`) mirrors
+    `potential_new_tiles`'s own plumbing exactly - see `_dispatch_score_
+    portfolio`'s own paragraph on it.
+
     `investment_commit_margin` (T8.14, the user's own follow-up after
     T8.10's rejection): an ANIMAL candidate is only ever returned once its
     score clears `best_crop_score * (1 + investment_commit_margin)` -
@@ -1291,26 +1591,28 @@ def _top_investment_choice(
     the pre-T8.14 behavior for every caller that doesn't set it).
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
-    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
-    animal_fertilizer_income_aware = params.get(
-        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
-    )
-    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
-    animal_consumption_horizon_aware = params.get(
-        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
-    )
     investment_commit_margin = params.get("investment_commit_margin", _DEFAULT_INVESTMENT_COMMIT_MARGIN)
-    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
-    scores = score_portfolio(
-        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
-        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
-        animal_care_aware, animal_consumption_horizon_aware,
+    use_cycle_economics = params.get("use_cycle_economics_ranking", _DEFAULT_USE_CYCLE_ECONOMICS_RANKING)
+    scores, _fertilize_crops = _dispatch_score_portfolio(
+        market_inventory, current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        potential_new_tiles=potential_new_tiles, pending_crop_supply=pending_crop_supply,
     )
     best_crop_score = max(scores[c] for c in CROPS)
     for name in sorted(scores, key=scores.__getitem__, reverse=True):
         if name in CROPS:
-            if _crop_has_time_to_mature(name, current_day, season_length_days):
+            # T8.68: the cycle-economics path scores a crop near season
+            # end at its real, reachable partial yield instead of
+            # excluding it outright (request point 2) - crop_has_time_to_
+            # produce is the matching looser gate (only rules out a crop
+            # that can't reach ANY yield at all), not strategy.py's own
+            # `_crop_has_time_to_mature`, whose hard max_yield_day
+            # requirement is exactly what request point 2 asks to relax.
+            has_time = (
+                crop_has_time_to_produce(name, current_day, season_length_days)
+                if use_cycle_economics
+                else _crop_has_time_to_mature(name, current_day, season_length_days)
+            )
+            if has_time:
                 return name, "crop"
         elif name in ANIMALS:
             if scores[name] < best_crop_score * (1 + investment_commit_margin):
@@ -1359,21 +1661,7 @@ def _top_animal_choice(
     default, bit-identical to every pre-T8.43 caller.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
-    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
-    animal_fertilizer_income_aware = params.get(
-        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
-    )
-    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
-    animal_consumption_horizon_aware = params.get(
-        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
-    )
-    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
-    scores = score_portfolio(
-        market_inventory, None, None, False,
-        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
-        animal_care_aware, animal_consumption_horizon_aware,
-    )
+    scores, _fertilize_crops = _dispatch_score_portfolio(market_inventory, current_day, params)
     for name in sorted(ANIMALS, key=scores.__getitem__, reverse=True):
         if name in excluded_types:
             continue
@@ -1391,6 +1679,8 @@ def _top_crop_basket(
     net_of_seed_cost: bool = False,
     basket_size: int = 1,
     wheat_feed_units_needed: int = 0,
+    potential_new_tiles: int = 0,
+    pending_crop_supply: dict | None = None,
 ) -> list[str]:
     """Generalizes `_top_crop_choice` (T8.19, the user's own observation:
     committing every new tile to a single top-ranked product invites a
@@ -1415,29 +1705,41 @@ def _top_crop_basket(
     all" convention every other animal-awareness flag here follows).
     Defaults to `0`, reproducing the exact prior WHEAT ranking for every
     caller that doesn't pass it, regardless of the flag.
+
+    `potential_new_tiles` (T8.70, `crop_own_future_supply_aware`): plain
+    pass-through to `_dispatch_score_portfolio`, `0` by default (a
+    no-op) - see `decide()`'s own `fallback_crops` call site for where a
+    real value is computed and why THIS is the ranking call that
+    actually needs it (found after M2's first cut, scoped only to
+    `_top_investment_choice`, turned out to be a real, traced no-op:
+    that function's own crop identity is never planted - only `_top_crop_
+    basket`'s result, `fallback_crop`, is).
+
+    `pending_crop_supply` (T8.71, `crop_pending_supply_aware`): same
+    story - see `_dispatch_score_portfolio`'s own paragraph on it.
     """
     season_length_days = params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS)
-    rank_season_aware = params.get("rank_season_aware", _DEFAULT_RANK_SEASON_AWARE)
-    animal_net_of_cost = params.get("animal_net_of_cost", _DEFAULT_ANIMAL_NET_OF_COST)
-    animal_fertilizer_income_aware = params.get(
-        "animal_fertilizer_income_aware", _DEFAULT_ANIMAL_FERTILIZER_INCOME_AWARE
-    )
-    animal_care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
-    animal_consumption_horizon_aware = params.get(
-        "animal_consumption_horizon_aware", _DEFAULT_ANIMAL_CONSUMPTION_HORIZON_AWARE
-    )
     wheat_self_sufficiency_aware = params.get(
         "wheat_self_sufficiency_aware", _DEFAULT_WHEAT_SELF_SUFFICIENCY_AWARE
     )
-    days_remaining = season_length_days - current_day if (rank_season_aware or animal_net_of_cost) else None
+    use_cycle_economics = params.get("use_cycle_economics_ranking", _DEFAULT_USE_CYCLE_ECONOMICS_RANKING)
+    scores, _fertilize_crops = _dispatch_score_portfolio(
+        market_inventory, current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        wheat_self_sufficiency_aware, wheat_feed_units_needed, potential_new_tiles, pending_crop_supply,
+    )
     basket: list[str] = []
-    for name in rank_portfolio(
-        market_inventory, crop_tile_counts, unlocked_shops, net_of_seed_cost,
-        days_remaining, rank_season_aware, animal_net_of_cost, animal_fertilizer_income_aware,
-        animal_care_aware, animal_consumption_horizon_aware,
-        wheat_self_sufficiency_aware, wheat_feed_units_needed,
-    ):
-        if name in CROPS and _crop_has_time_to_mature(name, current_day, season_length_days):
+    for name in sorted(scores, key=scores.__getitem__, reverse=True):
+        if name not in CROPS:
+            continue
+        # T8.68: see _top_investment_choice's matching comment - the
+        # cycle-economics path uses the looser "can reach any yield at
+        # all" gate instead of strategy.py's hard max_yield_day one.
+        has_time = (
+            crop_has_time_to_produce(name, current_day, season_length_days)
+            if use_cycle_economics
+            else _crop_has_time_to_mature(name, current_day, season_length_days)
+        )
+        if has_time:
             basket.append(name)
             if len(basket) >= basket_size:
                 break
@@ -1543,8 +1845,66 @@ def decide(obs: dict, params: dict) -> dict:
         else None
     )
     net_of_seed_cost = params.get("crop_net_of_seed_cost", _DEFAULT_CROP_NET_OF_SEED_COST)
+    # T8.70 (crop_own_future_supply_aware): a second, independent, tiny
+    # free-tile count, computed here (before any ranking call) so the
+    # ranking can know how much land is about to be claimed by whichever
+    # crop wins - deliberately NOT a refactor of the fuller free_tiles
+    # scan further below (which has other side effects, e.g. nearest_
+    # free_shed_distance). Capped by bulk_purchase_max_new_tiles (the
+    # same cap the real bulk seed purchase itself uses, `tiles_to_plant`
+    # further below) and shared by BOTH `_top_investment_choice` and
+    # `_top_crop_basket`'s own `fallback_crops` call below - found (after
+    # a first cut scoped only to _top_investment_choice measured as a
+    # real, traced no-op) that `fallback_crop`, not `_top_investment_
+    # choice`'s own return value, is what the actual bulk seed purchase
+    # plants, so that call needs this too, not just the gate check above.
+    crop_own_future_supply_aware = params.get(
+        "crop_own_future_supply_aware", _DEFAULT_CROP_OWN_FUTURE_SUPPLY_AWARE
+    )
+    crop_pending_supply_aware = params.get(
+        "crop_pending_supply_aware", _DEFAULT_CROP_PENDING_SUPPLY_AWARE
+    )
+    if crop_own_future_supply_aware or crop_pending_supply_aware:
+        free_tiles_now = sum(1 for row in me["tiles"] for tile in row if tile is None)
+        potential_new_tiles = min(
+            free_tiles_now, params.get("bulk_purchase_max_new_tiles", _DEFAULT_BULK_PURCHASE_MAX_NEW_TILES)
+        )
+    else:
+        potential_new_tiles = 0
+    # T8.71 (crop_pending_supply_aware, the user's own redesign): the
+    # real, already-known production pipeline per product (shed + units'
+    # hands + growing tiles) - computed once here, shared by BOTH
+    # ranking calls below, same reasoning as potential_new_tiles just
+    # above (see _dispatch_score_portfolio's own docstring paragraph).
+    #
+    # Real, decisive regression found and fixed while measuring this
+    # flag: pending_crop_supply only ever reflected tiles ALREADY
+    # growing (from PAST turns), never the bulk purchase THIS turn is
+    # about to make (up to bulk_purchase_max_new_tiles new tiles of the
+    # very crop being scored, resolved later in decide() from this same
+    # free_tiles_now) - unlike the old crop_horizon_profit_per_day path,
+    # which happened to apply an ever-growing (if speculative) self-
+    # penalty as more cycles remained, this flag's single-cycle scoring
+    # had NO such deterrent left once M2's own fix wasn't carried over,
+    # and measured as a decisive, traced loss (seed 100: 79 MELON bought
+    # vs the baseline's 30, STRAWBERRY starved to 0) - folding in the
+    # same potential_new_tiles term M2 already computes, uniformly
+    # across every crop (same "every candidate scored as if it were the
+    # pick" framing), closes the gap.
+    if crop_pending_supply_aware:
+        pending_crop_supply = _pending_crop_supply(
+            me["tiles"], shed, private.get("inventories") or [], current_day
+        )
+        if potential_new_tiles:
+            for _crop in CROPS:
+                pending_crop_supply[_crop] = (
+                    pending_crop_supply.get(_crop, 0) + potential_new_tiles * units_per_cycle(_crop)
+                )
+    else:
+        pending_crop_supply = None
     investment = _top_investment_choice(
-        obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost
+        obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops, net_of_seed_cost,
+        potential_new_tiles, pending_crop_supply,
     )
     desired_name, desired_kind = investment if investment is not None else (None, None)
     desired_crop = desired_name if desired_kind == "crop" else None
@@ -1609,7 +1969,8 @@ def decide(obs: dict, params: dict) -> dict:
         fallback_crops = _top_crop_basket(
             obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops,
             net_of_seed_cost, basket_size=portfolio_basket_size,
-            wheat_feed_units_needed=wheat_feed_units_needed,
+            wheat_feed_units_needed=wheat_feed_units_needed, potential_new_tiles=potential_new_tiles,
+            pending_crop_supply=pending_crop_supply,
         )
     else:
         fallback_crops = []
@@ -1635,6 +1996,11 @@ def decide(obs: dict, params: dict) -> dict:
     stuck_animal = next(
         (a for a in ANIMALS if shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0), None
     )
+    # T8.67: the animal opening replaces this one-animal-at-a-time pipeline (see kagg.policy.opening).
+    opening_on = bool(params.get("animal_opening", False))
+    if opening_on:
+        stuck_animal = None
+        desired_animal = None
     # T8.44: read here, before the six-purpose tile scan below, instead of
     # after it (their pre-T8.44 location, just before build_task_list) -
     # pure dict-lookup reordering, bit-identical - so the scan can use
@@ -1643,10 +2009,37 @@ def decide(obs: dict, params: dict) -> dict:
     # aware/defer_one_time_harvest_to_max_yield to match whatever this
     # episode actually has turned on).
     use_fertilizer = params.get("use_fertilizer", _DEFAULT_USE_FERTILIZER)
+    # T8.68: additive to use_fertilizer above (left fully untouched, still
+    # default False/inert) - an empty frozenset reproduces build_task_
+    # list's exact prior FERTILIZE gate for every caller (including this
+    # one, when the flag is off - see build_task_list's own docstring for
+    # the mechanism).
+    fertilize_crops: frozenset[str] = frozenset()
+    if params.get("use_cycle_economics_ranking", _DEFAULT_USE_CYCLE_ECONOMICS_RANKING):
+        fertilizer_price_threshold = params.get(
+            "cycle_economics_fertilizer_price_threshold",
+            _DEFAULT_CYCLE_ECONOMICS_FERTILIZER_PRICE_THRESHOLD,
+        )
+        fertilize_crops = crops_worth_fertilizing(obs["market"]["inventory"], fertilizer_price_threshold)
+    # T8.68: market.sell_orders's own _NEVER_ROUTINELY_SOLD exclusion for
+    # FERTILIZER is gated on this same-named use_fertilizer flag (see its
+    # own docstring) - without folding fertilize_crops in too, a unit of
+    # FERTILIZER the cycle-economics path means to apply would get
+    # routinely sold away before the age-gated FERTILIZE task ever gets a
+    # turn to use it, silently defeating the whole mechanism. Deliberately
+    # a SEPARATE variable from use_fertilizer itself (not passed to
+    # build_task_list) - ORing fertilize_crops into that one instead would
+    # wrongly re-enable use_fertilizer's own any-age FERTILIZE gate.
+    protect_fertilizer_from_sale = use_fertilizer or bool(fertilize_crops)
     care_aware = params.get("animal_care_aware", _DEFAULT_ANIMAL_CARE_AWARE)
     defer_one_time_harvest_to_max_yield = params.get(
         "defer_one_time_harvest_to_max_yield", _DEFAULT_DEFER_ONE_TIME_HARVEST_TO_MAX_YIELD
     )
+    # T8.63: on the last day nothing more can be waited for - harvest every ready one-time crop as is.
+    if params.get("final_day_delivery", _DEFAULT_FINAL_DAY_DELIVERY) and current_day >= (
+        params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS) - 1
+    ):
+        defer_one_time_harvest_to_max_yield = False
     # T8.59: None when every harvest rule is off (bit-identical to the pre-T8.59 behaviour).
     _hw_first = params.get("harvest_water_first", _DEFAULT_HARVEST_WATER_FIRST)
     _hw_ongoing = params.get("ongoing_crop_harvest_at_cap", _DEFAULT_ONGOING_CROP_HARVEST_AT_CAP)
@@ -1692,6 +2085,17 @@ def decide(obs: dict, params: dict) -> dict:
     # hires_per_day`'s own docstring/neighbor-constant comment for the
     # measured regression that caused the revert.
     n_quadrants = len(me.get("unlocked_quadrants", ["NW"]))
+    # T8.74: quadrant-1-only fixed hiring target (see _DEFAULT_QUADRANT1_
+    # HIRE_TARGET's comment above) - bit-identical to `params` (hence to
+    # today's shipped behavior) whenever the flag is unset or we're past
+    # quadrant 1.
+    quadrant1_hire_target = params.get("quadrant1_hire_target", _DEFAULT_QUADRANT1_HIRE_TARGET)
+    if quadrant1_hire_target is not None and n_quadrants == 1:
+        hiring_params = dict(
+            params, min_hires_per_day=quadrant1_hire_target, max_hires_per_day=quadrant1_hire_target
+        )
+    else:
+        hiring_params = params
     # T8.44 follow-up: a real, hand-verified per-tile action cost this
     # session's own trace found missing, not assumed - kaggriculture.py's
     # real DIG handler clears a WEED tile straight to `None` (does NOT
@@ -1774,6 +2178,94 @@ def decide(obs: dict, params: dict) -> dict:
                     # replant_aware is off - bit-identical -1 total).
                     maintenance_actions_today += 1 + weed_replant_actions
     has_empty_tile = free_tiles > 0
+    # T8.67: the animal opening's per-turn plan (all empty / zero when the flag is off or on the last
+    # day). What to buy now, the animals still waiting for a tile, the tiles kept free for their
+    # structures, today's feed need, and the wheat tiles the herd still lacks.
+    opening_buy: dict[str, int] = {}
+    opening_unplaced: dict[str, int] = {}
+    opening_reserved: frozenset = frozenset()
+    opening_n_reserved_free = 0
+    opening_feed_skip = None
+    opening_feed_need = 0
+    opening_wheat_needed = 0
+    opening_ranked_crops: list[str] = []
+    opening_setup_list: list = []
+    opening_existing: dict[str, int] = {}
+    opening_provisional_tiles = 0
+    opening_last_day = current_day >= params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS) - 1
+    opening_units = [tuple(me["farmer"])] + [tuple(h) for h in me.get("hands", [])]
+    if opening_on and not opening_last_day:
+        _op_inventories = private.get("inventories") or []
+        opening_feed_skip = _opening.skip_ages(params)
+        opening_unplaced = _opening.animals_in_hand(_op_inventories, shed)
+        opening_existing = dict(placed_animal_type_counts)
+        for _a, _n in opening_unplaced.items():
+            opening_existing[_a] = opening_existing.get(_a, 0) + _n
+        _plan = _opening.plan_herd_purchase(
+            n_quadrants=n_quadrants, existing_by_type=opening_existing,
+            market_inventory=obs["market"]["inventory"], current_day=current_day, params=params,
+        )
+        _n_structures = sum(
+            1 for row in me["tiles"] for t in row
+            if isinstance(t, dict) and t.get("kind") in ("COOP", "PASTURE") and "animal" not in t
+        )
+        _plan_qty = sum(_plan.values())
+        _plan_cost = sum(ANIMALS[a]["cost"] * q for a, q in _plan.items())
+        # One purchase or none: the whole batch must be affordable, fit in the shed and on the land.
+        if (
+            _plan
+            and _plan_cost <= me["money"]
+            and _plan_qty <= shed_room(shed, params.get("shed_capacity", _DEFAULT_SHED_CAPACITY))
+            and _plan_qty + sum(opening_unplaced.values()) <= free_tiles + _n_structures
+            and current_hour < params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY) - 2
+        ):
+            opening_buy = _plan
+        _unplaced_after = dict(opening_unplaced)
+        for _a, _q in opening_buy.items():
+            _unplaced_after[_a] = _unplaced_after.get(_a, 0) + _q
+        opening_setup_list, opening_reserved, opening_n_reserved_free = _opening.opening_setup_tasks(
+            me["tiles"], opening_units, _op_inventories, shed, board_size,
+            to_buy=sum(opening_buy.values()), skip_ages_by_type=opening_feed_skip,
+        )
+        opening_feed_need = _opening.feed_need_today(me["tiles"], current_day, opening_feed_skip, _unplaced_after)
+        _ranked_all = _top_crop_basket(
+            obs["market"]["inventory"], current_day, params, crop_tile_counts, unlocked_shops,
+            net_of_seed_cost, basket_size=len(CROPS), pending_crop_supply=pending_crop_supply,
+        )
+        opening_ranked_crops = [c for c in _ranked_all if c != "WHEAT"]
+        # T8.74: quadrant-1-only fixed opening crop (see
+        # _DEFAULT_QUADRANT1_CROP_LOCK's comment above) - overrides the
+        # ranking outright for this initial-land-fill list only, ahead of
+        # (and instead of) the opening_top_non_wheat_crop_only slice below.
+        quadrant1_crop_lock = params.get("quadrant1_crop_lock", _DEFAULT_QUADRANT1_CROP_LOCK)
+        # T8.69 diagnostic (the user's own follow-up experiment, not yet a
+        # permanent mechanism): land left over after WHEAT's own feed
+        # quota normally fills with the *whole* remaining ranking, best
+        # first (planting_sequence walks it in order) - this experiment
+        # restricts that to only the single best non-WHEAT crop, to test
+        # whether a more time-volatile ranking (use_cycle_economics_
+        # ranking) over-commits real cash to a fast-changing #2/#3 pick
+        # that a stabler ranking would never reach for the same land.
+        if quadrant1_crop_lock is not None and n_quadrants == 1:
+            opening_ranked_crops = [quadrant1_crop_lock]
+        elif params.get("opening_top_non_wheat_crop_only", False) and opening_ranked_crops:
+            opening_ranked_crops = opening_ranked_crops[:1]
+        if "WHEAT" in _ranked_all:
+            opening_wheat_needed = _opening.wheat_tiles_needed(
+                sum(opening_existing.values()) + sum(opening_buy.values()),
+                _crop_tile_counts(me["tiles"]).get("WHEAT", 0), params,
+            )
+        # Provisional seed plan (the hire cost is not known yet): only sizes the day's planting
+        # for the hiring forecast; the real purchase is planned again when the orders are built.
+        _wheat_price = price("WHEAT", obs["market"]["inventory"].get("WHEAT", MARKET_I0))
+        _provisional = _opening.seed_plan(
+            budget=me["money"] - sum(ANIMALS[a]["cost"] * q for a, q in opening_buy.items())
+            - opening_feed_need * _wheat_price - 35,
+            free_tiles=max(0, free_tiles + harvest_cleared_tiles - opening_n_reserved_free),
+            seeds_held=dict(seeds), wheat_needed=opening_wheat_needed, ranked_crops=opening_ranked_crops,
+            fill_cheaper=params.get("animal_opening_fill_cheaper", True),
+        )
+        opening_provisional_tiles = sum(q for _, q in _provisional) + sum(seeds.values())
     # T8.45: see _DEFAULT_PLANT_WHILE_ANIMAL_PENDING's comment - when on,
     # a bought-but-unplaced animal no longer blocks crop planting/seed
     # buying (the animal pipeline itself is unchanged).
@@ -1852,6 +2344,7 @@ def decide(obs: dict, params: dict) -> dict:
     )
     if (
         params.get("always_pursue_one_animal", _DEFAULT_ALWAYS_PURSUE_ONE_ANIMAL)
+        and not opening_on
         and acquisition_animal is None
         and sum(placed_animal_type_counts.values()) < always_pursue_target_count
         and not any(shed.get(a, 0) > 0 or farmer_inventory.get(a, 0) > 0 for a in ANIMALS)
@@ -1945,6 +2438,10 @@ def decide(obs: dict, params: dict) -> dict:
         )
     else:
         animals_needing_new_tiles = 0
+    if opening_on:
+        # T8.67: the animals still to be set up (bought now or waiting) and their tiles.
+        planned_new_animals = sum(opening_unplaced.values()) + sum(opening_buy.values())
+        animals_needing_new_tiles = opening_n_reserved_free
 
     planned_new_crop_tiles = 0
     if plant_crop_intent is not None:
@@ -1958,6 +2455,8 @@ def decide(obs: dict, params: dict) -> dict:
             seeds_held = seeds.get(plant_crop_intent, 0)
             affordable = int(me["money"] // seed_cost) if seed_cost > 0 else cap
             cap = min(cap, seeds_held + affordable)
+        if opening_on:
+            cap = min(cap, opening_provisional_tiles)
         planned_new_crop_tiles = max(0, cap)
 
     # T8.6: labor_units is 1 (the farmer) plus however many hands the
@@ -2022,8 +2521,9 @@ def decide(obs: dict, params: dict) -> dict:
     hires_per_day_days_remaining = max(
         0, params.get("season_length_days", _DEFAULT_SEASON_LENGTH_DAYS) - current_day
     )
-    early_target_hires = hires_per_day(
-        params, hour=current_hour,
+    hires_multiplier = params.get("hires_multiplier", _DEFAULT_HIRES_MULTIPLIER)
+    early_target_hires = _scale_hires(hires_per_day(
+        hiring_params, hour=current_hour,
         turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY), money=me["money"],
         animal_tile_counts=placed_animal_type_counts,
         crop_tile_counts=_crop_tile_counts(me["tiles"]),
@@ -2032,7 +2532,7 @@ def decide(obs: dict, params: dict) -> dict:
         maintenance_actions_today=maintenance_actions_today,
         planned_new_crop_tiles=planned_new_crop_tiles,
         planned_new_animals=planned_new_animals,
-    )
+    ), hires_multiplier)
     labor_units = 1 + early_target_hires
     max_plants_per_unit = params.get("max_plants_per_unit", _DEFAULT_MAX_PLANTS_PER_UNIT)
     plant_budget = max(0, max_plants_per_unit * labor_units - n_plant_tiles)
@@ -2067,6 +2567,19 @@ def decide(obs: dict, params: dict) -> dict:
         plant_crop = basket_seq if basket_seq else None
         plant_qty = len(basket_seq)
 
+    if opening_on and not opening_last_day:
+        # T8.67: the wheat the herd lacks first, then the best crop (and the cheaper ones bought with the
+        # money left); never on the tiles kept free for animal structures.
+        _seq = _opening.planting_sequence(
+            cap=min(
+                max(0, free_tiles - opening_n_reserved_free), labor_units, plant_budget,
+                max_plant_tasks_per_turn,
+            ),
+            seeds=seeds, wheat_needed=opening_wheat_needed, ranked_crops=opening_ranked_crops,
+        )
+        plant_crop = _seq if _seq else None
+        plant_qty = len(_seq)
+
     if params.get("no_plant_on_last_turn", _DEFAULT_NO_PLANT_ON_LAST_TURN) and current_hour >= (
         params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY) - 1
     ):
@@ -2076,7 +2589,7 @@ def decide(obs: dict, params: dict) -> dict:
     parallel_animal_acquisition = params.get(
         "parallel_animal_acquisition", _DEFAULT_PARALLEL_ANIMAL_ACQUISITION
     )
-    feed_pickup_unpinned = params.get("feed_pickup_unpinned", _DEFAULT_FEED_PICKUP_UNPINNED)
+    feed_pickup_unpinned = params.get("feed_pickup_unpinned", _DEFAULT_FEED_PICKUP_UNPINNED) or opening_on
     animal_pickup_unpinned = params.get("animal_pickup_unpinned", _DEFAULT_ANIMAL_PICKUP_UNPINNED)
     prioritize_animal_setup = params.get("prioritize_animal_setup", _DEFAULT_PRIORITIZE_ANIMAL_SETUP)
 
@@ -2113,6 +2626,9 @@ def decide(obs: dict, params: dict) -> dict:
         water_idle_priority_when_safe=params.get(
             "water_idle_priority_when_safe", _DEFAULT_WATER_IDLE_PRIORITY_WHEN_SAFE
         ),
+        feed_skip_ages=opening_feed_skip,
+        reserved_tiles=opening_reserved,
+        fertilize_crops=fertilize_crops,
     )
     # Reserve WHEAT from routine selling once any animal exists on the
     # farm - see market.sell_orders's own docstring for the real deadlock
@@ -2122,13 +2638,15 @@ def decide(obs: dict, params: dict) -> dict:
     # by import (tasks.py has no dependency on this module) - keep the
     # two in sync by hand if either changes.
     wheat_reserve = _WHEAT_FEED_RESERVE if placed_animal_type_counts else 0
+    if opening_on and not opening_last_day:
+        wheat_reserve = 10**9  # T8.67: WHEAT is never sold before the last day
 
     # T8.3l: feed is only worth restocking when there's an animal placed
     # or currently being pursued (acquisition_animal) - see
     # _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED's own comment for the real
     # ping-pong this fixes.
     feed_needed = (
-        bool(placed_animal_type_counts) or acquisition_animal is not None
+        bool(placed_animal_type_counts) or acquisition_animal is not None or bool(opening_unplaced)
         if params.get("wheat_buy_only_when_feed_needed", _DEFAULT_WHEAT_BUY_ONLY_WHEN_FEED_NEEDED)
         else True
     )
@@ -2141,6 +2659,8 @@ def decide(obs: dict, params: dict) -> dict:
     liquidate_wheat_reserve = params.get(
         "liquidate_wheat_reserve", _DEFAULT_LIQUIDATE_WHEAT_RESERVE
     )
+    if opening_on:
+        liquidate_wheat_reserve = opening_last_day  # T8.67: the WHEAT stock goes on the last day
 
     # T8.51: capacity-aware selling. Project the midnight shed content = what
     # this turn's ordinary sale leaves in the shed + everything the units carry
@@ -2158,7 +2678,7 @@ def decide(obs: dict, params: dict) -> dict:
     routine_preview = sell_orders(
         shed, market_inv, params, max_orders=_MAX_MARKET_ORDERS,
         wheat_reserve=early_wheat_reserve, liquidate=liquidate,
-        use_fertilizer=use_fertilizer, liquidate_wheat_reserve=liquidate_wheat_reserve,
+        use_fertilizer=protect_fertilizer_from_sale, liquidate_wheat_reserve=liquidate_wheat_reserve,
     )
     shed_left = dict(shed)
     for o in routine_preview:
@@ -2204,25 +2724,80 @@ def decide(obs: dict, params: dict) -> dict:
         # it is used as fertilizer stock, FERTILIZER aside): otherwise this turn's
         # ordinary sale already brings the money in.
         shed_has_sellable_goods = any(
-            n > 0 and item != "WHEAT" and not (item == "FERTILIZER" and use_fertilizer)
+            n > 0 and item != "WHEAT" and not (item == "FERTILIZER" and protect_fertilizer_from_sale)
             for item, n in shed.items()
             if item not in ANIMALS
         )
         deadline_mode = params.get("drop_goods_deadline_mode", _DEFAULT_DROP_GOODS_DEADLINE_MODE)
         shed_capacity_now = params.get("shed_capacity", _DEFAULT_SHED_CAPACITY)
-        if deadline_mode:
+        final_day = (
+            params.get("final_day_delivery", _DEFAULT_FINAL_DAY_DELIVERY)
+            and current_day >= season_length_days - 1
+        )
+        final_turns = 0
+        if final_day:
+            # The engine ends the game on the state that follows the last acted turn: the hour
+            # turns_per_day-1 observation is terminal and its actions never run, so the last
+            # turn that counts is hour turns_per_day-2 (the helpers treat `turns_per_day - 1` as it).
+            final_turns = params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY) - 1
+            # Nothing else pays on the last day (no midnight: no growth, production or weeds any
+            # more), so only harvesting, collecting and carrying count - every other task would just
+            # take the units away from the far ready tiles.
+            tasks = [t for t in tasks if t.op in ("HARVEST", "COLLECT_FERTILIZER")]
+            if params.get("final_day_far_first", _DEFAULT_FINAL_DAY_FAR_FIRST):
+                _sheds = shed_access_tiles(board_size)
+                tasks = [
+                    dataclasses.replace(
+                        t, priority=PRIORITY_HARVEST - min(_tile_dist(t.pos, sh) for sh in _sheds) / 100
+                    )
+                    for t in tasks
+                ]
+            # Fertilizer is sellable goods now too: collect it at harvest priority and carry it in.
+            tasks = [
+                dataclasses.replace(t, priority=PRIORITY_HARVEST) if t.op == "COLLECT_FERTILIZER" else t
+                for t in tasks
+            ]
+            tasks = final_day_harvest_eligibility(
+                tasks, private.get("inventories") or [], unit_positions, board_size,
+                hour=current_hour, turns_per_day=final_turns,
+            )
+        if deadline_mode or final_day:
             drop_tasks.extend(goods_deadline_drop_tasks(
                 private.get("inventories") or [], unit_positions, board_size,
                 hour=current_hour,
-                turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY),
+                turns_per_day=final_turns if final_day else params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY),
                 shed_used=sum(shed.values()),
                 shed_stay=shed_stay_after_sales,
                 shed_room_after_sales=shed_capacity_now - shed_stay_after_sales,
                 shed_capacity=shed_capacity_now,
                 remaining_harvest_units=remaining_harvest_units,
-                margin_turns=params.get(
+                margin_turns=0 if final_day else params.get(
                     "drop_goods_deadline_margin_turns", _DEFAULT_DROP_GOODS_DEADLINE_MARGIN_TURNS
                 ),
+                deliver_all=bool(final_day),
+                goods_kinds=(*_DROP_GOODS, "FERTILIZER", "WHEAT") if final_day else _DROP_GOODS,
+                priority=PRIORITY_PREVENT_LOSS if final_day else PRIORITY_HARVEST,
+            ))
+        near_shed_distance = params.get("drop_near_shed_distance", _DEFAULT_DROP_NEAR_SHED_DISTANCE)
+        _near_max_day = params.get("drop_near_shed_max_day", _DEFAULT_DROP_NEAR_SHED_MAX_DAY)
+        if (
+            near_shed_distance is not None and not final_day
+            and (_near_max_day is None or current_day < _near_max_day)
+            and (
+                not params.get("drop_near_shed_only_when_cash_short", _DEFAULT_DROP_NEAR_SHED_ONLY_WHEN_CASH_SHORT)
+                or me["money"] < est_need
+            )
+        ):
+            drop_tasks.extend(near_shed_drop_tasks(
+                private.get("inventories") or [], unit_positions, board_size,
+                max_distance=near_shed_distance,
+                shed_used=sum(shed.values()),
+                shed_capacity=shed_capacity_now,
+                min_units=params.get("drop_near_shed_min_units", _DEFAULT_DROP_NEAR_SHED_MIN_UNITS),
+                include_wheat_for_hands=params.get(
+                    "drop_near_shed_wheat_for_hands", _DEFAULT_DROP_NEAR_SHED_WHEAT_FOR_HANDS
+                ),
+                include_fertilizer=params.get("drop_near_shed_fertilizer", _DEFAULT_DROP_NEAR_SHED_FERTILIZER),
             ))
         drop_task = goods_drop_task(
             private.get("inventories") or [], unit_positions, board_size,
@@ -2241,6 +2816,16 @@ def decide(obs: dict, params: dict) -> dict:
             drop_tasks.append(drop_task)
         if drop_tasks:
             tasks = sorted([*tasks, *drop_tasks], key=lambda t: (t.priority, t.pos))
+    if opening_on and not opening_last_day:
+        # T8.67: the animal set-up chain (pinned, above every ordinary task) and the day-after fertilizer runner.
+        _runner, _runner_drops = _opening.runner_tasks(
+            me["tiles"], unit_positions, private.get("inventories") or [], board_size, current_day,
+            current_hour, params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY),
+        )
+        _extra_tasks = [*opening_setup_list, *_runner]
+        if _extra_tasks:
+            tasks = sorted([*tasks, *_extra_tasks], key=lambda t: (t.priority, t.pos))
+        drop_tasks.extend(_runner_drops)
     assignment = assign_units(tasks, unit_positions)
     # What the carrier really drops this turn (only when it already stands on
     # the shed-access tile, i.e. its action below is the PLACE itself).
@@ -2309,8 +2894,8 @@ def decide(obs: dict, params: dict) -> dict:
     # hires_per_day_days_remaining was already computed above (T8.29,
     # for the early labor_units call) - reused here unchanged, not
     # recomputed, since current_day hasn't moved between the two calls.
-    target_hires = hires_per_day(
-        params, pending_task_count=pending_task_count, hour=current_hour,
+    target_hires = _scale_hires(hires_per_day(
+        hiring_params, pending_task_count=pending_task_count, hour=current_hour,
         turns_per_day=params.get("turns_per_day", _DEFAULT_TURNS_PER_DAY), money=me["money"],
         animal_tile_counts=placed_animal_type_counts,
         crop_tile_counts=_crop_tile_counts(me["tiles"]),
@@ -2319,7 +2904,20 @@ def decide(obs: dict, params: dict) -> dict:
         maintenance_actions_today=maintenance_actions_today,
         planned_new_crop_tiles=planned_new_crop_tiles,
         planned_new_animals=planned_new_animals,
-    )
+    ), hires_multiplier)
+    _fd_tph = params.get("final_day_tiles_per_hand", _DEFAULT_FINAL_DAY_TILES_PER_HAND)
+    if (
+        _fd_tph
+        and params.get("final_day_delivery", _DEFAULT_FINAL_DAY_DELIVERY)
+        and current_day >= season_length_days - 1
+    ):
+        # T8.63: last day - one hire wave sized from the ready tiles (the tasks list only holds
+        # HARVEST/COLLECT_FERTILIZER/DROP_GOODS by now); once it is in, `hires_today` covers it.
+        _ready_tiles = {t.pos for t in tasks if t.op in ("HARVEST", "COLLECT_FERTILIZER")}
+        target_hires = min(
+            params.get("max_hires_per_day", 12),
+            -(-len(_ready_tiles) // _fd_tph),
+        )
     hires_today = me.get("hires_today", 0)
     # T8.44: a same-day (mid-day) top-up hire - e.g. a BUY_LAND settling
     # this same turn jumps free_tiles, and the day-plan forecast above
@@ -2347,6 +2945,13 @@ def decide(obs: dict, params: dict) -> dict:
     max_hire_orders_per_turn = params.get(
         "max_hire_orders_per_turn", _DEFAULT_MAX_HIRE_ORDERS_PER_TURN
     )
+    if opening_on and not opening_last_day:
+        # T8.67: keep the slots of this turn's animal/feed/seed purchases (hires are listed first and
+        # the market queue is cut at _MAX_MARKET_ORDERS); the rest of the hires follow next turn.
+        max_hire_orders_per_turn = min(
+            max_hire_orders_per_turn,
+            max(1, _MAX_MARKET_ORDERS - (len(opening_buy) + (1 if opening_feed_need > 0 else 0) + 2)),
+        )
     hires: list[list] = []
     while hires_today + len(hires) < target_hires and len(hires) < max_hire_orders_per_turn:
         if hires_today > 0 and (turns_per_day_val - current_hour) < hire_min_turns_left:
@@ -2373,7 +2978,7 @@ def decide(obs: dict, params: dict) -> dict:
             max_orders=_MAX_MARKET_ORDERS,
             wheat_reserve=preview_wheat_reserve,
             liquidate=liquidate,
-            use_fertilizer=use_fertilizer,
+            use_fertilizer=protect_fertilizer_from_sale,
             liquidate_wheat_reserve=liquidate_wheat_reserve,
             force_sell=force_sell,
         )
@@ -2398,6 +3003,35 @@ def decide(obs: dict, params: dict) -> dict:
         >= max_pending_water
     ):
         defer_seed_purchase = True
+
+    # T8.69, the user's own request after the T8.68 staleness trace: a
+    # sharper replacement for the two pending-count gates just above -
+    # instead of a blunt "too many HARVEST/WATER tasks queued" threshold,
+    # compute how many turns it will actually take this turn's real labor
+    # force to clear every task that outranks PLANT (this turn's own
+    # `tasks` list, already built - not an estimate), and only let the
+    # seed purchase/ranking lock in once that's within `seed_purchase_
+    # lookahead_turns`. This is what directly closes the gap: the crop
+    # ranking (`fallback_crop`) gets re-read fresh right before the
+    # purchase actually fires, instead of locking in a snapshot that may
+    # be stale by the time labor finally reaches the PLANT task - a crop
+    # briefly top-ranked today but whose score is about to collapse (its
+    # cycle no longer fitting the shrinking season) no longer gets bought
+    # in bulk only to sit unplanted while its score decays.
+    #
+    # Deliberately does NOT touch `planned_new_crop_tiles`/`planned_new_
+    # animals` (computed above, already driven by `fallback_crop`
+    # unconditionally per T8.44) - the hiring forecast stays informed of
+    # the intended planting even while this gate suppresses the purchase
+    # itself, exactly the user's own third request.
+    if params.get("seed_purchase_lookahead_aware", _DEFAULT_SEED_PURCHASE_LOOKAHEAD_AWARE):
+        higher_priority_count = sum(1 for t in tasks if t.priority < PRIORITY_PLANT)
+        turns_until_plant_reached = math.ceil(higher_priority_count / max(1, labor_units))
+        lookahead_turns = params.get(
+            "seed_purchase_lookahead_turns", _DEFAULT_SEED_PURCHASE_LOOKAHEAD_TURNS
+        )
+        if turns_until_plant_reached > lookahead_turns:
+            defer_seed_purchase = True
 
     tail: list[list] = []
     # Seed/animal purchase: arrives next turn (market orders resolve
@@ -2440,7 +3074,7 @@ def decide(obs: dict, params: dict) -> dict:
             shed_for_sell[item] = shed_for_sell.get(item, 0) + qty
         preview_kwargs = dict(
             max_orders=_MAX_MARKET_ORDERS, wheat_reserve=wheat_reserve, liquidate=liquidate,
-            use_fertilizer=use_fertilizer, liquidate_wheat_reserve=liquidate_wheat_reserve,
+            use_fertilizer=protect_fertilizer_from_sale, liquidate_wheat_reserve=liquidate_wheat_reserve,
             force_sell=force_sell,
         )
         buy_money += (
@@ -2505,8 +3139,34 @@ def decide(obs: dict, params: dict) -> dict:
         )
         bulk_animal_cost = bulk_animal_qty * animal_unit_cost
 
+    if opening_on and not opening_last_day:
+        # T8.67: one purchase for the whole herd, the feed of today (proportional to the animals that
+        # must be fed, net of the WHEAT already in the shed or on units - no price cap: an escape costs
+        # more), then the seeds for what is left: the wheat tiles of the herd first.
+        for _a, _q in opening_buy.items():
+            tail.append(["BUY_ANIMAL", _a, _q])
+        _op_cost = sum(ANIMALS[a]["cost"] * q for a, q in opening_buy.items())
+        _wheat_have = shed.get("WHEAT", 0) + sum(
+            inv.get("WHEAT", 0) for inv in (private.get("inventories") or [])
+        )
+        _feed_buy = max(0, opening_feed_need - _wheat_have)
+        _feed_cost = 0
+        if _feed_buy > 0:
+            tail.append(["BUY_PRODUCT", "WHEAT", _feed_buy])
+            _feed_cost = _feed_buy * price("WHEAT", obs["market"]["inventory"].get("WHEAT", MARKET_I0))
+        _hires_cost = sum(hire_cost(me.get("hires_today", 0) + i) for i in range(len(hires)))
+        if not defer_seed_purchase:
+            for _crop, _q in _opening.seed_plan(
+                budget=buy_money - _op_cost - _feed_cost - _hires_cost,
+                free_tiles=max(0, free_tiles + harvest_tiles_for_purchase - opening_n_reserved_free),
+                seeds_held=dict(seeds), wheat_needed=opening_wheat_needed,
+                ranked_crops=opening_ranked_crops,
+                fill_cheaper=params.get("animal_opening_fill_cheaper", True),
+            ):
+                tail.append(["BUY_SEED", _crop, _q])
     if (
-        not animal_blocks_planting
+        not opening_on
+        and not animal_blocks_planting
         and fallback_crops
         and (has_empty_tile or harvest_tiles_for_purchase > 0)
         and not defer_seed_purchase
@@ -2591,6 +3251,13 @@ def decide(obs: dict, params: dict) -> dict:
         development_cost += quadrant_tiles * CROPS[fallback_crop]["seed"]
     if acquisition_animal is not None:
         development_cost += planned_new_animals * ANIMALS[acquisition_animal]["cost"]
+    if opening_on and not opening_last_day and params.get("animal_opening_land_needs_herd_cash", True):
+        # T8.67: the next quadrant gets its herd (and the wheat for it) at once - keep that cash.
+        _next_batch = _opening.plan_herd_purchase(
+            n_quadrants=n_quadrants + 1, existing_by_type=opening_existing,
+            market_inventory=obs["market"]["inventory"], current_day=current_day, params=params,
+        )
+        development_cost += sum(ANIMALS[a]["cost"] * q + CROPS["WHEAT"]["seed"] * q for a, q in _next_batch.items())
     extra_hands = math.ceil(
         quadrant_tiles
         * params.get("day_plan_new_crop_tile_actions", _DEFAULT_DAY_PLAN_NEW_CROP_TILE_ACTIONS)
@@ -2619,7 +3286,7 @@ def decide(obs: dict, params: dict) -> dict:
     wheat_order = buy_wheat_order(
         wheat_on_hand, obs["market"]["prices"].get("WHEAT", 0), params, feed_needed=feed_needed
     )
-    if wheat_order is not None:
+    if wheat_order is not None and not opening_on:
         tail.append(wheat_order)
 
     # `sells` gets whatever's left after `hires`/`tail` reserve their
@@ -2645,14 +3312,36 @@ def decide(obs: dict, params: dict) -> dict:
         max_orders=sell_max_orders,
         wheat_reserve=effective_wheat_reserve,
         liquidate=liquidate,
-        use_fertilizer=use_fertilizer,
+        use_fertilizer=protect_fertilizer_from_sale,
         liquidate_wheat_reserve=liquidate_wheat_reserve,
         force_sell=force_sell,
     )
 
-    if params.get("sell_orders_first_by_revenue", _DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE):
+    sell_orders_first_by_revenue = params.get(
+        "sell_orders_first_by_revenue", _DEFAULT_SELL_ORDERS_FIRST_BY_REVENUE
+    )
+    if sell_orders_first_by_revenue:
         market_inventory = obs["market"]["inventory"]
         sells = sorted(sells, key=lambda o: -sale_revenue([o], market_inventory))
+
+    if params.get("investment_priority_reordered", _DEFAULT_INVESTMENT_PRIORITY_REORDERED):
+        # T8.69, the user's own request: animal purchases (and wheat, when
+        # feed is actually needed) outrank hiring for the turn's limited
+        # market-order slots, instead of `hires` sitting first and
+        # potentially crowding them out (T8.44's own flagged risk). A
+        # post-hoc reorder of the already-built lists, not a change to how
+        # `tail`/`hires`/`sells` themselves get constructed - `sells`
+        # keeps its existing position relative to `hires` (an unrelated,
+        # separately-tuned concern, T8.51), only animal/wheat orders move
+        # to the very front.
+        animal_orders = [o for o in tail if o[0] == "BUY_ANIMAL"]
+        wheat_orders = [o for o in tail if o[0] == "BUY_PRODUCT" and o[1] == "WHEAT"]
+        rest_tail = [o for o in tail if o not in animal_orders and o not in wheat_orders]
+        if sell_orders_first_by_revenue:
+            market = (animal_orders + wheat_orders + sells + hires + rest_tail)[:_MAX_MARKET_ORDERS]
+        else:
+            market = (animal_orders + wheat_orders + hires + sells + rest_tail)[:_MAX_MARKET_ORDERS]
+    elif sell_orders_first_by_revenue:
         market = (sells + hires + tail)[:_MAX_MARKET_ORDERS]
     else:
         market = (hires + sells + tail)[:_MAX_MARKET_ORDERS]

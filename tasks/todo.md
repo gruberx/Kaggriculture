@@ -3250,3 +3250,401 @@ targets — gated behind a Stage-1 baseline that doesn't exist yet).
   remaining season days from `current_day`, which `rank_portfolio` doesn't currently receive at
   all). Related to, but distinct from, the animal self-impact gap already recorded above - worth
   tackling together once hiring (T8.4-T8.7) makes more than one animal relevant.
+
+## T8.63 - final-day delivery of carried goods (2026-09-23, the user's request) - ENABLED
+
+Finding: on day 29 units emptied into the shed only at midnight, which never comes, so whatever they carried
+(seed 1: 12 strawberry + 30 carrot + milk) and whatever stayed on tiles was never sold. Also found: the game
+ends on the state after the last acted turn - the hour 23 observation of day 29 is terminal and its actions
+never run, so the last turn that counts is hour 22 (`turns_per_day - 2`).
+
+Fix (`final_day_delivery`, default True): on the last day (1) `goods_deadline_drop_tasks(deliver_all=True,
+margin 0, tier PREVENT_LOSS)` sends every unit holding goods so that the last drop lands on hour 22, one item
+type per turn; (2) `final_day_harvest_eligibility` restricts every task to units that can still reach the
+shed afterwards (a harvest also needs the product's extra drop turn) and removes tasks nobody can finish.
+
+Follow-ups (the user's requests): (a) FERTILIZER is handled the same way - COLLECT_FERTILIZER raised to the
+HARVEST tier, counted as a harvest in the eligibility check, dropped with the other goods (`goods_kinds`);
+(b) "everything sellable": feed WHEAT on units is dropped too, one-time crops are harvested as they are
+(no waiting for max yield), and on the last day only HARVEST / COLLECT_FERTILIZER / DROP_GOODS tasks are kept -
+traced on seed 1: units spent hours 0-19 on watering/feeding/DIG (no effect without a midnight) and idled at
+the south end while 15 ready tiles (strawberries in the NE) were out of reach by hour 15.
+
+(c) last-day labor (the user's request): `final_day_far_first` (harvest priority 1 - dist_to_shed/100, so the far
+corner is done first instead of last) and `final_day_tiles_per_hand` (one hire wave sized at hour 0 as
+ceil(ready tiles / N) instead of the day plan trickling hands in until hour 19). Traced on seed 1: units idled
+from hour 11 while 10 far tiles were already out of reach.
+
+Measured (40 seeds, vs the T8.63 state with neither, starter/pass): far_first +0.6/+0.4% (34/40, 35/40);
++ tiles_per_hand 6: +0.1/+0.1; 4: +0.7/+0.5; **3: +0.8/+0.6 (36/40, 35/40) - chosen**; 2: +0.5/+0.4.
+Whole T8.63 vs flag off: about +5.2%/+5.4% (70004->70546 on top of +4.4/+4.8). Golden re-recorded (35th).
+Not submitted to Kaggle.
+Open: some produce units can still lie on far tiles at the end; `no_plant_on_last_turn` is unaffected
+(hour 23 of days 0-28 is a normal turn; only day 29's hour 23 is terminal).
+
+## T8.64 - why hires happen after hour 0, and a bigger morning forecast (2026-09-23, the user's request) - NOT enabled
+
+Counts (12 games vs starter): 2982 hires, 67% at hour 0, 33% later (hour 1: 209 = the 10-orders-per-turn spill,
+hours 2-18: 771); 64% of the hire days have a hire after hour 0. Tool: tools/hire_hours.py.
+
+Cause (tools/trace_hire_target.py, seed 1, all days): the active formula is the day plan with
+`day_plan_remaining_turns_aware` (T8.53): target = ceil(remaining_actions * turns_per_task_estimate /
+(turns_per_day - hour)) - 1. The remaining work falls more slowly than the turns left (units walk, so the real
+cost per action is above the assumed 2.0 turns), and the target creeps up by 1 every few hours (day 16: 6 at hour 0
+-> 12 at hour 17). Days with a target above 10 at hour 0 also spill 1-2 hires into hours 1-2 (10-order cap). New
+planned tiles after a land purchase/harvest (days 0, 10-11, 21) add a few more.
+
+Measured (40 seeds, starter/pass, vs base 70546/70856; "late" = hires after hour 0, hires/game):
+- the user's idea, +1/8 (`hire_buffer_fraction` 0.125): +0.2%/+0.8%, late 32% -> 27%, 266 hires; 0.25: -1.0%/-1.5%.
+- `turns_per_task_estimate` 2.25: -0.3/-0.7; 2.5: +0.7/+1.6; 3.0: +2.1/+2.3 (late 20%).
+- full-day horizon (`day_plan_remaining_turns_aware` False): +1.8/+1.8, late 7%, 183 hires/game.
+- full-day + tpt 2.5: +2.8/+3.3 (late 10%); **2.75: +3.7/+4.7 (better 31/40, 32/40; late 10%, 225 hires)**;
+  3.0: +3.3/+4.5; 3.5: +3.4/+2.5; 2.5 + buffer 0.125: +2.5/+1.7.
+Candidate (not enabled, no arena run yet): `day_plan_remaining_turns_aware` False + `turns_per_task_estimate` 2.75.
+
+T8.64 ENABLED on the user's explicit request (2026-09-23): `day_plan_remaining_turns_aware` False and
+`turns_per_task_estimate` 2.75 (params.py + policy.json). Arena (tuning seeds, new vs old values): 40W/10L/0T,
+win_rate 0.80. Golden re-recorded (36th). Revert = the two old values (True / 2.0). Not submitted to Kaggle.
+
+## T8.65 - animal care works, at a high tier (2026-09-23, the user's request) - ENABLED
+
+Before: `animal_care_aware` was False, no CARE task was ever created. Engine facts checked in kaggriculture.py
+(`_daily_refresh_animals`): the +1 care bonus is banked at midnight only if the animal was both cared for and fed
+that day, it is consumed on the next production only if the animal is fed that day, and it is reset (lost) on any
+production day otherwise - so care without feeding is wasted.
+Done: `animal_care_aware` True (params.py, policy.json); new `PRIORITY_ANIMAL_CARE` = 0.5 (below the urgent
+tier 0 - emergency WATER / FEED against an escape - above HARVEST 1 and everything else); CARE at that tier, and
+the FEED of any unfed animal is lifted to the same tier while care is on; CARE is not issued when the animal is
+unfed today and nobody carries wheat. `decide._DEFAULT_ANIMAL_CARE_AWARE` (fallback for a params dict without
+the key) stays False. The last day keeps only HARVEST/COLLECT_FERTILIZER tasks, so no CARE there.
+First version (CARE tier only) measured +3.6%/+4.1% (arena 28W/22L) and tripped the T8.38 escape guardrail
+(8 escapes on the golden seeds, first: starter seed 1, day 19). Trace: a latent bug in `build_task_list`'s wheat
+PICKUP - the shortfall was counted as `feed_needed_tiles > len(wheat_units)` (carriers), so with 2 animals and one
+farmer carrying WHEAT a PICKUP was proposed again and again; once it shared the urgent FEED tier the farmer
+oscillated (a step towards the far animal, back to the shed, +10 WHEAT each time: 80 WHEAT on him) and the far
+animal was never fed. Fix: the pickup is proposed only when the wheat the holders carry is below the number of
+tiles to feed (`feed_needed_tiles > carried_wheat`); tests added. The guardrail is NOT re-recorded - it passes.
+Measured (40 seeds, care on vs off, with the fix): starter +8.6% (better 34/40), pass +7.6% (35/40); arena
+45W/5L (0.90). Care off is unchanged by the fix (one animal). Golden re-recorded (37th). Not submitted to Kaggle.
+Open: CARE near the end of the season pays nothing when no production follows; not handled.
+
+## T8.66 - carriers next to the shed drop goods at once (2026-09-23, the user's request) - implemented, NOT enabled
+
+`near_shed_drop_tasks` (tasks.py) + `drop_near_shed_distance` (None = off, the default), `drop_near_shed_min_units`,
+`drop_near_shed_max_day`, `drop_near_shed_only_when_cash_short`, `drop_near_shed_wheat_for_hands`: a unit within N
+moves of a shed-access tile drops its biggest goods stock into the shed at tier HARVEST (pinned), and the goods
+are sold the same turn. Not on the last day (T8.63 handles it).
+Measured (40 seeds, vs the shipped state 79440 / 79819 starter/pass): all variants are not better -
+  every day: d=0 -1.4/-3.0%, d=1 -4.3/-4.3%, d=2 -2.6/-4.4%, d=1 min 5 units -2.9/-3.0%;
+  first 8 days only: -0.0/+0.2% (identical numbers for d=0/1 and with hand WHEAT - it practically never fires);
+  first 15 days: -2.5/-2.8%; only while cash is short: -0.5..-1.2 / -2.1..-2.8%; with hand WHEAT: same or worse.
+Likely reason (not traced): every drop costs a turn of a busy unit for a small load, and an early sale is not
+worth more (the sell rules hold goods below their cost basis anyway); early harvests near the shed are mostly WHEAT.
+T8.66 follow-up (the user's request): first 11 days + distance 0, any product except wheat (FERTILIZER added via
+`drop_near_shed_fertilizer`): days<11: starter -0.6% (15/40 better) / pass -2.4% (8/40); + fertilizer: identical
+(-0.6/-2.4); days<8 + fertilizer: -0.0/+0.2 (17/40, 16/40). Still not better than the shipped state; stays off.
+
+## T8.67 — animal opening (2026-09-24, the user's design; implemented OFF, `animal_opening: false`)
+Whole herd bought at once (2 COW + 3 SHEEP on turn 0, then 5 of the 2 best types per new quadrant), parallel set-up by
+every unit (PICKUP -> wheat -> BUILD -> PLACE -> CARE/FEED on the same tile), cow feed/care skipped at ages 0 and 2,
+WHEAT tiles = k x animals kept planted, need-based feed purchase, WHEAT never sold before the last day, day-after
+fertilizer runner (unit 0). Code: kagg.policy.opening, tasks.feed_skipped/reserved_tiles, decide.py `opening_*`.
+Measured (40 seeds, vs starter/pass, base 79440/79819): opening +39.5%/+36.3%; without cheaper-seed fill
++46.5%/+42.3% (best); k=0.8 +47.4%/+41.6%, k=0.7 +45.2%/+38.8%, k=0.6 +43.4%/+36.7% (no gain over k=1);
+no cow skip -4 pp; quadrant without herd cash -3 pp. Arena (fill off) vs shipped: 47W/3L. 0 escapes in 48 episodes;
+full suite 738 passed with the flag off. Earlier cutoff of the 5th animal by marginal score removed (user wants 5).
+Not enabled and not submitted: needs the user's decision (suggested: `animal_opening_fill_cheaper=false`).
+- [x] Submission of the T8.63-T8.67 bundle (the user's explicit request, 2026-09-24): `build/submission.tar.gz` (271055 bytes),
+      Kaggle ref **56507815**, logged in `data/arena/submissions.jsonl` (arena 47W/3L vs the previous defaults). T8.67 animal opening
+      enabled by default with `animal_opening_fill_cheaper=false`; golden re-recorded a 38th time.
+
+## T8.68 — cycle-economics ranking (2026-09-24, the user's design, built on the saved T8.57 tile-economics
+analysis; implemented, measured, **NOT accepted** - `use_cycle_economics_ranking: false`)
+
+Replaces `strategy.rank_portfolio`/`score_portfolio` entirely (the user's explicit choice, not additive) with a
+whole-remaining-life accounting: `src/kagg/policy/cycle_economics.py`'s `crop_horizon_profit_per_day`/
+`animal_horizon_profit_per_day` value a tile's full future - every replant cycle through the literal last day of
+the season, plus a worthwhile partial-yield tail cycle when the horizon ends mid-cycle - at live market prices
+throughout, mirroring `tools/tile_economics_30d.py`'s own `crop_report()`/`animal_report()` methodology
+(`cycles = (days_remaining-1)//cycle_days` + tail) generalized from that script's fixed `DAYS=30`/static base
+prices to a live `days_remaining`/live prices. The crop cycle *shape* (which ages to water/fertilize/harvest, units
+per life) is reused as static data from a shipped snapshot, `kagg/params/tile_economics.json` (a copy of
+`tasks/data/tile_economics.json`, now also copied by `tools/build_submission.py` - it wasn't shipped before this
+task, a real gap found while implementing, since only `params/policy.json` was ever copied into the bundle).
+Animals reuse `strategy.animal_revenue_per_tile_day`'s already-correct `net_of_cost=True, care_aware=True`
+day-by-day simulation unchanged (confirmed bit-identical via `animal_horizon_profit_per_day`, see below).
+
+A crop's score normally assumes no fertilizer; it switches to the fertilized-cycle economics once the live
+FERTILIZER *sell* price (there is no way to buy it) drops below `cycle_economics_fertilizer_price_threshold`
+(default 10) - `cycle_economics.crops_worth_fertilizing` drives both the score and a new, price-and-age-gated
+FERTILIZE mechanism in `tasks.py` (`fertilize_crops`/`fertilize_ages`, only fires on the crop's own DP-optimal
+application age, plus a new PICKUP FERTILIZER task mirroring the existing WHEAT-shortfall pattern) - fully
+additive to the pre-existing flat `use_fertilizer` flag, which is untouched and stays bit-identical off.
+
+A real bug found while wiring this in, not anticipated by the plan: `market.sell_orders`'s own exclusion of
+FERTILIZER from routine selling is gated on the *old* `use_fertilizer` flag - left unfixed, a unit meant for the
+new age-gated FERTILIZE task would get routinely sold away before ever being applied, silently defeating the
+whole mechanism whenever `use_fertilizer` itself stays at its own default `False`. Fixed with a second, separate
+local (`protect_fertilizer_from_sale = use_fertilizer or bool(fertilize_crops)`) threaded into every
+`sell_orders(...)` call site instead of `use_fertilizer` itself (deliberately NOT folded into `use_fertilizer`
+directly - that would wrongly re-enable its own any-age FERTILIZE gate too). Covered by a regression test
+(`test_decide_cycle_economics_protects_fertilizer_from_routine_sale`).
+
+Also relaxed the crop maturity gate for this path only: `decide._crop_has_time_to_mature`'s hard `max_yield_day`
+requirement is exactly what the user's partial-credit request needs relaxed - `cycle_economics.crop_has_time_to_
+produce` (a new, looser "can reach ANY yield at all" gate, mirroring `_animal_has_time_to_mature`'s own looseness)
+is used instead of it in `_top_investment_choice`/`_top_crop_basket` whenever `use_cycle_economics_ranking` is on;
+`decide.py`'s new `_dispatch_score_portfolio` is the single switch point between the old and new scoring paths,
+used by all three ranking call sites.
+
+Verification: 762 unit tests pass (up from 761 - 23 new, `tests/test_policy_cycle_economics.py` +
+`test_policy_tasks.py`/`test_policy_decide.py` additions), including whole-horizon multi-cycle accounting (WHEAT
+`days_remaining=9` → 2 full replant cycles, not 1), partial-tail credit both when `cycles==0` and `cycles>=1`,
+ongoing-crop multi-harvest-per-life AND multi-cycle counting (TOMATO), the fertilizer price-threshold switch,
+MELON never switching, and the animal wrapper matching `strategy.animal_revenue_per_tile_day` exactly for the
+same inputs. Flag-off path is bit-identical (verified: every pre-T8.68 test in the suite passed unchanged).
+Escape guardrail (`tools/check_escapes_t868.py`, a temporary override of `test_no_animal_escapes_across_the_
+golden_seeds` - never re-recorded): **0 escapes** across all 6 golden (opponent, seed) pairs with the flag on.
+
+**40-seed measurement (`tools/measure_t868.py`) - REJECTED, not shipped**: `use_cycle_economics_ranking=True`
+alone loses to the checked-in `rank_portfolio` baseline on both blocks - starter -3.5% (better on only 14/40
+seeds), pass -3.2% (12/40). The fertilizer-threshold sweep (5/10/20) produced byte-identical results at all three
+values, meaning the live FERTILIZER price never actually dropped below 20 in any of these 40 seeds x 2 opponents -
+the fertilizer-switch mechanism was never exercised at all in this measurement, so the loss comes purely from the
+core whole-horizon ranking formula itself, not from fertilizer behavior. A day-0 score trace (starter-style
+inventory) showed identical animal scores (confirming the animal wrapper is truly a correct, bit-identical
+passthrough) but lower crop scores across the board vs the old ranking (MELON 125.15→106.00, STRAWBERRY
+36.06→26.13, TOMATO 20.33→13.50) - the top pick (SHEEP) was unchanged at day 0 in this one trace, so the
+aggregate loss likely comes from different choices later in the game once the day-0 animal is already placed and
+crop-basket/fallback picks start to diverge from the old, already-tuned heuristic (T8.3f/T8.3k/T8.3m's own
+measured self-impact/cost/season-aware refinements) - not independently traced further this session.
+
+Left available behind `use_cycle_economics_ranking` (default `False`) for a future revisit, not deleted: the
+mechanism is correctly implemented and well-tested per the user's own design, but as a whole-horizon replacement
+for `rank_portfolio` it underperforms the existing, already-measured-and-tuned ranking.
+
+**Follow-up (same session): a full-episode trace and a real-data check of the starter/pass measurement's own
+validity, then a corrected, more realistic re-measurement - the user's own follow-up after seeing the -3.5%/-3.2%
+result, having separately observed on Kaggle that real-opponent games crash MELON's price much harder than this
+project's self-play does.**
+
+1. `tools/trace_t868.py` (a full seed-1-vs-starter trace, day-by-day market prices + crop-tile composition, not
+   just day 0): OLD and NEW track identically through day 12; they diverge at day 15, where OLD stays concentrated
+   in STRAWBERRY (35→37 tiles) while NEW splits into STRAWBERRY+TOMATO (22-24/13-14) - not a MELON-price story at
+   all, since MELON stayed at 190-270 basically all game against `starter` (which only ever grows CARROT - see
+   below).
+2. Checked `kaggle_environments`' own `starter_agent` source directly: it grows **only CARROT**, one tile at a
+   time, and `pass` does nothing - **neither ever competes for MELON/STRAWBERRY market share**, confirmed exactly
+   by the trace (STRAWBERRY's price *rose* 120→296 over the whole starter episode, the opposite of a crash). The
+   11 saved real top-game replays (`data/top_replay_records/`) show MELON's minimum close price at $43-$111 across
+   games (not $1, but a real, sharp drop from the $250 base) - real competitive games really do crash premium-good
+   prices much harder than this project's starter/pass self-play structurally can.
+3. A synthetic check of whether the *mechanism* (not just the measurement) actually differs: crashed MELON's
+   market inventory to price $60 and compared `_dispatch_score_portfolio` at several days - both sides still ranked
+   an animal (SHEEP) top regardless (the crash didn't change the overall pick either way), and a separate check of
+   how much each formula discounts an already-heavily-committed MELON position (0→40 tiles, `crop_tile_counts`)
+   found near-identical *relative* discounting - both sides use the exact same "static snapshot of already-planted
+   tiles" convention for modeling a competitor's presence, so T8.68 doesn't actually add any opponent-aware
+   sophistication over the old ranking.
+4. **Re-measured head-to-head instead of vs starter/pass** (`tools/measure_t868_headtohead.py`,
+   `harness.run_paired`/`run_block` - the same "direct self-play against the checked-in baseline" pattern T8.7/
+   T8.8 used, working block, 50 seeds/100 episodes): first confirmed a real baseline-vs-baseline mirror match
+   *does* crash MELON to $1-$10 by day 21-27 (exactly matching the user's own Kaggle observation, and confirming
+   starter/pass was the wrong proxy) - then measured the candidate under those real conditions. **Result: decisively
+   WORSE, not better** - 4W/46L/0T (win rate 0.08, Wilson [0.032, 0.188]), -5.4% total money. A seed-1 head-to-head
+   trace showed both agents playing almost identically (including abandoning MELON at the same pace once it
+   crashed - both are live-price-reactive by construction, this isn't new to T8.68) until day ~21-27, where the
+   candidate again shifts more into TOMATO than the baseline does - the same late-game ongoing-crop tilt the
+   starter/pass trace already showed, now costing more under real competitive pressure, not less.
+
+**Conclusion, corrected from the first pass**: the hypothesis that a more realistic (price-crashing) opponent
+would favor the new whole-horizon formula was tested directly and is **not supported** - real competitive pressure
+makes the rejection *more* decisive, not less. The actual, identified defect is unrelated to MELON/self-impact
+modeling (both rankings react to a live crashed price identically, and neither models a competitor's *future*
+replanting) - it's a systematic late-game over-weighting of TOMATO (an ongoing crop) relative to STRAWBERRY/other
+options, present in both the starter/pass and head-to-head traces alike.
+
+**Second follow-up (same session, the user's own request to dig into the crossover): found the exact day and
+mechanism, attempted a fix, re-measured - the fix is real but does NOT close the gap.**
+
+1. Isolated the crossover precisely (flat `strategy.crop_revenue_per_tile_day` score - the actual shipped default,
+   `rank_season_aware=False` - vs. `cycle_horizon_profit_per_day` day-by-day, both at base price, STRAWBERRY vs
+   TOMATO): OLD keeps recommending STRAWBERRY through day 19 of 30 (its score never adapts to the shrinking season
+   at all under the shipped default; only the hard `_crop_has_time_to_mature` gate finally excludes it at
+   day 20). NEW switches its own top pick to TOMATO starting **day 16** - 3-4 days earlier.
+2. Root cause #1 (confirmed, quantified): the denominator was the full `days_remaining`, not the tile-days this
+   specific plan actually occupies - a STRAWBERRY tail that only fits 2 of its 4 scheduled ticks got its profit
+   averaged over the *whole* remaining season, including days beyond its own last harvest that the live, every-
+   turn-re-ranking system would simply reclaim on its own next turn. Quantified at days_remaining=14: dividing by
+   occupied tile-days (13) instead of days_remaining (14) raised STRAWBERRY's score 9.86→10.62 - real, but modest.
+3. Root cause #2 (found while fixing #1): a merely net-positive tail can still DRAG DOWN the blended rate once a
+   full cycle has already completed (adds many more days than units) - `crop_horizon_profit_per_day` now only
+   blends a tail in when doing so doesn't lower the rate below what the completed cycles alone already earn
+   (`cycles == 0` still includes any net-positive tail unconditionally - nothing to compare against). This removed
+   real non-monotonic artifacts (STRAWBERRY's score used to dip and jump around, e.g. 16.90→13.57→23.00 across
+   days_remaining=29→28→26 - now a clean, stable 23.00 flat once one cycle actually completes).
+4. **Re-measured after both fixes (`tools/measure_t868_headtohead.py`, same 50-seed working block): still
+   decisively rejected, marginally worse if anything** - 3W/47L/0T (win rate 0.06), -5.7% total money (was 4W/46L,
+   -5.4%). **The fix doesn't close the gap because it doesn't touch the actual crossover window**: at
+   `days_remaining` 11-19, `cycles == 0` for STRAWBERRY (its 16-day cycle doesn't even complete once), so the
+   "don't drag down the completed rate" check never applies there - the whole-horizon TOMATO score in that exact
+   window (16.27) genuinely is higher than STRAWBERRY's own best-achievable partial (9.86-16.93) even after both
+   fixes, on pure profit-per-tile-day. The switch to TOMATO is not a modeling bug.
+5. **Real, unfixed remaining gap, identified but not addressed this session**: `tile_economics.md`'s own saved
+   profit-per-*action* numbers show STRAWBERRY far ahead of TOMATO (54.7 vs 27.9 fertilized, 34.5 vs 21.1
+   unfertilized) - neither `rank_portfolio` nor `cycle_economics` has ever priced farmer-labor cost into crop
+   ranking at all (both score purely by calendar-day profit). NEW's earlier (day 16 vs day 20) pivot to the
+   labor-hungrier crop means more of it lands during the labor-scarce endgame. Checked one seed's final board state
+   for a labor-strain signal (weeds/unharvested units) and found only a small difference (7 vs 6 weeds, both fully
+   harvested) - suggestive, not confirmed. A real fix would mean pricing labor into the ranking itself (a bigger,
+   unrequested change, not attempted here).
+
+The denominator/tail-inclusion fix (items 2-3 above) is kept in the code - it's a genuine correctness improvement
+(matches `crop_revenue_per_tile_day`'s own "per **tile**-day" semantics, removes real non-monotonic artifacts,
+all 764 unit tests pass, 16 in `test_policy_cycle_economics.py` specifically) even though it didn't recover
+performance - reverting it would only restore the confusing artifacts for no benefit, since `use_cycle_economics_
+ranking` stays `False` by default either way. A real next step for whoever revisits this: price farmer-actions
+(not just calendar days) into `crop_horizon_profit_per_day`, the same way `_crop_actions_per_tile_day` already
+does for the separate hiring-workload forecast, so a crop's rate reflects the same labor-scarcity discipline the
+rest of this project's hiring economics does.
+
+## T8.69 — investment priority reorder + seed-purchase lookahead deferral (2026-09-25, the user's own design,
+built directly on the T8.68 staleness trace; implemented, measured, **ACCEPTED but not yet shipped**)
+
+The user's own diagnosis of the T8.68 seed-staleness mechanism (TOMATO bought while briefly top-ranked on day 19,
+labor busy with higher-priority routine tasks for 2-3 days, score collapsed by the time it was finally planted -
+see T8.68's own entry), in three parts:
+
+1. **Market-order priority**: animal purchases (and wheat, when feed is actually needed) should outrank hiring
+   for the turn's limited market-order slots - confirmed by reading `decide.py` directly that `market = (hires +
+   sells + tail)[:_MAX_MARKET_ORDERS]` puts `hires` first, ahead of `tail` (BUY_SEED/BUY_ANIMAL/BUY_LAND/wheat
+   restock), exactly the risk T8.44's own comment already flagged.
+2. **Defer the crop-seed evaluation/purchase to close to the moment a tile will actually be plantable**, instead
+   of locking in today's ranking snapshot the instant a crop happens to rank #1 - confirmed `plant_crop`/
+   `fallback_crop` is recomputed fresh every turn with no look-ahead to labor/tile availability anywhere in
+   `_top_investment_choice`/`_top_crop_basket`/`_new_investment_tasks`. The existing, always-off-by-default T8.48
+   levers (`seed_purchase_max_pending_harvest`/`_water`) are a coarse count-threshold, not a computed "turns until
+   this PLANT is actually reached" estimate.
+3. **Keep the hiring forecast informed of the intended planting even while the purchase itself is deferred** -
+   confirmed this already works structurally: `planned_new_crop_tiles` is driven by `fallback_crop`/
+   `plant_crop_intent`, independent of whether `seeds.get(plant_crop, 0) > 0` (T8.44's own fix) - the new
+   mechanism (point 2) must not disturb this, and doesn't (verified by a dedicated test).
+
+**Implemented** (both off by default): `investment_priority_reordered` - a post-hoc reorder of the already-built
+`animal`/`wheat`/`hires`/`sells`/rest-of-`tail` lists right before the final `market = ...` assembly in
+`decide()` (does not touch how those lists get constructed, minimizing risk to the existing T8.5/T8.44/T8.45/T8.46
+tuning). `seed_purchase_lookahead_aware` + `seed_purchase_lookahead_turns` (default 3) - counts
+`sum(1 for t in tasks if t.priority < PRIORITY_PLANT)` from this turn's *real* built task list, divides by
+`labor_units`, and suppresses BUY_SEED (reusing the existing `defer_seed_purchase` branch) unless the result is
+within `seed_purchase_lookahead_turns`. 6 new unit tests (`tests/test_policy_decide.py`), including one confirming
+`planned_new_crop_tiles` stays positive while the gate suppresses the purchase (point 3). Full suite: 770 passed
+(up from 764), flag-off paths bit-identical.
+
+**Measured (`harness.run_paired`/`run_block`, head-to-head vs the checked-in baseline - the T8.7/T8.8 pattern)**:
+a first-pass sweep (20 seeds) found `investment_priority_reordered` alone strong (17W/3L, +2.2%),
+`seed_purchase_lookahead_aware` alone noisy across thresholds (1: 13W/7L +0.7%; **2 (the shipped-default
+threshold): 9W/11L, -0.2%, a wash**; 3: 18W/2L +2.2%; 4: 20W/0L +0.9%) - `seed_purchase_lookahead_turns=2` was
+picked as a starting-point default before measuring and turned out to be the worst value tried; `3` is the real
+winner. **`investment_priority_reordered=True` + `seed_purchase_lookahead_turns=3` together: the best combination
+found** - 18W/2L (20 seeds) → confirmed on the **full 50-seed working block: 44W/6L/0T, win rate 0.88, Wilson
+[0.762, 0.944], +3.9% total money** → confirmed again on the **held-out 50-seed block: the exact same 44W/6L/0T,
+win rate 0.88, Wilson [0.762, 0.944], +4.4%** - a clean, decisive, held-out-gated result, matching this project's
+own acceptance bar (e.g. T8.7's). 0 escapes across the 6 golden (opponent, seed) pairs with both flags on.
+
+**Also tested directly against T8.68's own finding**: both flags on top of `use_cycle_economics_ranking=True`,
+head-to-head against the plain baseline. A first-pass 20-seed slice looked like a complete reversal (15W/5L, win
+rate 0.75, +2.1%) - **but the user's own follow-up request to confirm on the full blocks found this was small-
+sample noise, not a real effect**: full working block **29W/21L/0T, win rate 0.58, Wilson [0.442, 0.706], -1.2%
+money** - Wilson crosses 50%, not significant; full holdout block **27W/23L/0T, win rate 0.54, Wilson
+[0.404, 0.670], +0.4%** - also crosses 50%. The correct conclusion: T8.69's fixes take `use_cycle_economics_
+ranking` from a decisive, held-out-gated **loss** (T8.68 alone: 3W/47L, -5.7%) to an honest **wash** (roughly
+50/50, ~0% money either direction) - a real, large improvement, but not evidence that combining it with T8.69
+beats today's shipped ranking. Whether `use_cycle_economics_ranking` is worth enabling remains genuinely
+unresolved by this session's measurements, unlike T8.69 alone (below), which is decisively positive on its own.
+
+**Current state**: `investment_priority_reordered=True` + `seed_purchase_lookahead_aware=True` +
+`seed_purchase_lookahead_turns=3` is a real, decisively held-out-gated win **on top of today's shipped ranking**
+(rank_portfolio, `use_cycle_economics_ranking` left at its own default `False`) - **accepted but not yet shipped**
+(no default flip without the user's explicit request, matching this whole session's practice).
+`use_cycle_economics_ranking` itself stays rejected (its combination with T8.69 is a statistical wash, not a win -
+see above). Not yet re-measured against starter/pass (only head-to-head so far, deliberately - starter/pass was
+shown in the T8.68 investigation to understate real competitive dynamics); not yet re-checked against the full
+golden-episode money table; not submitted.
+
+**Follow-up (same session, the user's own request: "why does a locally-correct decision still cost money, even
+after T8.69?"): traced the residual gap to a real, root-cause mechanism, root-cause fix confirmed to close it.**
+
+The user's own key insight, confirmed by re-measuring cleanly isolated (`(T8.69+use_cycle_economics_ranking)` vs
+`T8.69 alone` - both sides get the identical purchase-timing/market-priority fixes, so only the ranking formula
+itself differs): **the whole-horizon formula still loses decisively on its own** - `3W/47L/0T, win rate 0.06,
+Wilson [0.021, 0.162], -7.0%` - nearly identical in size to T8.68's own original, unfixed loss. This proves the
+purchase-timing lag was never the *whole* story; something in the ranking formula itself still costs money even
+with perfect timing.
+
+Traced with a real per-seed, per-score comparison (seed 100, `_dispatch_score_portfolio` at the exact divergence
+point): individual scores are still correct (WHEAT 44.25 > CARROT 38.50 under the new ranking on day 21) - yet the
+candidate still bought 11 CARROT seeds in one batch that turn. Root cause found by reading `decide.py` directly,
+not assumed: `opening_ranked_crops` (`decide.py:1972-1976`) is built from `_top_crop_basket(..., basket_size=
+len(CROPS))` - the **full** 5-crop ranking, deliberately bypassing `portfolio_basket_size` (which stays at its own
+default 1 for the *main* investment ranking) - and `_opening.planting_sequence` fills any land left over after
+WHEAT's own feed quota with that *whole* ranked list, best-first, not just the single top pick. Confirmed the
+asymmetry directly: under the old, flat ranking, STRAWBERRY's score never decays near season end (its own known,
+accepted quirk - see T8.3m), so it's still the runner-up crop filling this leftover land at day 19-21; under the
+new time-aware ranking, STRAWBERRY's score has *already* collapsed by then (correctly - it can't complete a full
+cycle), so the leftover-land slot falls through to CARROT instead - a real, different runner-up pick, not a bug in
+either ranking's own arithmetic, but a real behavioral divergence this "fill leftover land with the whole ranking"
+mechanism was never designed to handle a fast-*changing* runner-up gracefully.
+
+**Fix tested (temporary diagnostic flag, `opening_top_non_wheat_crop_only`, default `False`)**: restricts
+`opening_ranked_crops` to only its own single best non-WHEAT entry, matching the same one-crop restraint the main
+investment ranking already applies via `portfolio_basket_size=1`. Re-measured the same clean, isolated comparison:
+**working block, `25W/25L/0T, win rate 0.50, Wilson [0.366, 0.634], -0.4%`** - a dead-even tie, up from 3W/47L/
+-7.0% without it. This closes essentially the entire residual gap.
+
+**Conclusion**: the paradox the user asked about - "a locally-correct decision that still costs money in
+aggregate" - was real, and traceable to a *specific*, *fixable* mechanism, not an inherent flaw in whole-horizon
+scoring itself: a piece of *existing, pre-T8.68* machinery (the opening mechanism's own leftover-land-filling
+logic) implicitly assumed a slowly-changing ranking (true of the old flat scoring) and silently broke once paired
+with a ranking whose runner-up crop can genuinely change from one week to the next. Once that one assumption is
+corrected, the formula's own individually-correct decisions stop costing money in aggregate, closing the gap from
+a decisive loss to a coin flip. Not yet: a matching audit of whether `bulk_purchase_plan`'s own `types` argument
+(used by the *non-opening* seed-purchase path, `decide.py:2911-2921`, still just `fallback_crops` -
+`portfolio_basket_size`-capped already, so likely unaffected, but not directly verified this session) has the same
+class of issue.
+
+**Final confirmation (the user's own request) - the full combination against today's actual shipped baseline**:
+`investment_priority_reordered=True` + `seed_purchase_lookahead_aware=True` + `seed_purchase_lookahead_turns=3` +
+`use_cycle_economics_ranking=True` + `opening_top_non_wheat_crop_only=True`, head-to-head vs the plain checked-in
+DEFAULT_PARAMS baseline (`harness.run_block`, both full 50-seed blocks):
+- Working block: **34W/16L/0T, win rate 0.68, Wilson [0.542, 0.792]** - clears 50%, a real win on this block alone.
+- Holdout block: **29W/21L/0T, win rate 0.58, Wilson [0.442, 0.706]** - crosses 50%, not significant.
+- 0 escapes on the 6 golden seeds; full suite 770 passed (unchanged - `opening_top_non_wheat_crop_only` has no
+  dedicated unit tests yet, it's still a diagnostic flag, not a finished mechanism).
+
+**Honest verdict**: real, substantial progress (from a decisive loss to a working-block win), but **does not clear
+this project's own acceptance bar**, which requires both blocks to clear 50% (the same bar T8.7/T8.16(d)/etc. were
+held to) - the holdout result is a coin flip, not a confirmed win. A real next step for whoever revisits this: turn
+`opening_top_non_wheat_crop_only` into a properly-tested, documented mechanism in its own right (it may be worth
+keeping even independent of `use_cycle_economics_ranking` - not yet measured on its own, against today's ranking,
+in isolation) and/or investigate the holdout-block seeds that lose to find whether a further, similar mismatch
+remains (the `bulk_purchase_plan` audit noted above is the most likely next candidate). The user's own further
+observation, not yet acted on: shop-driven demand (`SHOPS`, kaggriculture.py) varies a lot by seed and by which
+products happen to get concentrated town demand this game - neither ranking currently reads `town.unlocked_
+shops`/`SHOPS` at all when scoring a crop, so a crop's real, seed-specific advantage from stacked shop demand
+(e.g. STRAWBERRY fed by 4 different shops by day 24 on one traced seed, MELON fed by none) is invisible to both
+formulas alike; a real next mechanism, not started this session.
+
+**Shipped**: on the user's own explicit, informed request (2026-09-25, having just seen the exact working/holdout
+numbers above) - `use_cycle_economics_ranking`, `investment_priority_reordered`, `seed_purchase_lookahead_aware`
+(`seed_purchase_lookahead_turns` raised 2 -> 3, the measured winner), and `opening_top_non_wheat_crop_only` all
+flipped to `True` in `kagg.policy.params.DEFAULT_PARAMS`/`kagg/params/policy.json`. A real, separate bug found
+while re-running the suite after the flip: `tools/tuning.py`'s `write_code_snapshot_agent` (used by the code-
+snapshot determinism test and any future code-vs-code arena comparison) copied `params/policy.json` but not
+`params/tile_economics.json` - with `use_cycle_economics_ranking` now default-on, a snapshot silently degraded
+every crop to a 0.0 score (`cycle_economics._load_plant_shapes` finds no file), while the live agent computed real
+scores - caught by a real, reproducible 3-0 sweep in `test_snapshot_of_the_real_code_ties_the_live_agent_exactly`
+once the default flipped. Fixed (mirrors the same fix already made to `tools/build_submission.py` earlier this
+session). Golden episode table re-recorded a 39th time (see `tests/test_agent_golden_episodes.py`'s own comment
+for the exact before/after money); T8.38 escape guardrail re-confirmed (0 escapes, not re-recorded, per the
+project's own standing rule that it never gets re-recorded). Full suite: 770 passed. Built and submitted to
+Kaggle: `build/submission.tar.gz`, **ref 56537977**, logged in `data/arena/submissions.jsonl`.

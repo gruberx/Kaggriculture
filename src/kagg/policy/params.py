@@ -92,7 +92,7 @@ DEFAULT_PARAMS = {
     # plant_while_animal_pending=False, drip_sell_max_per_turn=5.
     "min_hires_per_day": 2,
     "max_hires_per_day": 12,
-    "turns_per_task_estimate": 2.0,  # T8.16(d): swept, stayed at this value
+    "turns_per_task_estimate": 2.75,  # T8.64: 2.0 before (2.0 -> 2.75 together with day_plan_remaining_turns_aware False)
     "hire_cash_reserve": 0,  # the user's own "protect starting capital" ask
     # T8.16, the user's own explicit ask ("небольшой запас рабочей силы
     # для компенсации всплеска потребности работы, на вскидку 5-10%") -
@@ -498,7 +498,7 @@ DEFAULT_PARAMS = {
     # capacity wall). See kagg.policy.decide._DEFAULT_ANIMAL_CARE_AWARE
     # for the full traced story. Kept available for a re-check once
     # Stage B (hired hands) gives real spare labor.
-    "animal_care_aware": False,
+    "animal_care_aware": True,
     # T8.10, the user's own observation: rank_portfolio's animal side only
     # ever estimated town/shop consumption over one production interval
     # (1-3 days), a real, asymmetric gap against the crop side's own
@@ -704,6 +704,70 @@ DEFAULT_PARAMS = {
     # credit_per_tile_day for the make-vs-buy mechanism. Off by default -
     # the exact prior WHEAT ranking for every caller that doesn't set it.
     "wheat_self_sufficiency_aware": False,
+    # T8.68, the user's own request, building on the saved T8.57 "profit
+    # per day per cycle" analysis: replaces strategy.rank_portfolio
+    # entirely with kagg.policy.cycle_economics's whole-remaining-life
+    # accounting (live days-remaining for animals, live prices
+    # throughout, partial-yield credit for a crop near season end instead
+    # of an all-or-nothing exclusion).
+    #
+    # First measured ALONE (without T8.69 below): a decisive, held-out-
+    # gated LOSS head-to-head against the checked-in baseline (3W/47L/0T,
+    # -5.7%/-7.0% - see tasks/todo.md T8.68) - traced to a real purchase-
+    # to-planting lag (a crop bought while briefly top-ranked, but labor
+    # busy with higher-priority routine tasks for 2-3 days, by which point
+    # its score had collapsed) and a second bug in the unrelated, pre-
+    # existing `opening_ranked_crops` mechanism (see `opening_top_non_
+    # wheat_crop_only`'s own comment below). ENABLED by the user's
+    # explicit request, 2026-09-25, together with `investment_priority_
+    # reordered`/`seed_purchase_lookahead_aware` (T8.69) and `opening_top_
+    # non_wheat_crop_only` (both fixes) - this combination, all four
+    # together, measured head-to-head against the checked-in baseline:
+    # working block 34W/16L/0T (win rate 0.68, Wilson [0.542, 0.792],
+    # +2.8%) - clears 50%; holdout block 29W/21L/0T (win rate 0.58, Wilson
+    # [0.442, 0.706], +0.6%) - does NOT clear 50% (Wilson crosses it). This
+    # is real, substantial progress from the original decisive loss, but
+    # by this project's own standing bar (both blocks must clear 50%, the
+    # same bar T8.7/T8.16(d)/etc. were held to) it is not yet a fully
+    # confirmed result - shipped anyway on the user's own explicit,
+    # informed request after seeing these exact numbers (see tasks/todo.md
+    # T8.69's own "final confirmation" entry for the full story and open
+    # follow-ups, e.g. the user's own observation that shop-driven demand
+    # varies by seed and isn't yet priced into this ranking at all).
+    "use_cycle_economics_ranking": True,
+    # T8.68: the live FERTILIZER *sell* price (there is no way to buy it)
+    # below which a crop's score switches to the fertilized-cycle
+    # economics, and FERTILIZE actually fires on that crop's tiles - see
+    # kagg.policy.cycle_economics.crop_horizon_profit_per_day's own
+    # docstring. Only read when use_cycle_economics_ranking is on. $10 is
+    # the user's own suggested starting point, not yet swept.
+    "cycle_economics_fertilizer_price_threshold": 10,
+    # T8.70, the user's own follow-up to a known T8.69 gap - see
+    # kagg.policy.decide._DEFAULT_CROP_SHOP_UNLOCK_FORECAST_AWARE's own
+    # comment for the mechanism. Off by default, not yet measured.
+    "crop_shop_unlock_forecast_aware": False,
+    # T8.70, same request, supply side - see kagg.policy.decide.
+    # _DEFAULT_CROP_OWN_FUTURE_SUPPLY_AWARE's own comment for the
+    # mechanism. Off by default, not yet measured.
+    "crop_own_future_supply_aware": False,
+    # T8.71, the user's own redesign of the same problem - see
+    # kagg.policy.decide._DEFAULT_CROP_PENDING_SUPPLY_AWARE's own comment
+    # for the mechanism.
+    #
+    # ENABLED by the user's explicit request, 2026-09-25, after a real,
+    # decisive regression was found and fixed during measurement (first
+    # cut lost -22%/-24%: no awareness of this turn's own bulk purchase,
+    # and the `animal_opening` code path's own separate crop-basket call
+    # wasn't wired in at all - see decide.py's own comment at the
+    # `_pending_crop_supply` augmentation for the full trace). Once
+    # fixed, measured head-to-head against the checked-in baseline
+    # (harness.run_block, both full 50-seed blocks): working 45W/5L/0T
+    # (win rate 0.90, Wilson [0.786, 0.957], +11.3%), holdout 48W/2L/0T
+    # (win rate 0.96, Wilson [0.865, 0.989], +13.8%) - a clean, decisive
+    # win on both blocks, the strongest result of the whole T8.68-T8.71
+    # line (compare T8.69's own working 0.68/holdout 0.58, which never
+    # cleared this project's own both-blocks bar).
+    "crop_pending_supply_aware": True,
     # T8.6 (tasks/plan.md): parallel planting + batched seed purchase -
     # lets plant_qty scale with the real labor force (1 + hires_per_day)
     # instead of the fixed "one PLANT task per turn" baked in since
@@ -735,6 +799,49 @@ DEFAULT_PARAMS = {
     # idle and lock cash. None = off.
     "seed_purchase_max_pending_harvest": None,
     "seed_purchase_max_pending_water": None,
+    # T8.69, the user's own request after the T8.68 staleness trace: animal
+    # purchases (and wheat, when feed is actually needed) should outrank
+    # hiring for the turn's limited market-order slots, instead of hires
+    # sitting first and potentially crowding them out. See kagg.policy.
+    # decide's own market-assembly comment.
+    #
+    # ENABLED by the user's explicit request, 2026-09-25: measured head-to-
+    # head against the checked-in baseline (harness.run_block, both flags
+    # together with seed_purchase_lookahead_turns=3) - working block
+    # 44W/6L/0T (win rate 0.88, Wilson [0.762, 0.944], +3.9%), holdout
+    # block the *exact same* 44W/6L/0T (Wilson [0.762, 0.944], +4.4%) - a
+    # clean, decisive, held-out-gated win on its own (see tasks/todo.md
+    # T8.69). `seed_purchase_lookahead_turns=2` (an earlier, unswept
+    # starting-point default) was measured to be the *worst* value tried
+    # (9W/11L, a wash) - 3 is the real winner, now the shipped value.
+    "investment_priority_reordered": True,
+    # T8.69: replaces T8.48's coarse pending-count gate above with a
+    # computed "turns until labor actually reaches a PLANT task" estimate
+    # (real task list, priority tiers, labor_units) - defers BUY_SEED/the
+    # crop-ranking lock-in until close to the moment it'll actually be
+    # planted, so the score it was bought under stays close to the score
+    # it's planted under. Enabled together with investment_priority_
+    # reordered above - see that key's own comment for the measured story.
+    "seed_purchase_lookahead_aware": True,
+    "seed_purchase_lookahead_turns": 3,
+    # T8.69: fixes a real, unrelated-to-timing bug found while diagnosing
+    # why use_cycle_economics_ranking still lost even with the two flags
+    # above - opening_ranked_crops (decide.py) fills land left over after
+    # WHEAT's own feed quota with the *whole* remaining crop ranking, best
+    # first, not just the single top pick. Under the old, flat ranking the
+    # runner-up there was always stably the same crop (its score never
+    # decays near season end); under the time-aware ranking the runner-up
+    # can genuinely change week to week, and this pre-existing mechanism
+    # was never designed to handle that gracefully. This flag restricts
+    # the fill to only the single best non-WHEAT crop - the same restraint
+    # portfolio_basket_size=1 already applies to the main ranking. Isolated
+    # measurement (T8.69+use_cycle_economics_ranking vs T8.69 alone, same
+    # timing fixes on both sides): -7.0% (3W/47L) without this flag, -0.4%
+    # (25W/25L, a dead-even tie) with it - closes essentially the whole
+    # residual gap. Enabled together with use_cycle_economics_ranking on
+    # the user's own explicit request - see that key's own comment for the
+    # combined, final head-to-head numbers against the checked-in baseline.
+    "opening_top_non_wheat_crop_only": True,
     # T8.49 (defaults flipped on the user's explicit request, 2026-09-20; old
     # values: drop_goods_to_shed False, drop_goods_cash_min_units 5,
     # bulk_purchase_counts_harvest_tiles False, sell_orders_first_by_revenue
@@ -770,11 +877,46 @@ DEFAULT_PARAMS = {
     # T8.53 (enabled 2026-09-20 on the user's request; old value False): the day-plan hire
     # forecast divides the work still to be done by the turns left today (24 - hour) instead
     # of 24.
-    "day_plan_remaining_turns_aware": True,
+    "day_plan_remaining_turns_aware": False,  # T8.64: the hire target is sized on the whole day, not the turns left
     # T8.54 (enabled 2026-09-21 on the user's explicit request despite a negative measurement; old
     # value False): never issue a PLANT on the last turn of the day - it cannot
     # be watered, so the plant becomes a weed at midnight. -3.8%/-4.8% vs starter/pass, arena 12W/38L.
     "no_plant_on_last_turn": True,
+    "final_day_delivery": True,
+    "final_day_far_first": True,
+    "final_day_tiles_per_hand": 3,
+    # T8.67 (2026-09-23, the user's own design; OFF until measured): the animal opening - a whole herd
+    # bought at once (2 COW + 3 SHEEP on the first turn, `animal_opening_per_quadrant` more of the
+    # `animal_opening_quadrant_types` best types for every quadrant bought), set up in parallel by
+    # every unit, with `wheat_tiles_per_animal` WHEAT tiles per animal kept planted for its feed. See
+    # kagg.policy.opening. `animal_feed_skip_ages`: ages (days since placement) on which a type is
+    # neither fed nor cared for (a cow: 0 and 2 - still five counted cares before its first
+    # production, two WHEAT saved). `animal_opening_fill_cheaper`: money left after the best crop
+    # buys the next-ranked (cheaper) crops. `animal_opening_land_needs_herd_cash`: a new quadrant is
+    # bought only with the cash for its herd in hand.
+    "animal_opening": True,  # T8.67 enabled 2026-09-24 on the user's request (old value False)
+    "animal_opening_initial": {"COW": 2, "SHEEP": 3},
+    "animal_opening_per_quadrant": 5,
+    "animal_opening_quadrant_types": 2,
+    "wheat_tiles_per_animal": 1.0,
+    "animal_feed_skip_ages": {"COW": [0, 2]},
+    "animal_opening_fill_cheaper": False,  # T8.67: measured better off (+46.5% vs +39.5%)
+    "animal_opening_land_needs_herd_cash": True,
+    # T8.74 (OFF until measured; both gated on n_quadrants == 1, so quadrant 2+ play is
+    # bit-identical to today regardless of these values). A fixed quadrant-1-only opening
+    # found by this session's own T8.72/73 brute-force search (COW=2/SHEEP=4/WORKERS=10/
+    # MELON-locked initial fill measured $7395 avg money by day 10, 100% reach rate on a
+    # truncated, crop-restricted candidate - see tools/search_t872_*.py/search_t873_*.py).
+    # quadrant1_hire_target: forces hires_per_day's own [min_hires_per_day,
+    # max_hires_per_day] clip to this single value while n_quadrants == 1 (see
+    # kagg.policy.decide._DEFAULT_QUADRANT1_HIRE_TARGET's own comment).
+    # quadrant1_crop_lock: replaces the animal-opening's ranked non-wheat crop list used for
+    # the *initial* land-fill only (not later replanting) with this single crop (see
+    # kagg.policy.decide._DEFAULT_QUADRANT1_CROP_LOCK's own comment).
+    "quadrant1_hire_target": None,
+    "quadrant1_crop_lock": None,
+    # T8.74 follow-up (experiment, 1.0 = off): scales the adaptive hire count.
+    "hires_multiplier": 1.0,
     # T8.55 (enabled 2026-09-21 on the user's request; old value None = tier 3, below every
     # non-urgent WATER): priority tier of the ordinary crop PLANT; 1.75 = just above routine WATER.
     # +7.5%/+9.1% vs starter/pass (40 seeds), arena 40W/10L. Lower = served first.

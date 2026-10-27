@@ -8,7 +8,14 @@ from __future__ import annotations
 
 import math
 
-from kagg.gamelib.constants import HINGE_GAIN, MARKET_PARAMS, PRICE_FLOOR, SHOPS, TOWN_CENTER_PRODUCTS
+from kagg.gamelib.constants import (
+    HINGE_GAIN,
+    MARKET_PARAMS,
+    MAX_SHOP_INSTANCES,
+    PRICE_FLOOR,
+    SHOPS,
+    TOWN_CENTER_PRODUCTS,
+)
 
 
 def shape(func: str, x: float, T: float | None = None) -> float:
@@ -112,3 +119,54 @@ def expected_daily_consumption(
             multiplier = 2 if len(products) == 1 else 1
             daily += multiplier * turns_per_day / shop_interval
     return daily
+
+
+def expected_consumption_over_horizon(
+    product: str,
+    unlocked_shops,
+    current_day: int,
+    days_remaining: int,
+    shop_unlock_interval: int = 3,
+    max_shop_instances: int = MAX_SHOP_INSTANCES,
+    turns_per_day: int = 24,
+    town_center_interval: int = 24,
+    shop_interval: int = 4,
+) -> float:
+    """Total expected units of `product` the town removes over the next
+    `days_remaining` days - T8.70, the user's own follow-up to T8.69's
+    known gap ("shop-driven demand varies by seed and isn't yet priced
+    into this ranking at all"): unlike `expected_daily_consumption`
+    above, which freezes the rate at *today's* `unlocked_shops` and
+    multiplies it flat across the whole horizon, this also prices in
+    shops that haven't unlocked yet but will, on the engine's own
+    deterministic unlock schedule (kaggriculture.py's shop-unlock draw:
+    a new shop every `shop_unlock_interval` days, up to `max_shop_
+    instances` total - only the *type* drawn is random, uniformly over
+    `SHOPS`, never the *timing*). A not-yet-unlocked shop's expected
+    contribution to any one product is therefore its own per-unlock
+    consumption weight (`2` if it's a single-product shop like
+    YARN_STORE/PET_CAFE, else `1`, summed over every shop type listing
+    `product` - the same `multiplier` rule `expected_daily_consumption`
+    already uses per-instance) averaged uniformly over `len(SHOPS)`
+    possible draws.
+
+    `current_day`/`days_remaining` follow the same convention as every
+    other horizon argument in this package (`animal_horizon_profit_
+    per_day` etc.): real, current values, not the static `DAYS=30` the
+    offline `tile_economics_30d.py` table was built from.
+    """
+    base_rate = expected_daily_consumption(
+        product, unlocked_shops, turns_per_day, town_center_interval, shop_interval
+    )
+    n_already = len(unlocked_shops)
+    weight = sum(
+        (2 if len(products) == 1 else 1) for products in SHOPS.values() if product in products
+    )
+    per_shop_daily_rate = weight * turns_per_day / shop_interval / len(SHOPS)
+    total = 0.0
+    for offset in range(1, days_remaining + 1):
+        day = current_day + offset
+        n_unlocked_by_day = min(max_shop_instances, day // shop_unlock_interval)
+        n_future = max(0, n_unlocked_by_day - n_already)
+        total += base_rate + n_future * per_shop_daily_rate
+    return total

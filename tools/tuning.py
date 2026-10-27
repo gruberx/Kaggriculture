@@ -267,6 +267,18 @@ def write_code_snapshot_agent(src_kagg_dir: str, workdir: str, params: dict | No
     shutil.copy2(
         os.path.join(src_kagg_dir, "params", "policy.json"), os.path.join(params_dir, "policy.json")
     )
+    # T8.68/T8.69: cycle_economics.py's per-crop cost/schedule table -
+    # without this, a code snapshot's use_cycle_economics_ranking (now
+    # the shipped default) silently degrades to every crop scoring 0.0
+    # (_load_plant_shapes finds no file, falls back to {}) while the live
+    # side computes real scores - found via a real, reproducible 3-0
+    # sweep in test_snapshot_of_the_real_code_ties_the_live_agent_exactly
+    # once that default flipped. Mirrors tools/build_submission.py's own
+    # matching fix for the same gap in the Kaggle bundle.
+    shutil.copy2(
+        os.path.join(src_kagg_dir, "params", "tile_economics.json"),
+        os.path.join(params_dir, "tile_economics.json"),
+    )
 
     for dirpath, _dirnames, filenames in os.walk(pkg_dir):
         for name in filenames:

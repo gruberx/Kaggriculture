@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from kagg.gamelib.constants import ANIMALS, CROPS
 from kagg.gamelib.farm import shed_access_tiles, shed_distance, tile_distance
 from kagg.gamelib.growth import watering_bonus_window
+from kagg.policy.cycle_economics import fertilize_ages
 
 # investment_anchor values (params.py's DEFAULT_PARAMS["investment_anchor"]):
 # SHED anchors new-investment placement to the board's shed center - the
@@ -50,6 +51,11 @@ _ANCHOR_UNIT_TOWARD_SHED = "UNIT_TOWARD_SHED"
 
 PRIORITY_PREVENT_LOSS = 0
 PRIORITY_HARVEST = 1
+# T8.65 (the user's request): animal CARE (and the FEED that makes it count) sits right below the
+# urgent tier - emergency WATER / FEED against an escape (0) - and above everything else.
+# The engine banks a care bonus only on a day the animal is both cared for AND fed, and pays it only on
+# a fed production day (otherwise it is lost), so a cared animal is fed at this tier too.
+PRIORITY_ANIMAL_CARE = 0.5
 # T8.41, the user's own observation: a bought-but-unplaced animal is idle
 # capital, not something at real risk of being lost (only a *placed*
 # tile animal's consecutive_unfed clock runs), so this sits below
@@ -102,6 +108,15 @@ PRIORITY_IDLE_ONLY = 5
 # params.DEFAULT_PARAMS's wheat_restock_qty default (10) in spirit, not
 # by import - this module has no dependency on kagg.policy.params.
 _WHEAT_PICKUP_BATCH = 10
+
+# T8.68: FERTILIZER arrives in much smaller quantities than WHEAT (one
+# unit per COLLECT_FERTILIZER, an animal byproduct, never bought - see
+# kagg.gamelib.market's own module docstring), so a smaller batch than
+# _WHEAT_PICKUP_BATCH's 10 - just enough to cover a few FERTILIZE
+# applications before the farmer needs to revisit the shed, without
+# hoarding the shed's entire (typically small) stock away from other
+# uses (selling it, if the price ever climbs back above the threshold).
+_FERTILIZER_PICKUP_BATCH = 5
 
 # T8.4, narrowed by T8.39: every task the real interpreter resolves
 # against the *acting unit's own* inventory (kaggriculture.py's
@@ -335,8 +350,26 @@ def build_task_list(
     dig_weed_priority: float | None = None,
     harvest_rules: HarvestRules | None = None,
     water_idle_priority_when_safe: bool = False,
+    feed_skip_ages: dict | None = None,
+    reserved_tiles=frozenset(),
+    fertilize_crops: frozenset[str] = frozenset(),
 ) -> list[Task]:
     """Scan the farm's tiles and produce a priority-sorted task list.
+
+    `fertilize_crops` (T8.68): crop names whose tiles should be
+    FERTILIZEd on their DP-optimal application ages, sourced from
+    `kagg.policy.cycle_economics.crops_worth_fertilizing` (the live
+    FERTILIZER price gate) - additive to `use_fertilizer` (left fully
+    untouched, own exact prior any-age behavior), see `_plant_tile_
+    tasks`'s own docstring for the mechanism. Also drives a PICKUP
+    FERTILIZER task, mirroring the existing WHEAT-shortfall PICKUP
+    pattern below - opportunistic-only otherwise, same as `use_
+    fertilizer`'s own pre-T8.68 gap (no unit ever proactively fetches
+    FERTILIZER to go apply it). Empty by default, bit-identical to every
+    caller that doesn't pass it.
+
+    `feed_skip_ages`/`reserved_tiles` (T8.67, animal opening): see `feed_skipped`; and empty tiles
+    that are kept for animal structures (never proposed for planting).
 
     `plant_crop` is the crop to plant, if any (sourced from the strategic
     layer's portfolio ranking - see SPEC-policy.md "1. Strategic layer" /
@@ -509,13 +542,15 @@ def build_task_list(
     )
     fertilizer_units = _units_holding(inventories, "FERTILIZER", n_units)
     feed_needed_tiles = 0
+    fertilize_needed_tiles = 0
     wheat_pickup_priority: int | None = None
 
     for y, row in enumerate(tiles):
         for x, tile in enumerate(row):
             pos = (x, y)
             if tile is None:
-                empty_tiles.append(pos)
+                if pos not in reserved_tiles:
+                    empty_tiles.append(pos)
                 continue
             if not isinstance(tile, dict):
                 continue  # "LOCKED"
@@ -534,10 +569,26 @@ def build_task_list(
                         defer_one_time_harvest_to_max_yield,
                         harvest_rules,
                         water_idle_priority_when_safe,
+                        fertilize_crops,
                     )
                 )
+                # T8.68: a tile due for a cycle-economics FERTILIZE but no
+                # unit currently holds any - _plant_tile_tasks' own gate
+                # (fertilizer_units truthy) silently skips it otherwise,
+                # the same bootstrap gap use_fertilizer always had (no
+                # PICKUP mechanism at all - see build_task_list's own
+                # docstring).
+                if (
+                    not fertilizer_units
+                    and tile["crop"] in fertilize_crops
+                    and tile.get("fertilized_until_day", -1) < current_day
+                    and (current_day - tile["planted_day"]) in fertilize_ages(tile["crop"])
+                ):
+                    fertilize_needed_tiles += 1
             elif "animal" in tile:
-                animal_tasks, feed_priority = _animal_tile_tasks(pos, tile, wheat_units, care_aware, harvest_rules)
+                animal_tasks, feed_priority = _animal_tile_tasks(
+                    pos, tile, wheat_units, care_aware, harvest_rules, current_day, feed_skip_ages
+                )
                 tasks.extend(animal_tasks)
                 if feed_priority is not None:
                     feed_needed_tiles += 1
@@ -556,7 +607,12 @@ def build_task_list(
     # at most one wheat-holding unit - today's shipped
     # max_animals_per_type=1) to N animal tiles vs. M units already
     # holding wheat - a PICKUP is only needed for the shortfall.
-    if feed_needed_tiles > len(wheat_units) and shed.get("WHEAT", 0) > 0:
+    # T8.65: ... and a unit holding several WHEAT feeds several tiles one after another, so the
+    # shortfall is counted in wheat units, not carriers. Counting carriers sent the farmer back to
+    # the shed for another batch every few turns (80 WHEAT piled up, the far animal starved) once a
+    # pickup shared the urgent FEED tier.
+    carried_wheat = sum(inventories[i].get("WHEAT", 0) for i in wheat_units if i < len(inventories))
+    if feed_needed_tiles > len(wheat_units) and feed_needed_tiles > carried_wheat and shed.get("WHEAT", 0) > 0:
         # unit_positions[:1] (the farmer only), not every unit, for the
         # *position* chosen - independent of which unit ends up assigned
         # to execute it (T8.2's stability argument needs a task's target
@@ -567,6 +623,24 @@ def build_task_list(
         pickup_unit_index = None if feed_pickup_unpinned else _PINNED_UNIT_INDEX
         tasks.append(
             Task(wheat_pickup_priority, pos, "PICKUP", item="WHEAT", qty=qty, unit_index=pickup_unit_index)
+        )
+
+    # T8.68: mirrors the WHEAT PICKUP block just above - without this, a
+    # cycle-economics FERTILIZE never fires the first time (no unit ever
+    # proactively fetches FERTILIZER, only opportunistically carries what
+    # it happens to already hold - see build_task_list's own docstring).
+    # Pinned to the farmer (matches the WHEAT PICKUP's own default,
+    # feed_pickup_unpinned off) - T8.68 doesn't add its own unpinning
+    # knob, staying at the more conservative choice until real data says
+    # otherwise.
+    if fertilize_needed_tiles > 0 and not fertilizer_units and shed.get("FERTILIZER", 0) > 0:
+        pos = _closest_pos(shed_access_tiles(len(tiles)), unit_positions[:1])
+        qty = min(shed["FERTILIZER"], _FERTILIZER_PICKUP_BATCH)
+        tasks.append(
+            Task(
+                PRIORITY_MAINTENANCE, pos, "PICKUP", item="FERTILIZER", qty=qty,
+                unit_index=_PINNED_UNIT_INDEX,
+            )
         )
 
     investment_tasks = _new_investment_tasks(
@@ -751,6 +825,7 @@ def _plant_tile_tasks(
     defer_one_time_harvest_to_max_yield: bool = False,
     harvest_rules: HarvestRules | None = None,
     water_idle_priority_when_safe: bool = False,
+    fertilize_crops: frozenset[str] = frozenset(),
 ) -> list[Task]:
     tasks = []
     if harvest_rules is not None and harvest_rules.dig_spent and is_spent_ongoing(tile, current_day):
@@ -827,8 +902,19 @@ def _plant_tile_tasks(
         tasks.append(Task(priority, pos, "WATER"))
     if harvest_ready:
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST", water_first=water_first))
+    # T8.68: fertilize_crops (from cycle_economics.crops_worth_
+    # fertilizing, empty unless use_cycle_economics_ranking is on) is
+    # additive to use_fertilizer, not a replacement for it - use_
+    # fertilizer keeps its own exact prior any-age behavior untouched.
+    # The cycle-economics path is age-gated (fertilize_ages: the same DP-
+    # optimal application ages crop_horizon_profit_per_day scored with -
+    # T8.57's own finding that an off-schedule application is mostly
+    # wasted), so it only fires on the day the score actually assumed.
+    crop_fertilize_ok = tile["crop"] in fertilize_crops and (
+        current_day - tile["planted_day"]
+    ) in fertilize_ages(tile["crop"])
     if (
-        use_fertilizer
+        (use_fertilizer or crop_fertilize_ok)
         and fertilizer_units
         and tile.get("fertilized_until_day", -1) < current_day
     ):
@@ -1041,9 +1127,26 @@ def _animal_harvest_wanted(tile: dict, rules: HarvestRules | None) -> bool:
     return True
 
 
+def feed_skipped(tile: dict, current_day: int | None, feed_skip_ages: dict | None) -> bool:
+    """T8.67: True when this animal's feeding (and its care - a care only counts on a fed day) is
+    skipped today by the configured schedule, e.g. `{"COW": [0, 2]}`: a cow is not fed on the day it
+    is placed (age 0) nor on age 2, which saves the wheat and still leaves five counted cares
+    before its first production. Never skipped once the animal has missed a day
+    (`consecutive_unfed >= 1`): a second unfed day in a row is an escape."""
+    if not feed_skip_ages or current_day is None:
+        return False
+    if tile.get("consecutive_unfed", 0) >= 1:
+        return False
+    placed_day = tile.get("placed_day")
+    if placed_day is None:
+        return False
+    return current_day - placed_day in feed_skip_ages.get(tile.get("animal"), ())
+
+
 def _animal_tile_tasks(
     pos: tuple[int, int], tile: dict, wheat_units: tuple[int, ...], care_aware: bool = False,
     harvest_rules: HarvestRules | None = None,
+    current_day: int | None = None, feed_skip_ages: dict | None = None,
 ) -> tuple[list[Task], int | None]:
     """Returns (tasks, feed_priority) - the second element is `None`
     unless this tile still needs feeding today (fed_today is False),
@@ -1077,9 +1180,12 @@ def _animal_tile_tasks(
     """
     tasks = []
     feed_priority = None
-    if not tile.get("fed_today", False):
+    skip_feed = feed_skipped(tile, current_day, feed_skip_ages)
+    if not tile.get("fed_today", False) and not skip_feed:
         urgent = tile.get("consecutive_unfed", 0) >= 1
         priority = PRIORITY_PREVENT_LOSS if urgent else PRIORITY_ROUTINE_CARE
+        if care_aware:
+            priority = min(priority, PRIORITY_ANIMAL_CARE)
         feed_priority = priority
         if wheat_units:
             tasks.append(Task(priority, pos, "FEED", eligible_units=wheat_units))
@@ -1087,8 +1193,12 @@ def _animal_tile_tasks(
         tasks.append(Task(PRIORITY_HARVEST, pos, "HARVEST"))
     if tile.get("fertilizer_available", False):
         tasks.append(Task(PRIORITY_MAINTENANCE, pos, "COLLECT_FERTILIZER"))
-    if care_aware and not tile.get("cared_today", False):
-        tasks.append(Task(PRIORITY_MAINTENANCE, pos, "CARE"))
+    # Care only counts on a fed day: skip it when nobody can feed the animal today.
+    if (
+        care_aware and not skip_feed and not tile.get("cared_today", False)
+        and (tile.get("fed_today", False) or wheat_units)
+    ):
+        tasks.append(Task(PRIORITY_ANIMAL_CARE, pos, "CARE"))
     return tasks, feed_priority
 
 
@@ -1436,6 +1546,101 @@ def harvestable_units_today(
     return 0
 
 
+def near_shed_drop_tasks(
+    inventories: list[dict],
+    unit_positions: list[tuple[int, int]],
+    board_size: int,
+    *,
+    max_distance: int,
+    shed_used: int,
+    shed_capacity: int,
+    min_units: int = 1,
+    priority: float = PRIORITY_HARVEST,
+    include_wheat_for_hands: bool = False,
+    include_fertilizer: bool = False,
+) -> list[Task]:
+    """T8.66 (the user's request): a unit that stands within `max_distance` moves of a shed-access tile
+    and carries goods drops them into the shed at once (one item type per turn, the biggest stock
+    first) instead of keeping them until the day's end - the goods can then be sold the same turn,
+    which pays most early in the game when cash is what limits planting.
+
+    One pinned `DROP_GOODS` task per such unit, on the shed-access tile nearest to it (distance 0 =
+    the unit already stands on it and drops now). The shed room is shared across the units. A unit
+    carrying fewer than `min_units` droppable goods is left alone. `include_wheat_for_hands`: the hired
+    hands' WHEAT (never the farmer's - it is the animals' feed) is dropped too; `include_fertilizer`:
+    FERTILIZER counts as a droppable good.
+    """
+    n = min(len(inventories), len(unit_positions))
+    room = max(0, shed_capacity - shed_used)
+    tasks = []
+    for i in range(n):
+        kinds = _DROPPABLE_GOODS
+        if include_fertilizer:
+            kinds = (*kinds, "FERTILIZER")
+        if include_wheat_for_hands and i > 0:
+            kinds = (*kinds, "WHEAT")
+        stock = {g: inventories[i].get(g, 0) for g in kinds if inventories[i].get(g, 0) > 0}
+        if not stock or sum(stock.values()) < min_units:
+            continue
+        pos = min(shed_access_tiles(board_size), key=lambda t: (tile_distance(unit_positions[i], t), t))
+        if tile_distance(unit_positions[i], pos) > max_distance:
+            continue
+        item = max(stock, key=lambda g: (stock[g], -kinds.index(g)))
+        qty = min(stock[item], room)
+        if qty <= 0:
+            continue
+        room -= qty
+        tasks.append(Task(priority, pos, "DROP_GOODS", item=item, qty=qty, unit_index=i))
+    return tasks
+
+
+def final_day_harvest_eligibility(
+    tasks: list[Task],
+    inventories: list[dict],
+    unit_positions: list[tuple[int, int]],
+    board_size: int,
+    *,
+    hour: int,
+    turns_per_day: int,
+) -> list[Task]:
+    """T8.63: on the last day of the season, keep every unit able to reach the shed with what it holds -
+    goods left on a unit or on a tile are never sold (there is no midnight to empty the inventories).
+
+    A task is done on turn `hour + d` (d = moves to it; a water-first harvest takes one turn more), the
+    trip to the nearest shed-access tile takes e more moves, and one item type is dropped per turn: one
+    turn for each type the unit already carries, plus one for the new product of a HARVEST. The task
+    must leave the last drop on or before the last turn. Units holding nothing are only checked for a
+    HARVEST (its product has to be delivered too). Each task becomes restricted to the units that fit
+    (intersected with its own `eligible_units`); a task nobody can finish is removed. Pinned tasks
+    (`unit_index` set) are left alone.
+    """
+    last_turn = turns_per_day - 1
+    sheds = shed_access_tiles(board_size)
+    n = len(unit_positions)
+    types = [
+        sum(1 for v in inventories[u].values() if v > 0) if u < len(inventories) else 0 for u in range(n)
+    ]
+    out = []
+    for t in tasks:
+        if t.unit_index is not None:
+            out.append(t)
+            continue
+        e = min(tile_distance(t.pos, s) for s in sheds)
+        harvest = t.op in ("HARVEST", "COLLECT_FERTILIZER")
+        fit = tuple(
+            u for u in range(n)
+            if (t.eligible_units is None or u in t.eligible_units)
+            and (
+                not (harvest or types[u])
+                or hour + tile_distance(unit_positions[u], t.pos) + (1 if t.water_first else 0) + e
+                + types[u] + (1 if harvest else 0) <= last_turn
+            )
+        )
+        if fit:
+            out.append(dataclasses.replace(t, eligible_units=fit))
+    return out
+
+
 def goods_deadline_drop_tasks(
     inventories: list[dict],
     unit_positions: list[tuple[int, int]],
@@ -1450,6 +1655,8 @@ def goods_deadline_drop_tasks(
     margin_turns: int = 2,
     shed_room_after_sales: int | None = None,
     priority: float = PRIORITY_HARVEST,
+    deliver_all: bool = False,
+    goods_kinds: tuple[str, ...] = _DROPPABLE_GOODS,
 ) -> list[Task]:
     """T8.50: end-of-day version of the overflow drop - one pinned
     `DROP_GOODS` task per unit that has to leave for the shed now.
@@ -1468,15 +1675,21 @@ def goods_deadline_drop_tasks(
     the units are loaded most and every trip carries the most. Each unit
     drops its biggest stock of one item per turn; the shared shed room is
     tracked across the units of the same turn.
+
+    T8.63 `deliver_all` (the last day of the season): there is no midnight
+    to fall back on, so every unit holding goods is chosen whatever the
+    shed capacity says, and `goods_kinds` may add FERTILIZER to the droppable items.
     """
     n = min(len(inventories), len(unit_positions))
     carried_total = sum(sum(v for v in inventories[i].values() if v > 0) for i in range(n))
     excess = shed_stay + carried_total + remaining_harvest_units - shed_capacity
+    if deliver_all:
+        excess = carried_total
     if excess <= 0:
         return []
     stocks = {}
     for i in range(n):
-        goods = {g: inventories[i].get(g, 0) for g in _DROPPABLE_GOODS if inventories[i].get(g, 0) > 0}
+        goods = {g: inventories[i].get(g, 0) for g in goods_kinds if inventories[i].get(g, 0) > 0}
         if goods:
             stocks[i] = goods
     order = sorted(
@@ -1498,7 +1711,7 @@ def goods_deadline_drop_tasks(
         moves = tile_distance(unit_positions[i], pos)
         if hour + moves + (len(stocks[i]) - 1) < last_turn - margin_turns:
             continue
-        item = max(stocks[i], key=lambda g: (stocks[i][g], -_DROPPABLE_GOODS.index(g)))
+        item = max(stocks[i], key=lambda g: (stocks[i][g], -goods_kinds.index(g)))
         qty = min(stocks[i][item], room_now if moves == 0 else room_later)
         if qty <= 0:
             continue

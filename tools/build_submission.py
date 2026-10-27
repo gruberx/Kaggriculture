@@ -61,6 +61,17 @@ def copy_bundle(src_kagg_dir: str, build_dir: str) -> None:
     shutil.copy2(
         os.path.join(src_kagg_dir, "params", "policy.json"), os.path.join(params_dir, "policy.json")
     )
+    # T8.68: cycle_economics.py's per-crop cost/schedule table - a static
+    # snapshot of tasks/data/tile_economics.json (dev-only, not shipped
+    # itself), copied here the same way policy.json is so it actually
+    # reaches the built bundle. Regenerate both together via
+    # `python tools/tile_economics_30d.py --write` followed by
+    # `cp tasks/data/tile_economics.json src/kagg/params/tile_economics.json`
+    # if the crop/animal constants they're derived from ever change.
+    shutil.copy2(
+        os.path.join(src_kagg_dir, "params", "tile_economics.json"),
+        os.path.join(params_dir, "tile_economics.json"),
+    )
 
 
 def audit_bundle(build_dir: str) -> list[str]:

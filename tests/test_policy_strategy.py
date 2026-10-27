@@ -1496,7 +1496,8 @@ def test_day_plan_remaining_turns_divides_by_the_turns_left_today():
     from kagg.policy.params import DEFAULT_PARAMS as DEFAULT_PARAMS_FOR_T853
     from kagg.policy.strategy import hires_per_day
 
-    assert DEFAULT_PARAMS_FOR_T853["day_plan_remaining_turns_aware"] is True
+    # T8.64 (2026-09-23, the user's decision): shipped default turned off again (hire target sized on the whole day)
+    assert DEFAULT_PARAMS_FOR_T853["day_plan_remaining_turns_aware"] is False
     base = {"day_plan_hiring_aware": True, "min_hires_per_day": 0, "max_hires_per_day": 12}
     kw = dict(turns_per_day=24, maintenance_actions_today=30, planned_new_crop_tiles=0, planned_new_animals=0)
     # 30 actions * 2 turns = 60 turns: ceil(60/24) - 1 = 2 units at hour 0 ...

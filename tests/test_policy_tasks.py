@@ -28,6 +28,9 @@ from kagg.policy.tasks import (
     assign_units,
     build_task_list,
     crop_tile_day_actions,
+    final_day_harvest_eligibility,
+    near_shed_drop_tasks,
+    PRIORITY_ANIMAL_CARE,
     goods_deadline_drop_tasks,
     goods_drop_task,
     harvest_clears_tile_today,
@@ -285,6 +288,76 @@ def test_build_task_list_does_not_waste_fertilizer_on_an_already_active_tile():
     assert [t for t in tasks if t.op == "FERTILIZE"] == []
 
 
+def test_build_task_list_cycle_economics_fertilizes_on_its_optimal_age():
+    # T8.68: fertilize_crops (from cycle_economics.crops_worth_
+    # fertilizing) is additive to use_fertilizer - explicitly off here to
+    # isolate the new age-gated mechanism. Age 2 is WHEAT's own DP-
+    # optimal fertilizer age (cycle_economics.fertilize_ages("WHEAT") ==
+    # {2}).
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(planted_day=0)
+    tasks = build_task_list(
+        tiles, farmer_inventory={"FERTILIZER": 1}, current_day=2, fertilize_crops=frozenset({"WHEAT"}),
+        use_fertilizer=False,
+    )
+    assert any(t.priority == PRIORITY_MAINTENANCE and t.op == "FERTILIZE" and t.pos == (2, 2) for t in tasks)
+
+
+def test_build_task_list_cycle_economics_skips_fertilize_off_optimal_age():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(planted_day=0)
+    tasks = build_task_list(
+        tiles, farmer_inventory={"FERTILIZER": 1}, current_day=1, fertilize_crops=frozenset({"WHEAT"}),
+        use_fertilizer=False,
+    )
+    assert [t for t in tasks if t.op == "FERTILIZE"] == []
+
+
+def test_build_task_list_cycle_economics_ignores_a_crop_not_in_fertilize_crops():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(planted_day=0)  # a WHEAT tile
+    tasks = build_task_list(
+        tiles, farmer_inventory={"FERTILIZER": 1}, current_day=2, fertilize_crops=frozenset({"CARROT"}),
+        use_fertilizer=False,
+    )
+    assert [t for t in tasks if t.op == "FERTILIZE"] == []
+
+
+def test_build_task_list_cycle_economics_pickup_fertilizer_when_none_held():
+    # T8.68: without this PICKUP, a cycle-economics FERTILIZE would be
+    # opportunistic-only forever, same bootstrap gap use_fertilizer
+    # always had - mirrors the existing WHEAT-shortfall PICKUP pattern.
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(planted_day=0)
+    tasks = build_task_list(
+        tiles, farmer_inventory={}, shed={"FERTILIZER": 3}, current_day=2,
+        fertilize_crops=frozenset({"WHEAT"}), use_fertilizer=False,
+    )
+    pickups = [t for t in tasks if t.op == "PICKUP" and t.item == "FERTILIZER"]
+    assert len(pickups) == 1
+    assert pickups[0].qty == 3
+
+
+def test_build_task_list_cycle_economics_no_pickup_when_shed_is_empty():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(planted_day=0)
+    tasks = build_task_list(
+        tiles, farmer_inventory={}, shed={}, current_day=2, fertilize_crops=frozenset({"WHEAT"}),
+        use_fertilizer=False,
+    )
+    assert [t for t in tasks if t.op == "PICKUP" and t.item == "FERTILIZER"] == []
+
+
+def test_build_task_list_cycle_economics_no_pickup_when_already_holding_fertilizer():
+    tiles = _empty_tiles()
+    tiles[2][2] = _plant_tile(planted_day=0)
+    tasks = build_task_list(
+        tiles, farmer_inventory={"FERTILIZER": 1}, shed={"FERTILIZER": 3}, current_day=2,
+        fertilize_crops=frozenset({"WHEAT"}), use_fertilizer=False,
+    )
+    assert [t for t in tasks if t.op == "PICKUP" and t.item == "FERTILIZER"] == []
+
+
 def test_build_task_list_flags_prevent_loss_feeding():
     tiles = _empty_tiles()
     tiles[3][3] = _animal_tile(consecutive_unfed=1, fed_today=False)
@@ -454,7 +527,7 @@ def test_build_task_list_cares_for_an_animal_when_enabled():
     tiles = _empty_tiles()
     tiles[6][6] = _animal_tile(fed_today=True, cared_today=False)
     tasks = build_task_list(tiles, care_aware=True)
-    assert tasks == [Task(priority=PRIORITY_MAINTENANCE, pos=(6, 6), op="CARE")]
+    assert tasks == [Task(priority=PRIORITY_ANIMAL_CARE, pos=(6, 6), op="CARE")]
 
 
 def test_build_task_list_does_not_recare_an_animal_already_cared_for_today():
@@ -471,7 +544,7 @@ def test_build_task_list_can_both_feed_and_care_for_the_same_animal_tile():
     ops = {t.op for t in tasks}
     assert ops == {"FEED", "CARE"}
     care_task = next(t for t in tasks if t.op == "CARE")
-    assert care_task.priority == PRIORITY_MAINTENANCE
+    assert care_task.priority == PRIORITY_ANIMAL_CARE
 
 
 def test_build_task_list_plants_an_empty_tile_when_given_a_crop_hint():
@@ -1150,13 +1223,14 @@ def test_build_task_list_pickup_count_reflects_the_holder_shortfall():
     # still exactly one aggregate PICKUP task (batched, same as always),
     # but it IS required (2 needy tiles > 1 holder). Not reachable at
     # today's shipped max_animals_per_type=1, but the generalized
-    # condition must still get this right.
+    # condition must still get this right. T8.65: the shortfall is in wheat
+    # units - the holder has to be short of wheat (1 for 2 tiles), see below.
     tiles = _empty_tiles()
     tiles[3][3] = _animal_tile(fed_today=False, consecutive_unfed=1)
     tiles[6][6] = _animal_tile(fed_today=False, consecutive_unfed=1)
     tasks = build_task_list(
         tiles, unit_positions=[(0, 0)],
-        farmer_inventory={"WHEAT": 3}, shed={"WHEAT": 5},
+        farmer_inventory={"WHEAT": 1}, shed={"WHEAT": 5},
     )
     pickups = [t for t in tasks if t.op == "PICKUP" and t.item == "WHEAT"]
     assert len(pickups) == 1
@@ -1811,3 +1885,101 @@ def test_spent_ongoing_plant_is_dug_not_watered_and_only_when_the_tile_is_still_
     assert crop_tile_day_actions(spent, 11, harvest_rules=rules) == 1
     assert crop_tile_day_actions(spent, 11, harvest_rules=HarvestRules(dig_spent=True, dig_spent_useful=False)) == 0
     assert crop_tile_day_actions(spent, 11) == 1  # legacy: the WATER
+
+
+# --- T8.63: last-day delivery -------------------------------------------
+
+
+def test_deliver_all_sends_every_loaded_unit_at_its_latest_moment_even_when_the_shed_has_room():
+    kw = _deadline_kwargs()
+    kw.update(hour=22, turns_per_day=23, margin_turns=0)
+    inv = [{"CARROT": 3}, {"MELON": 2}]
+    pos = [(4, 4), (4, 4)]
+    assert goods_deadline_drop_tasks(inv, pos, 10, **kw) == []
+    tasks = goods_deadline_drop_tasks(inv, pos, 10, deliver_all=True, **kw)
+    assert sorted(t.item for t in tasks) == ["CARROT", "MELON"]
+
+
+def test_final_day_harvest_needs_time_to_carry_the_product_to_the_shed():
+    far, near = Task(1, (9, 9), "HARVEST"), Task(1, (4, 6), "HARVEST")
+    out = final_day_harvest_eligibility(
+        [far, near], [{}], [(4, 4)], 10, hour=18, turns_per_day=23
+    )
+    assert [t.pos for t in out] == [(4, 6)]
+    assert out[0].eligible_units == (0,)
+
+
+def test_final_day_loaded_unit_is_kept_off_tasks_it_cannot_return_from():
+    water = Task(2, (0, 9), "WATER")
+    out = final_day_harvest_eligibility(
+        [water], [{"CARROT": 3}, {}], [(4, 4), (4, 4)], 10, hour=17, turns_per_day=23
+    )
+    assert out[0].eligible_units == (1,)
+
+
+# --- T8.65: animal care tier ------------------------------------------------
+
+
+def test_animal_care_tier_sits_between_the_urgent_tier_and_everything_else():
+    assert PRIORITY_PREVENT_LOSS < PRIORITY_ANIMAL_CARE < PRIORITY_HARVEST
+
+
+def test_care_is_skipped_when_the_animal_cannot_be_fed_today():
+    # the care bonus only counts on a fed day
+    tiles = _empty_tiles()
+    tiles[6][6] = _animal_tile(fed_today=False, cared_today=False)
+    assert [t.op for t in build_task_list(tiles, care_aware=True)] == []
+    with_wheat = build_task_list(tiles, care_aware=True, farmer_inventory={"WHEAT": 5})
+    assert {t.op for t in with_wheat} == {"FEED", "CARE"}
+
+
+def test_a_routine_feed_rises_to_the_care_tier_when_care_is_on():
+    tiles = _empty_tiles()
+    tiles[6][6] = _animal_tile(fed_today=False, cared_today=False)
+    on = build_task_list(tiles, care_aware=True, farmer_inventory={"WHEAT": 5})
+    off = build_task_list(tiles, care_aware=False, farmer_inventory={"WHEAT": 5})
+    assert next(t for t in on if t.op == "FEED").priority == PRIORITY_ANIMAL_CARE
+    assert next(t for t in off if t.op == "FEED").priority == PRIORITY_ROUTINE_CARE
+
+
+def test_no_wheat_pickup_when_the_one_holder_carries_enough_for_every_needy_tile():
+    # T8.65: a holder with 3 WHEAT feeds both needy tiles one after another - no return trip to the shed
+    tiles = _empty_tiles()
+    tiles[3][3] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tiles[6][6] = _animal_tile(fed_today=False, consecutive_unfed=1)
+    tasks = build_task_list(
+        tiles, unit_positions=[(0, 0)], farmer_inventory={"WHEAT": 3}, shed={"WHEAT": 5},
+    )
+    assert [t for t in tasks if t.op == "PICKUP"] == []
+    assert len([t for t in tasks if t.op == "FEED"]) == 2
+
+
+# --- T8.66: near-shed immediate drop -------------------------------------
+
+
+def test_near_shed_drop_sends_only_units_within_the_distance_and_biggest_stock_first():
+    inv = [{"CARROT": 2, "MELON": 5}, {"CARROT": 3}, {}]
+    pos = [(4, 4), (4, 7), (5, 3)]  # on the shed tile, 2 moves away, none carried
+    tasks = near_shed_drop_tasks(inv, pos, 10, max_distance=1, shed_used=0, shed_capacity=100)
+    assert [(t.unit_index, t.item, t.qty) for t in tasks] == [(0, "MELON", 5)]
+    far = near_shed_drop_tasks(inv, pos, 10, max_distance=3, shed_used=0, shed_capacity=100)
+    assert sorted(t.unit_index for t in far) == [0, 1]
+
+
+def test_near_shed_drop_respects_shed_room_min_units_and_the_wheat_option():
+    inv = [{"WHEAT": 4}, {"WHEAT": 4, "CARROT": 1}]
+    pos = [(4, 4), (4, 4)]
+    kw = dict(max_distance=0, shed_used=0, shed_capacity=100)
+    assert near_shed_drop_tasks(inv, pos, 10, **kw)[0].item == "CARROT"  # feed WHEAT is never dropped
+    assert near_shed_drop_tasks(inv, pos, 10, min_units=2, **kw) == []
+    with_wheat = near_shed_drop_tasks(inv, pos, 10, include_wheat_for_hands=True, **kw)
+    assert [(t.unit_index, t.item) for t in with_wheat] == [(1, "WHEAT")]  # only the hand's, biggest stock
+    assert near_shed_drop_tasks(inv, pos, 10, max_distance=0, shed_used=100, shed_capacity=100) == []
+
+
+def test_near_shed_drop_fertilizer_only_when_asked():
+    inv = [{"FERTILIZER": 3}]
+    kw = dict(max_distance=0, shed_used=0, shed_capacity=100)
+    assert near_shed_drop_tasks(inv, [(4, 4)], 10, **kw) == []
+    tasks = near_shed_drop_tasks(inv, [(4, 4)], 10, include_fertilizer=True, **kw)
+    assert [(t.item, t.qty) for t in tasks] == [("FERTILIZER", 3)]

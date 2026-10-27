@@ -1,4 +1,4 @@
-# Kaggriculture agent
+# Kaggriculture
 
 Heuristic economic planner for the Kaggle simulation competition
 [Kaggriculture](https://www.kaggle.com/competitions/kaggriculture).

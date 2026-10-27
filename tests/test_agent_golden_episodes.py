@@ -448,13 +448,55 @@ AGENT_MAIN_PATH = os.path.join(
 # starter 65339/72217/85783 -> 66580/76812/84264, pass 59288/79188/80535 -> 68233/79722/80671.
 # T8.38 escape guardrail re-checked, not re-recorded.
 # Revert = water_bonus_window_aware False and water_idle_priority_when_safe False.
+# Re-recorded a 35th time on 2026-09-23 for final_day_delivery=True (T8.63, the user's request: on the
+# last day harvest and collect everything sellable - crops, animal produce, FERTILIZER - carry it (feed
+# WHEAT too) to the shed and sell it; only those tasks are kept that day; the farthest tiles are
+# harvested first and the hires are sized once from the ready tiles, 1 hand per 3 tiles; about
+# +5.2%/+5.4% vs starter/pass, better on 40/40 seeds, arena 50W/0L): starter 66580/76812/84264 ->
+# 73915/80271/89506, pass 68233/79722/80671 -> 74656/82275/83407. T8.38 escape guardrail re-checked,
+# not re-recorded. Revert = final_day_delivery False (or final_day_far_first False /
+# final_day_tiles_per_hand None for the labor part only).
+# Re-recorded a 36th time on 2026-09-23, the user's explicit decision to default the T8.64 hire forecast:
+# day_plan_remaining_turns_aware False (hire target sized on the whole day) and turns_per_task_estimate 2.75
+# (measured +3.7%/+4.7% vs starter/pass on 40 seeds, hires after hour 0 32% -> 10%, arena 40W/10L):
+# starter 73915/80271/89506 -> 76120/83083/96579, pass 74656/82275/83407 -> 74864/79514/87344.
+# Re-recorded a 37th time on 2026-09-23, the user's request to make animal care work (T8.65):
+# animal_care_aware True, CARE at PRIORITY_ANIMAL_CARE (0.5, below the urgent tier, above everything else),
+# the FEED of a cared animal at the same tier, CARE skipped when the animal cannot be fed that day, and
+# the wheat PICKUP shortfall counted in wheat units instead of carriers (the farmer used to go back to
+# the shed every few turns with 80 WHEAT on him while a far animal starved; the T8.38 escape guardrail
+# caught it). Measured +8.6%/+7.6% vs starter/pass on 40 seeds, arena 45W/5L: starter 76120/83083/96579 ->
+# 71876/89008/101832, pass 74864/79514/87344 -> 70328/89189/96008. T8.38 escape guardrail passes
+# again, not re-recorded. Revert = animal_care_aware False.
+# Re-recorded a 38th time on 2026-09-24, the user's explicit decision to default the T8.67 animal opening
+# (animal_opening True, animal_opening_fill_cheaper False; 40 seeds +46.5%/+42.3% vs starter/pass, arena 47W/3L):
+# starter 71876/89008/101832 -> 112370/125046/102272, pass 70328/89189/96008 -> 124867/119494/132965.
+# The T8.38 escape guardrail passes again, not re-recorded. Revert = animal_opening False.
+# Re-recorded a 39th time on 2026-09-25, the user's explicit decision to default T8.69 (use_cycle_economics_
+# ranking, investment_priority_reordered, seed_purchase_lookahead_aware/turns=3, opening_top_non_wheat_crop_only) -
+# see kagg.policy.params.DEFAULT_PARAMS's own matching comment for the full measured story: head-to-head vs the
+# pre-T8.69 baseline, working block 34W/16L/0T (win rate 0.68, Wilson [0.542, 0.792], +2.8%), holdout block
+# 29W/21L/0T (win rate 0.58, Wilson [0.442, 0.706], +0.6%, Wilson crosses 50% - does not independently clear this
+# project's own both-blocks acceptance bar, shipped anyway on the user's own explicit, informed request after
+# seeing these exact numbers). T8.38 escape guardrail passes again (0 escapes on all 6 pairs), not re-recorded.
+# Revert = use_cycle_economics_ranking/investment_priority_reordered/seed_purchase_lookahead_aware/
+# opening_top_non_wheat_crop_only all False, seed_purchase_lookahead_turns back to 2.
+# Re-recorded a 40th time on 2026-09-25, the user's explicit decision to default T8.71
+# (crop_pending_supply_aware) - see kagg.policy.params.DEFAULT_PARAMS's own matching comment for the full
+# measured story: single-cycle scoring priced off the real, currently-known production pipeline (shed +
+# units' hands + growing tiles) instead of a speculative multi-cycle projection, plus awareness of this
+# turn's own bulk purchase (both the day-to-day fallback_crops path and the animal_opening path). Head-to-
+# head vs the pre-T8.71 baseline, working block 45W/5L/0T (win rate 0.90, Wilson [0.786, 0.957], +11.3%),
+# holdout block 48W/2L/0T (win rate 0.96, Wilson [0.865, 0.989], +13.8%) - a clean, decisive, held-out-
+# gated win on both blocks, the strongest result of the whole T8.68-T8.71 line. Escape guardrail passes
+# again (0 escapes on all 6 pairs), not re-recorded. Revert = crop_pending_supply_aware False.
 _GOLDEN = {
-    ("starter", 1): (66580.0, 3749.0),
-    ("starter", 2): (76812.0, 3516.0),
-    ("starter", 3): (84264.0, 3603.0),
-    ("pass", 1): (68233.0, 3000.0),
-    ("pass", 2): (79722.0, 3000.0),
-    ("pass", 3): (80671.0, 3000.0),
+    ("starter", 1): (103424.0, 3743.0),
+    ("starter", 2): (131626.0, 3394.0),
+    ("starter", 3): (126878.0, 3516.0),
+    ("pass", 1): (111487.0, 3000.0),
+    ("pass", 2): (142430.0, 3000.0),
+    ("pass", 3): (126368.0, 3000.0),
 }
 
 

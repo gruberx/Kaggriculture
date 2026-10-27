@@ -14,17 +14,34 @@ import copy
 import pytest
 
 from kagg.gamelib.constants import ANIMALS, CROPS, MARKET_I0, PRODUCTS
+from kagg.policy.cycle_economics import units_per_cycle
 from kagg.policy.decide import (
     _animal_has_time_to_mature,
     _combined_crop_tile_counts,
     _crop_has_time_to_mature,
     _crop_tile_counts,
+    _dispatch_score_portfolio,
+    _pending_crop_supply,
     _top_animal_choice,
     _top_crop_basket,
     _top_investment_choice,
     decide,
 )
-from kagg.policy.params import DEFAULT_PARAMS
+from kagg.policy.params import DEFAULT_PARAMS as _SHIPPED_PARAMS
+
+# T8.65 (2026-09-23) turned animal_care_aware on by default; the older animal/hiring tests below pin it off
+# (their hand-verified numbers predate CARE) - tests about care itself use _SHIPPED_PARAMS.
+#
+# T8.69 (2026-09-25) shipped use_cycle_economics_ranking/investment_priority_reordered/
+# seed_purchase_lookahead_aware/opening_top_non_wheat_crop_only - the older ranking/investment/wheat-
+# timing tests below (hand-verified against strategy.rank_portfolio's own flat scoring and the pre-T8.69
+# market-order order) pin all four off the same way; tests about these mechanisms themselves use
+# _SHIPPED_PARAMS or override them explicitly.
+DEFAULT_PARAMS = dict(
+    _SHIPPED_PARAMS, animal_care_aware=False, animal_opening=False,
+    use_cycle_economics_ranking=False, investment_priority_reordered=False,
+    seed_purchase_lookahead_aware=False, opening_top_non_wheat_crop_only=False,
+)
 
 _BASE_OBS = {
     "player": 0,
@@ -52,7 +69,11 @@ _BASE_OBS = {
 # 2026-09-20: the shipped defaults moved (min=2/max=12 day-plan hiring, T8.45
 # purchase flags on, drip cap 1000 - the user's decision, tasks/todo.md T8.46).
 # Tests about an *older* mechanism pin that mechanism's old values with these.
-_OLD_HIRING = dict(day_plan_hiring_aware=False, min_hires_per_day=8, max_hires_per_day=8)
+_OLD_HIRING = dict(
+    day_plan_hiring_aware=False, min_hires_per_day=8, max_hires_per_day=8,
+    # T8.64 (2026-09-23) moved these two shipped defaults; older tests pin the previous values
+    day_plan_remaining_turns_aware=True, turns_per_task_estimate=2.0,
+)
 _LEGACY_PURCHASE = dict(
     bulk_seed_purchase=False, bulk_animal_purchase=False, plant_while_animal_pending=False
 )
@@ -1143,6 +1164,39 @@ def test_combined_crop_tile_counts_sums_my_own_and_the_opponents_at_full_weight(
     assert combined == {"MELON": 2, "WHEAT": 1}
 
 
+def test_pending_crop_supply_sums_shed_and_inventories():
+    tiles = [[None] * 10 for _ in range(10)]
+    supply = _pending_crop_supply(tiles, shed={"WHEAT": 5, "MELON": 2}, inventories=[{"WHEAT": 3}], current_day=10)
+    assert supply == {"WHEAT": 8, "MELON": 2}
+
+
+def test_pending_crop_supply_uses_the_real_yield_for_a_ready_tile():
+    # A tile that's actually harvestable today contributes its own real
+    # yield_units, not the standard per-cycle estimate.
+    tiles = [[None] * 10 for _ in range(10)]
+    tiles[0][0] = {"kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "yield_units": 3}
+    supply = _pending_crop_supply(tiles, shed={}, inventories=[], current_day=10)
+    assert supply == {"WHEAT": 3}
+
+
+def test_pending_crop_supply_forecasts_the_standard_yield_for_a_still_growing_tile():
+    # A tile that's planted but not yet harvestable (too young) falls
+    # back to units_per_cycle(crop) - the same DP-optimal full-life yield
+    # used everywhere else, not a fresh per-tile forecast.
+    tiles = [[None] * 10 for _ in range(10)]
+    tiles[0][0] = {"kind": "PLANT", "crop": "WHEAT", "planted_day": 8}  # too young at day 10
+    supply = _pending_crop_supply(tiles, shed={}, inventories=[], current_day=10)
+    assert supply == {"WHEAT": units_per_cycle("WHEAT")}
+
+
+def test_pending_crop_supply_ignores_non_plant_tiles():
+    tiles = [[None] * 10 for _ in range(10)]
+    tiles[0][0] = {"kind": "COOP"}
+    tiles[0][1] = {"kind": "PASTURE", "animal": "COW"}
+    supply = _pending_crop_supply(tiles, shed={}, inventories=[], current_day=10)
+    assert supply == {}
+
+
 def test_decide_defaults_crop_self_impact_opponent_weight_to_zero_when_unset():
     # T8.3g measured full weight (1.0) a clean, total self-play loss
     # (0/50 both blocks); T8.3h's graduated sweep (0.0/0.1/0.25/0.5/
@@ -1443,6 +1497,75 @@ def test_top_investment_choice_returns_none_once_nothing_can_mature():
     # the shortest cycle) can't complete - and neither can any animal
     # (COW/SHEEP/GOOSE's first_yield_day all land past day 30 from here).
     assert _top_investment_choice(market_inventory, current_day=29, params=DEFAULT_PARAMS) is None
+
+
+def test_dispatch_score_portfolio_off_matches_strategy_score_portfolio():
+    # T8.68: use_cycle_economics_ranking defaults False - _dispatch_
+    # score_portfolio must reproduce strategy.score_portfolio's own
+    # result bit-identically (and always return an empty fertilize_crops,
+    # which the old path has no notion of).
+    from kagg.policy.strategy import score_portfolio as _old_score_portfolio
+
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    scores, fertilize_crops = _dispatch_score_portfolio(market_inventory, 0, DEFAULT_PARAMS)
+    # rank_season_aware is off but animal_net_of_cost is on (the shipped
+    # default) - days_remaining is real (30 - current_day), not None,
+    # matching _dispatch_score_portfolio's own old-path formula exactly.
+    expected = _old_score_portfolio(
+        market_inventory, None, None, False, 30, False,
+        DEFAULT_PARAMS["animal_net_of_cost"], DEFAULT_PARAMS["animal_fertilizer_income_aware"],
+        DEFAULT_PARAMS["animal_care_aware"], DEFAULT_PARAMS["animal_consumption_horizon_aware"],
+    )
+    assert scores == expected
+    assert fertilize_crops == frozenset()
+
+
+def test_dispatch_score_portfolio_on_switches_to_cycle_economics():
+    from kagg.policy.cycle_economics import score_portfolio_v2
+
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    params = dict(DEFAULT_PARAMS, use_cycle_economics_ranking=True)
+    scores, fertilize_crops = _dispatch_score_portfolio(market_inventory, 5, params)
+    # crop_pending_supply_aware is shipped True (T8.71) - _dispatch_score_
+    # portfolio reads it straight from params, so the independently-built
+    # "expected" call must match, with no pending_crop_supply (this test
+    # passes none through, matching a caller with nothing growing yet).
+    expected_scores, expected_fertilize_crops = score_portfolio_v2(
+        market_inventory, 25, crop_pending_supply_aware=True
+    )
+    assert scores == expected_scores
+    assert fertilize_crops == expected_fertilize_crops
+
+
+def test_decide_cycle_economics_protects_fertilizer_from_routine_sale():
+    # T8.68 found this while wiring the module in, not anticipated by the
+    # plan: market.sell_orders's own FERTILIZER exclusion is gated on the
+    # OLD use_fertilizer flag (see its own docstring) - left unfixed, a
+    # unit meant for the new age-gated FERTILIZE task would get routinely
+    # sold away first, silently defeating the whole mechanism whenever
+    # use_fertilizer itself stays at its own default False.
+    obs = _obs()
+    obs["private"]["shed"]["FERTILIZER"] = 10
+    obs["market"]["inventory"]["FERTILIZER"] = MARKET_I0 * 50  # pushes the live price below any threshold
+    params = dict(DEFAULT_PARAMS, use_cycle_economics_ranking=True, use_fertilizer=False)
+    action = decide(obs, params)
+    assert [o for o in action["market"] if o[0] == "SELL" and o[1] == "FERTILIZER"] == []
+
+
+def test_top_investment_choice_cycle_economics_reaches_a_crop_with_only_partial_yield_time():
+    # Day 27 of a 30-day season: no crop's FULL max_yield_day fits
+    # (strategy.py's own hard gate excludes every one, and every animal's
+    # first production is also too late) - the old path returns None
+    # (see test_top_investment_choice_returns_none_once_nothing_can_
+    # mature's sibling case). CARROT's first_yield_day=2 still fits
+    # (27+2=29<30) - request point 2's partial-credit gate should pick it
+    # up instead of giving up outright.
+    market_inventory = {p: MARKET_I0 for p in PRODUCTS}
+    old_choice = _top_investment_choice(market_inventory, current_day=27, params=DEFAULT_PARAMS)
+    assert old_choice is None
+    new_params = dict(DEFAULT_PARAMS, use_cycle_economics_ranking=True)
+    new_choice = _top_investment_choice(market_inventory, current_day=27, params=new_params)
+    assert new_choice == ("CARROT", "crop")
 
 
 def test_animal_has_time_to_mature_rejects_an_animal_placed_too_late():
@@ -2336,7 +2459,8 @@ def test_decide_passes_animal_fertilizer_income_aware_through_to_rank_portfolio(
 def test_decide_defaults_animal_care_aware_to_false_when_unset():
     import kagg.policy.decide as decide_module
 
-    assert DEFAULT_PARAMS.get("animal_care_aware") is False
+    # shipped True since T8.65 (the user's request); the module fallback for a params dict without the key stays False
+    assert _SHIPPED_PARAMS.get("animal_care_aware") is True
     assert decide_module._DEFAULT_ANIMAL_CARE_AWARE is False
 
 
@@ -2913,7 +3037,9 @@ def _obs_with_queued_work(n_unwatered=0, n_ripe_melons=0):
 def test_seed_purchase_pending_work_gates_default_off():
     assert DEFAULT_PARAMS["seed_purchase_max_pending_harvest"] is None
     assert DEFAULT_PARAMS["seed_purchase_max_pending_water"] is None
-    assert _orders(decide(_obs_with_queued_work(12, 12), DEFAULT_PARAMS), "BUY_SEED") != []
+    # the hire values pinned to their pre-T8.64 state: the bigger morning hire wave spends the test's cash
+    old_hire = dict(DEFAULT_PARAMS, day_plan_remaining_turns_aware=True, turns_per_task_estimate=2.0)
+    assert _orders(decide(_obs_with_queued_work(12, 12), old_hire), "BUY_SEED") != []
 
 
 def test_seed_purchase_waits_while_harvest_tasks_are_queued():
@@ -3137,3 +3263,245 @@ def test_land_buy_affordability_defaults_and_money_rule():
     )
     assert _orders(decide(_land_obs(300), params), "BUY_LAND") == []
     assert _orders(decide(_land_obs(100000), params), "BUY_LAND") == [["BUY_LAND"]]
+
+
+# T8.69: the user's own follow-up after the T8.68 staleness trace - see
+# tasks/todo.md's T8.69 entry for the full design story.
+
+
+def test_investment_priority_reordered_puts_animals_and_wheat_before_hires():
+    # Day 0, an empty farm: DEFAULT_PARAMS' own animal-pursuit/opening
+    # machinery naturally proposes BUY_ANIMAL, BUY_PRODUCT WHEAT (feed),
+    # HIRE, and BUY_SEED all in the same turn - a real scenario where the
+    # old (hires + sells + tail) order could let HIRE crowd out the
+    # others (T8.44's own flagged risk).
+    action = decide(_obs(), dict(DEFAULT_PARAMS, investment_priority_reordered=True))
+    ops = [o[0] for o in action["market"]]
+    assert "BUY_ANIMAL" in ops and "HIRE" in ops and "BUY_SEED" in ops
+    first_animal = ops.index("BUY_ANIMAL")
+    first_hire = ops.index("HIRE")
+    first_seed = ops.index("BUY_SEED")
+    assert first_animal < first_hire < first_seed
+    if "BUY_PRODUCT" in ops:
+        assert ops.index("BUY_PRODUCT") < first_hire
+
+
+def test_investment_priority_reordered_off_by_default_matches_old_order():
+    # Same scenario, flag at its own default (False) - HIRE stays first,
+    # exactly the pre-T8.69 order, bit-identical.
+    action = decide(_obs(), DEFAULT_PARAMS)
+    ops = [o[0] for o in action["market"]]
+    assert ops[0] == "HIRE"
+
+
+def _heavy_backlog_tiles(n_urgent: int) -> list:
+    tiles = [[None] * 10 for _ in range(10)]
+    pos = 0
+    for i in range(n_urgent):
+        y, x = divmod(pos, 10)
+        tiles[y][x] = {
+            "kind": "PLANT", "crop": "WHEAT", "planted_day": 0, "watered_today": False,
+            "consecutive_unwatered": 1, "yield_units": 0, "max_lifespan_step": 120,
+            "fertilized_until_day": -1,
+        }
+        pos += 1
+    return tiles
+
+
+def _lookahead_obs(n_urgent: int):
+    obs = _obs()
+    obs["farms"][0]["tiles"] = _heavy_backlog_tiles(n_urgent)
+    obs["farms"][0]["money"] = 5000
+    return obs
+
+
+_LOOKAHEAD_PARAMS = dict(
+    DEFAULT_PARAMS, always_pursue_one_animal=False, dynamic_hiring=False, hires_per_day=0,
+)
+
+
+def test_seed_purchase_lookahead_defers_when_backlog_deep():
+    # 30 urgent WATER tasks (PRIORITY_PREVENT_LOSS, outranks PLANT) against
+    # labor_units=1 (dynamic_hiring off, hires_per_day=0) -> turns_until_
+    # plant_reached = 30, far above the default lookahead (2) - BUY_SEED
+    # must not fire this turn.
+    obs = _lookahead_obs(30)
+    action = decide(
+        obs, dict(_LOOKAHEAD_PARAMS, seed_purchase_lookahead_aware=True, seed_purchase_lookahead_turns=2)
+    )
+    assert _orders(action, "BUY_SEED") == []
+
+
+def test_seed_purchase_lookahead_fires_when_backlog_shallow():
+    # Same shape, but only 1 urgent task -> turns_until_plant_reached=1,
+    # within the default lookahead (2) - BUY_SEED fires normally.
+    obs = _lookahead_obs(1)
+    action = decide(
+        obs, dict(_LOOKAHEAD_PARAMS, seed_purchase_lookahead_aware=True, seed_purchase_lookahead_turns=2)
+    )
+    assert _orders(action, "BUY_SEED") != []
+
+
+def test_seed_purchase_lookahead_off_by_default_ignores_backlog():
+    # Same deep-backlog farm, flag at its own default (False) - the new
+    # gate never engages, reproducing the exact prior behavior (BUY_SEED
+    # fires regardless of the WATER backlog, same as every pre-T8.69
+    # caller).
+    obs = _lookahead_obs(30)
+    action = decide(obs, _LOOKAHEAD_PARAMS)
+    assert _orders(action, "BUY_SEED") != []
+
+
+def test_seed_purchase_lookahead_keeps_hiring_forecast_informed_while_deferred():
+    # The user's own third request: even while this gate suppresses the
+    # purchase itself, hires_per_day must still see a real planned_new_
+    # crop_tiles > 0 - planted_new_crop_tiles is driven by fallback_crop
+    # (T8.44), never gated on this new deferral.
+    import kagg.policy.decide as decide_module
+
+    orig = decide_module.hires_per_day
+    seen_planned_new_crop_tiles = []
+
+    def spy(*args, **kwargs):
+        seen_planned_new_crop_tiles.append(kwargs.get("planned_new_crop_tiles"))
+        return orig(*args, **kwargs)
+
+    decide_module.hires_per_day = spy
+    try:
+        obs = _lookahead_obs(30)
+        action = decide_module.decide(
+            obs,
+            dict(_LOOKAHEAD_PARAMS, seed_purchase_lookahead_aware=True, seed_purchase_lookahead_turns=2),
+        )
+    finally:
+        decide_module.hires_per_day = orig
+
+    assert _orders(action, "BUY_SEED") == []
+    assert any(v is not None and v > 0 for v in seen_planned_new_crop_tiles)
+
+
+# T8.74: a fixed quadrant-1-only opening (COW=2/SHEEP=4/WORKERS=10/MELON-
+# locked initial fill, found by this session's own T8.72/73 brute-force
+# search) - quadrant1_hire_target overrides both hires_per_day calls'
+# [min_hires_per_day, max_hires_per_day] clip to a single value while
+# n_quadrants == 1; quadrant1_crop_lock replaces the animal-opening's own
+# initial-land-fill crop list (opening_ranked_crops) with a single crop.
+# Both gated on n_quadrants == 1 so quadrant 2+ play is untouched.
+def _quadrants_obs(n_quadrants: int):
+    obs = _obs()
+    obs["farms"][0]["unlocked_quadrants"] = ["NW", "NE", "SW", "SE"][:n_quadrants]
+    return obs
+
+
+def test_quadrant1_hire_target_forces_both_hires_per_day_calls_when_n_quadrants_is_one():
+    import kagg.policy.decide as decide_module
+
+    captured_params = []
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(params, *args, **kwargs):
+        captured_params.append(params)
+        return original_hire(params, *args, **kwargs)
+
+    decide_module.hires_per_day = hire_spy
+    try:
+        obs = _quadrants_obs(1)
+        decide(obs, dict(DEFAULT_PARAMS, dynamic_hiring=True, quadrant1_hire_target=10))
+    finally:
+        decide_module.hires_per_day = original_hire
+
+    assert len(captured_params) == 2
+    for p in captured_params:
+        assert p["min_hires_per_day"] == 10
+        assert p["max_hires_per_day"] == 10
+
+
+def test_quadrant1_hire_target_is_a_no_op_once_quadrant_2_is_unlocked():
+    import kagg.policy.decide as decide_module
+
+    captured_params = []
+    original_hire = decide_module.hires_per_day
+
+    def hire_spy(params, *args, **kwargs):
+        captured_params.append(params)
+        return original_hire(params, *args, **kwargs)
+
+    decide_module.hires_per_day = hire_spy
+    try:
+        obs = _quadrants_obs(2)
+        params = dict(DEFAULT_PARAMS, dynamic_hiring=True, quadrant1_hire_target=10)
+        decide(obs, params)
+    finally:
+        decide_module.hires_per_day = original_hire
+
+    assert len(captured_params) == 2
+    for p in captured_params:
+        assert p["min_hires_per_day"] == params["min_hires_per_day"]
+        assert p["max_hires_per_day"] == params["max_hires_per_day"]
+
+
+def test_quadrant1_hire_target_unset_is_bit_identical_to_today():
+    import kagg.policy.decide as decide_module
+
+    obs = _quadrants_obs(1)
+    baseline = decide(_obs_copy(obs), dict(DEFAULT_PARAMS, dynamic_hiring=True))
+    with_default = decide(_obs_copy(obs), dict(DEFAULT_PARAMS, dynamic_hiring=True, quadrant1_hire_target=None))
+    assert baseline == with_default
+
+
+def _obs_copy(obs):
+    return copy.deepcopy(obs)
+
+
+def test_quadrant1_crop_lock_replaces_the_opening_initial_fill_ranking_when_n_quadrants_is_one():
+    import kagg.policy.decide as decide_module
+
+    captured = {}
+    original_seed_plan = decide_module._opening.seed_plan
+
+    def seed_plan_spy(*args, **kwargs):
+        captured["ranked_crops"] = kwargs.get("ranked_crops")
+        return original_seed_plan(*args, **kwargs)
+
+    decide_module._opening.seed_plan = seed_plan_spy
+    try:
+        obs = _quadrants_obs(1)
+        decide(obs, dict(DEFAULT_PARAMS, animal_opening=True, quadrant1_crop_lock="MELON"))
+    finally:
+        decide_module._opening.seed_plan = original_seed_plan
+
+    assert captured["ranked_crops"] == ["MELON"]
+
+
+def test_quadrant1_crop_lock_is_a_no_op_once_quadrant_2_is_unlocked():
+    import kagg.policy.decide as decide_module
+
+    def _ranked_crops_for(n_quadrants: int, quadrant1_crop_lock):
+        captured = {}
+        original_seed_plan = decide_module._opening.seed_plan
+
+        def seed_plan_spy(*args, **kwargs):
+            captured["ranked_crops"] = kwargs.get("ranked_crops")
+            return original_seed_plan(*args, **kwargs)
+
+        decide_module._opening.seed_plan = seed_plan_spy
+        try:
+            obs = _quadrants_obs(n_quadrants)
+            decide(
+                obs,
+                dict(DEFAULT_PARAMS, animal_opening=True, quadrant1_crop_lock=quadrant1_crop_lock),
+            )
+        finally:
+            decide_module._opening.seed_plan = original_seed_plan
+        return captured["ranked_crops"]
+
+    locked = _ranked_crops_for(2, "MELON")
+    unset = _ranked_crops_for(2, None)
+    assert locked == unset
+
+
+def test_quadrant1_crop_lock_unset_is_bit_identical_to_today():
+    obs = _quadrants_obs(1)
+    baseline = decide(_obs_copy(obs), dict(DEFAULT_PARAMS, animal_opening=True))
+    with_default = decide(_obs_copy(obs), dict(DEFAULT_PARAMS, animal_opening=True, quadrant1_crop_lock=None))
+    assert baseline == with_default
